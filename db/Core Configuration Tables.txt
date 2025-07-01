@@ -1,0 +1,14 @@
+Core Configuration Tables 
+1. cjobs_admin (System Configuration) 
+Stores global system settings and company information 
+Key fields: Company name, address, VAT rate, invoice series, payment 
+details 
+Relationships: None (singleton table) 
+2. cjobs_IVAsTAI (VAT Rates) 
+Contains VAT rates by country/province/locality 
+Key fields: Country, province, locality, VAT percentage 
+Relationships: Used by invoicing system 
+3. cjobs_roles (User Roles) 
+Defines system access levels 
+Values: 1=Admin, 2=Partner, 3=Employer, 4=Client, 5=Worker 
+Relationships: Basis for user permissions

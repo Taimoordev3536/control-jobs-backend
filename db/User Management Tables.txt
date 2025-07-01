@@ -1,0 +1,25 @@
+User Management Tables 
+4. cjobs_usuarios (Users) 
+• Main user authentication table 
+• Key fields: Role, email, hashed password, name, profile image 
+• Relationships: Links to all role-specific tables 
+5. cjobs_usuariosFcm (Push Notification Tokens) 
+• Stores mobile device tokens for push notifications 
+• Key fields: Firebase token, user ID 
+• Relationships: 1:1 with users 
+6. cjobs_partnersUsuarios (Partner Users) 
+• Associates users with partner organizations 
+• Key fields: Partner ID, user ID, default flag 
+• Relationships: Many-to-many partners/users 
+7. cjobs_empleadoresUsuarios (Employer Users) 
+• Associates users with employer organizations 
+• Key fields: Employer ID, user ID, default flag 
+• Relationships: Many-to-many employers/users 
+8. cjobs_clientesUsuarios (Client Users) 
+• Associates users with client organizations 
+• Key fields: Client ID, user ID, default flag 
+• Relationships: Many-to-many clients/users 
+9. cjobs_trabajadoresUsuarios (Worker Users) 
+• Associates users with worker profiles 
+• Key fields: Worker ID, user ID 
+• Relationships: Many-to-many workers/users

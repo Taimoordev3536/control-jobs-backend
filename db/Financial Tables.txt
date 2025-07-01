@@ -1,0 +1,48 @@
+Financial Tables 
+28. cjobs_tarifas (Rate Cards) 
+• Pricing structures 
+• Key fields: Employer type, rate, center ID, worker ID 
+• Relationships: Determines billing amounts 
+ 
+29. cjobs_pedidos (Orders) 
+• Service requests 
+• Key fields: Employer ID 
+• Relationships: Parent to invoices 
+30. cjobs_facturas (Invoices) 
+• Client billing documents 
+• Key fields: Order ID, series, number, client, payment status 
+• Relationships: Child of orders, parent to invoice lines 
+31. cjobs_facturasLineas (Invoice Lines) 
+• Billed items 
+• Key fields: Invoice ID, description, quantity, amount 
+• Relationships: Child of invoices 
+32. cjobs_abonos (Payments) 
+• Invoice payments received 
+• Key fields: Invoice ID, series, number, client, amount 
+• Relationships: Child of invoices 
+33. cjobs_metodosPago (Payment Methods) 
+• Accepted payment types 
+• Key fields: Name 
+• Relationships: Used by financial transactions 
+Operational Tables 
+34. cjobs_completar (Completion Stages) 
+• Task status categories 
+• Values: 1=Before, 2=During, 3=After 
+• Relationships: Used by task system 
+ 
+35. cjobs_acciones (Clock Actions) 
+• Time clock event types 
+• Values: 1=Clock-in, 2=Clock-out, 3=Pause, 4=Continue 
+• Relationships: Used by time tracking 
+36. cjobs_encuestasJobs (Job Surveys) 
+• Customer feedback configurations 
+• Key fields: Job ID, recipient, question, scheduling 
+• Relationships: Linked to jobs 
+37. cjobs_encuestas (Survey Responses) 
+• Collected feedback 
+• Key fields: Survey ID, user ID, rating, comments 
+• Relationships: Child of survey configs 
+38. cjobs_faqs (FAQs) 
+• Help content by role 
+• Key fields: Role ID, question, answer, display order 
+• Relationships: Role-based access

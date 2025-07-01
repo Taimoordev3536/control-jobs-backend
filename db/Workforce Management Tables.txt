@@ -1,0 +1,46 @@
+Workforce Management Tables 
+17. cjobs_trabajadores (Workers) 
+• Employee profiles 
+• Key fields: Code, ID numbers, position, contact info 
+• Relationships: Linked to jobs and tasks 
+18. cjobs_metodosFichaje (Clock-In Methods) 
+• Available check-in systems 
+• Values: 1=QR, 2=WiFi, 3=GPS 
+• Relationships: Used by center configurations 
+19. cjobs_centrosTrabajoMetodos (Center Check-In Methods) 
+• Configures which methods each center accepts 
+• Key fields: Center ID, method ID, active status 
+• Relationships: Many-to-many centers/methods 
+20. cjobs_jobs (Jobs) 
+• Work assignments/projects 
+• Key fields: Employer, client, description, dates 
+• Relationships: Parent to shifts and tasks 
+21. cjobs_jobsCentros (Job Locations) 
+• Links jobs to work centers 
+• Key fields: Job ID, center ID 
+• Relationships: Many-to-many jobs/centers 
+22. cjobs_jobsTrabajadores (Job Assignments) 
+• Assigns workers to jobs 
+• Key fields: Job ID, worker ID, start/end dates 
+• Relationships: Many-to-many jobs/workers 
+ 
+23. cjobs_turnos (Shifts) 
+• Work schedules 
+• Key fields: Job ID, shift number, day, start/end times 
+• Relationships: Parent to tasks 
+24. cjobs_tareas (Tasks) 
+• Individual work items 
+• Key fields: Shift ID, duration, name, completion stage 
+• Relationships: Child of shifts 
+25. cjobs_tareasTrabajadores (Task Assignments) 
+• Records which worker performed tasks 
+• Key fields: Shift ID, task ID, worker ID, timestamp 
+• Relationships: Links workers to tasks 
+26. cjobs_tareasMensajes (Task Messages) 
+• Communication about tasks 
+• Key fields: User ID, task ID, message, timestamp 
+• Relationships: Child of tasks 
+27. cjobs_fichajes (Time Clock Records) 
+• Clock-in/out transactions 
+• Key fields: Job ID, shift ID, worker ID, action, timestamp 
+• Relationships: Logs worker attendance

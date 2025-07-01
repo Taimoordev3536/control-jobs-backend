@@ -1,0 +1,56 @@
+Notification System Tables 
+39. cjobs_push (Push Notification Log) 
+• Records sent notifications 
+• Key fields: FCM token, response, date 
+• Relationships: Tracks delivery 
+40. cjobs_notificaciones (Notifications) 
+• System messages 
+• Key fields: Role, recipient, title, message, read status 
+• Relationships: User communication 
+ 
+Notification & Support Tables  
+41. cjobs_generos (Genders) 
+• Worker demographic information 
+• Fields: 
+o id: Unique identifier 
+o nombre: Gender name (Male/Female/Other) 
+• Relationships: Linked to worker profiles 
+• Usage: Demographic reporting and personalization 
+42. cjobs_empleadoresCentros (Employer Work Centers) 
+• Assigns employers to specific work locations 
+• Fields: 
+o empleador: Employer ID (foreign key) 
+o centrosTrabajo: Work Center ID (foreign key) 
+• Relationships: Many-to-many employers/centers 
+• Usage: Determines service areas for employers 
+43. cjobs_empleadoresClientes (Employer Clients) 
+• Client assignments to employers 
+• Fields: 
+o empleador: Employer ID 
+o cliente: Client ID 
+• Relationships: Many-to-many employers/clients 
+• Usage: Manages service contracts 
+44. cjobs_empleadoresTrabajadores (Employer Workforce) 
+• Worker employment relationships 
+• Fields: 
+o empleador: Employer ID 
+o trabajador: Worker ID 
+• Relationships: Many-to-many employers/workers 
+• Usage: Tracks current employment status 
+45. cjobs_clientesCentros (Client Locations) 
+• Physical sites managed by clients 
+• Fields: 
+o cliente: Client ID 
+o centrosTrabajo: Work Center ID 
+• Relationships: Many-to-many clients/centers 
+• Usage: Service location management 
+46. cjobs_encuestasJobs (Survey Configurations) 
+• Custom feedback forms per job type 
+• Fields: 
+o job: Job type reference 
+o destinatario: Recipient role 
+o titulo: Survey title 
+o pregunta: Question text 
+o intervalo: Frequency in days 
+• Relationships: Linked to job categories 
+• Usage: Quality assurance tracking

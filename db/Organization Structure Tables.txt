@@ -1,0 +1,29 @@
+Organization Structure Tables 
+10. cjobs_partners (Partners) 
+• Partner organizations with commission structures 
+• Key fields: Name, tax ID, address, commission %, retention % 
+• Relationships: Parent to employers 
+11. cjobs_tiposPartner (Partner Tiers) 
+• Partner classification system 
+• Values: 1=Gold (50%), 2=Silver (40%), 3=Bronze (30%), 4=Affiliates (30%) 
+• Relationships: Determines partner commissions 
+12. cjobs_empleadores (Employers) 
+• Companies that hire workers 
+• Key fields: Partner ID, name, tax ID, address, VAT rate 
+• Relationships: Child of partners, parent to jobs 
+13. cjobs_tiposEmpleador (Employer Types) 
+• Employer classification 
+• Values: 1=Home, 2=Static, 3=Remote 
+• Relationships: Determines default rates 
+14. cjobs_subtiposEmpleador (Employer Sub-Types) 
+• Legal status classification 
+• Values: 1=Individual, 2=Freelancer, 3=Company 
+• Relationships: Used for invoicing rules 
+15. cjobs_clientes (Clients) 
+• Organizations receiving services 
+• Key fields: Type, status, code, tax ID, address 
+• Relationships: Linked to jobs and centers 
+16. cjobs_centrosTrabajo (Work Centers) 
+• Physical locations where work is performed 
+• Key fields: Name, address, contact info 
+• Relationships: Child of clients, parent to jobs 

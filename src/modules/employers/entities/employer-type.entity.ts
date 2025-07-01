@@ -1,0 +1,28 @@
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+
+export enum EmployerTypeEnum {
+    HOME = 'home',
+    STATIC = 'static',
+    REMOTE = 'remote'
+}
+
+@Entity('employerTypes')
+export class EmployerType {
+    @PrimaryGeneratedColumn()
+    id: number;
+
+    @Column({
+        type: 'enum',
+        enum: EmployerTypeEnum
+    })
+    name: EmployerTypeEnum;
+
+    @Column('decimal', { precision: 5, scale: 2 })
+    defaultRate: number;
+
+    @CreateDateColumn({ name: 'created_at' })
+    createdAt: Date;
+
+    @UpdateDateColumn({ name: 'updated_at' })
+    updatedAt: Date;
+} 
