@@ -36,7 +36,7 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
 
   const configService = app.get<ConfigService>(ConfigService);
-  const httpPort = configService.get<number>('HTTP_PORT') || 5000;
+  const httpPort = configService.get<number>('HTTP_PORT') || 5000 || 8000;
   const httpsPort = configService.get<number>('HTTPS_PORT') || 443;
 
   await app.init();
@@ -44,22 +44,5 @@ async function bootstrap() {
   http.createServer(server).listen(httpPort, () => {
     console.log(`HTTP Server running on port ${httpPort}`);
   });
-
-  if (!process.env.NODE_ENV || process.env.NODE_ENV === 'LOCAL') {
-    // http
-    //   .createServer(server)
-    //   .listen(port, () => console.log(`HTTP Server running on port ${port}`));
-  } else {
-    const httpsOptions = {
-      key: fs.readFileSync(process.env.SSL_KEY_PATH),
-      cert: fs.readFileSync(process.env.SSL_CERT_PATH),
-    };
-
-    https
-      .createServer(httpsOptions, server)
-      .listen(httpsPort, () =>
-        console.log(`HTTPS Server running on port ${httpsPort}`),
-      );
-  }
 }
 bootstrap();
