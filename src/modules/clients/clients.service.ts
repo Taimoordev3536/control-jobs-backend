@@ -195,4 +195,12 @@ export class ClientsService {
       };
     });
   }
+
+  /**
+   * Get all work centers for a given client
+   * @param clientId - The client ID
+   */
+  async getWorkCentersByClient(clientId: number) {
+    return this.workCenterRepo.find({ where: { clientId } });
+  }
 }

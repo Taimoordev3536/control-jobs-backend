@@ -2,7 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateCol
 import { Client } from '../../clients/entities/client.entity';
 import { EmployerWorkCenter } from '../../employers/entities/employer-work-center.entity';
 
-@Entity('cjobs_centrosTrabajo')
+@Entity('work_center')
 export class WorkCenter {
     @PrimaryGeneratedColumn()
     id: number;

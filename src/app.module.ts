@@ -8,6 +8,7 @@ import { EmployersModule } from './modules/employers/employers.module';
 import { UsersModule } from './modules/users/users.module';
 import {ClientsModule } from './modules/clients/clients.module';
 import { WorkersModule } from './modules/workers/workers.module';
+import { JobModule } from './modules/job/job.module';
 import { config } from 'dotenv';
 
 config();
@@ -41,6 +42,7 @@ config();
     EmployersModule,
     ClientsModule,
     WorkersModule,
+    JobModule,
   ],
 })
 export class AppModule { }

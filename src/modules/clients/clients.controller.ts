@@ -32,6 +32,13 @@ export class ClientsController {
     return this.clientsService.getUsersByClient(id);
   }
 
+  @Get(':id/work-centers')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async getWorkCenters(@Param('id', ParseIntPipe) id: number) {
+    return this.clientsService.getWorkCentersByClient(id);
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)

@@ -1,5 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
 import { Gender } from '../../../shared/entities/gender.entity';
+import { User } from '../../users/entities/user.entity';
+import { ScanLog } from '../../job/entities/scan-log.entity';
 
 @Entity('workers')
 export class Worker {
@@ -34,6 +36,10 @@ export class Worker {
   @JoinColumn({ name: 'gender_id' })
   gender: Gender;
 
+@ManyToOne(() => User)
+@JoinColumn({ name: 'user_id' }) // assuming foreign key column is user_id
+user: User;
+
   @Column({ default: true })
   active: boolean;
 
@@ -45,6 +51,10 @@ export class Worker {
 
   @Column({ name: 'access_account_status', default: 'postpone' })
   accessAccountStatus: 'postpone' | 'request'; 
+
+  // Relations
+  @OneToMany(() => ScanLog, scanLog => scanLog.worker)
+  scanLogs: ScanLog[];
 
   // @Column({ type: 'json' })
   // idNumbers: any; // JSON containing nationalId, passport, etc.

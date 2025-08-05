@@ -20,6 +20,7 @@ async function bootstrap() {
   // Enable CORS
   app.enableCors({
     origin: '*',
+  //  origin: ['https://1e28d3c7c115.ngrok-free.app'],
   });
 
   // Use global validation pipe

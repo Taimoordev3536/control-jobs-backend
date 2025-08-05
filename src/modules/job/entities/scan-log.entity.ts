@@ -1,0 +1,36 @@
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Job } from './job.entity';
+import { Worker } from '../../workers/entities/worker.entity';
+
+@Entity('scan_logs')
+export class ScanLog {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column({ name: 'job_id' })
+  jobId: number;
+
+  @Column({ name: 'worker_id' })
+  workerId: number;
+
+  @Column({ type: 'varchar', length: 50, default: 'check-in' })
+  scanType: string; // 'check-in', 'check-out', 'break-start', 'break-end'
+
+  @Column({ type: 'text', nullable: true })
+  location: string; // GPS coordinates or location data
+
+  @Column({ type: 'text', nullable: true })
+  notes: string;
+
+  @CreateDateColumn({ name: 'scan_time' })
+  scanTime: Date;
+
+  // Relations
+  @ManyToOne(() => Job, job => job.scanLogs)
+  @JoinColumn({ name: 'job_id' })
+  job: Job;
+
+  @ManyToOne(() => Worker, worker => worker.scanLogs)
+  @JoinColumn({ name: 'worker_id' })
+  worker: Worker;
+}

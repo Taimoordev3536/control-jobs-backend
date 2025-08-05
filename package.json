@@ -41,6 +41,7 @@
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/typeorm": "^10.0.2",
+    "@types/qrcode": "^1.5.5",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.8.3",
     "bcrypt": "^6.0.0",
@@ -57,6 +58,7 @@
     "passport-jwt": "^4.0.1",
     "passport-local": "^1.0.0",
     "pg": "^8.15.6",
+    "qrcode": "^1.5.4",
     "rate-limiter-flexible": "^5.0.4",
     "reflect-metadata": "^0.2.2",
     "typeorm": "^0.3.20"
