@@ -1,5 +1,5 @@
 
-import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Query } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Query,Delete } from '@nestjs/common';
 import { JobService } from './job.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
@@ -18,6 +18,18 @@ export class JobController {
     const job = await this.jobService.createJob(createJobDto, employerUserId);
     return { message: 'Job created successfully', data: job };
   }
+
+  //##### delete job ####
+
+@UseGuards(JwtAuthGuard)
+@Delete(':id')
+async deleteJob(@Param('id') jobId: number, @Req() req) {
+  const employerUserId = req.user.id;
+  await this.jobService.deleteJob(jobId, employerUserId);
+  return { message: 'Job deleted successfully' };
+}
+
+  
 
 @UseGuards(JwtAuthGuard)
 @Get('tasks-tab')
@@ -54,11 +66,37 @@ async getAllJobsForClientFromToken(@Req() req) {
   return this.jobService.getAllJobsByClientFromToken(userId);
 }
 
+
+// @UseGuards(JwtAuthGuard)
+// @Get('worker/:jobId/attendance-details')
+// async getJobAttendanceDetailsForWorker(
+//   @Param('jobId') jobId: number,
+//   @Req() req
+// ) {
+//   const userId = req.user?.id;
+//   return await this.jobService.getJobAttendanceDetailsForWorker(userId, jobId);
+// }
+
+
+@UseGuards(JwtAuthGuard)
+@Get('client/job-history')
+async getJobHistoryForClient(@Req() req, @Query('jobId') jobId?: number) {
+  const userId = req.user?.id;
+  return this.jobService.getJobHistoryForClient(userId, jobId ? parseInt(jobId.toString()) : undefined);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('client/analytics')
+async getJobAnalyticsForClient(@Req() req) {
+  const userId = req.user?.id;
+  return this.jobService.getJobAnalyticsForClient(userId);
+}
+
   // ========== QR Code and Scanning Endpoints ========== //
 
   @UseGuards(JwtAuthGuard)
   @Post('generate-qr')
-  async generateJobQrCode(@Body() generateQrCodeDto: GenerateQrCodeDto): Promise<{ qrCode: string; jobData: any }> {
+  async generateJobQrCode(@Body() generateQrCodeDto: GenerateQrCodeDto): Promise<{ qrData: any }> {
     return await this.jobService.generateJobQrCode(generateQrCodeDto);
   }
 
@@ -115,6 +153,47 @@ async getAllJobsForClientFromToken(@Req() req) {
   async autoUpdateJobStatus(@Param('jobId') jobId: number): Promise<{ message: string }> {
     await this.jobService.autoUpdateJobStatus(jobId);
     return { message: 'Job status auto-updated successfully' };
+  }
+
+  // ========== Work Session Management Endpoints ========== //
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':jobId/worker/:workerId/session-status')
+  async getWorkerSessionStatus(
+    @Param('jobId') jobId: number,
+    @Param('workerId') workerId: number
+  ): Promise<any> {
+    return await this.jobService.getWorkerSessionStatus(jobId, workerId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':jobId/worker/session-status')
+  async getCurrentWorkerSessionStatus(
+    @Param('jobId') jobId: number,
+    @Req() req
+  ): Promise<any> {
+    const userId = req.user?.id;
+    const workerId = await this.jobService.getWorkerIdFromUserId(userId);
+    return await this.jobService.getWorkerSessionStatus(jobId, workerId);
+  }
+
+  // ========== Task Management Endpoints ========== //
+
+  @UseGuards(JwtAuthGuard)
+  @Post('tasks/:taskId/complete')
+  async completeTask(
+    @Param('taskId') taskId: number,
+    @Req() req
+  ): Promise<any> {
+    const userId = req.user?.id;
+    const workerId = await this.jobService.getWorkerIdFromUserId(userId);
+    return await this.jobService.completeTask(taskId, workerId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':jobId/task-status')
+  async getJobTaskStatus(@Param('jobId') jobId: number): Promise<any> {
+    return await this.jobService.getJobTaskStatus(jobId);
   }
 
 }

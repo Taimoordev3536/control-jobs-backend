@@ -6,6 +6,7 @@ import { SigningMethod } from './entities/signing-method.entity';
 import { Alert } from './entities/alert.entity';
 import { Task } from './entities/task.entity';
 import { ScanLog } from './entities/scan-log.entity';
+import { WorkSession } from './entities/work-session.entity';
 import { JobService } from './job.service';
 import { JobController } from './job.controller';
 import { Worker } from '../workers/entities/worker.entity';
@@ -27,6 +28,7 @@ import { ClientUser } from '../clients/entities/client-user.entity';
       Alert,
       Task,
       ScanLog,
+      WorkSession,
       Worker,
       Client,
       WorkCenter,

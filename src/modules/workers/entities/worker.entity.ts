@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMan
 import { Gender } from '../../../shared/entities/gender.entity';
 import { User } from '../../users/entities/user.entity';
 import { ScanLog } from '../../job/entities/scan-log.entity';
+import { WorkSession } from '../../job/entities/work-session.entity';
 
 @Entity('workers')
 export class Worker {
@@ -55,6 +56,9 @@ user: User;
   // Relations
   @OneToMany(() => ScanLog, scanLog => scanLog.worker)
   scanLogs: ScanLog[];
+
+  @OneToMany(() => WorkSession, workSession => workSession.worker)
+  workSessions: WorkSession[];
 
   // @Column({ type: 'json' })
   // idNumbers: any; // JSON containing nationalId, passport, etc.
