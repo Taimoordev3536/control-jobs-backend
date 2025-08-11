@@ -51,4 +51,13 @@ export class Task {
 
   @Column({ type: 'boolean', default: false })
   pendingTask: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  isCompleted: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  completedAt: Date;
+
+  @Column({ type: 'int', nullable: true })
+  completedByWorkerId: number;
 } 

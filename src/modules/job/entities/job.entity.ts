@@ -10,6 +10,7 @@ import { Task } from './task.entity';
 import { Survey } from '../../survey/entities/survey.entity';
 import { User } from '../../users/entities/user.entity';
 import { ScanLog } from './scan-log.entity';
+import { WorkSession } from './work-session.entity';
 import { JobStatus } from '../enums/job-status.enum';
 
 @Entity('job')
@@ -83,4 +84,7 @@ user: User;
 
   @OneToMany(() => ScanLog, scanLog => scanLog.job)
   scanLogs: ScanLog[];
+
+  @OneToMany(() => WorkSession, workSession => workSession.job)
+  workSessions: WorkSession[];
 } 
