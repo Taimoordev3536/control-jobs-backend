@@ -1,5 +1,5 @@
 
-import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Query,Delete } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Query,Delete,Request } from '@nestjs/common';
 import { JobService } from './job.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
@@ -30,7 +30,7 @@ async deleteJob(@Param('id') jobId: number, @Req() req) {
 }
 
   
-
+//show job data task-tab
 @UseGuards(JwtAuthGuard)
 @Get('tasks-tab')
 async getTasksTabData(@Req() req) {
@@ -44,7 +44,7 @@ async getTasksTabData(@Req() req) {
     return this.jobService.getAllJobsRaw();
   }
 
-
+//job for employer dashboard
 @UseGuards(JwtAuthGuard)
 @Get('employer/all-jobs')
 async getAllJobsForEmployerFromToken(@Req() req) {
@@ -52,6 +52,7 @@ async getAllJobsForEmployerFromToken(@Req() req) {
   return this.jobService.getAllJobsByEmployerFromToken(userId);
 }
 
+//job for worker dashboard
 @UseGuards(JwtAuthGuard)
 @Get('worker/all-jobs')
 async getAllJobsForWorkerFromToken(@Req() req) {
@@ -59,6 +60,7 @@ async getAllJobsForWorkerFromToken(@Req() req) {
   return this.jobService.getAllJobsByWorkerFromToken(userId);
 }
 
+//job for client dashboard
 @UseGuards(JwtAuthGuard)
 @Get('client/all-jobs')
 async getAllJobsForClientFromToken(@Req() req) {
@@ -67,15 +69,6 @@ async getAllJobsForClientFromToken(@Req() req) {
 }
 
 
-// @UseGuards(JwtAuthGuard)
-// @Get('worker/:jobId/attendance-details')
-// async getJobAttendanceDetailsForWorker(
-//   @Param('jobId') jobId: number,
-//   @Req() req
-// ) {
-//   const userId = req.user?.id;
-//   return await this.jobService.getJobAttendanceDetailsForWorker(userId, jobId);
-// }
 
 
 @UseGuards(JwtAuthGuard)
@@ -107,10 +100,33 @@ async getJobAnalyticsForClient(@Req() req) {
     return await this.jobService.recordScan(recordScanDto, userId);
   }
 
+  // @UseGuards(JwtAuthGuard)
+  // @Get(':jobId/scan-history')
+  // async getJobScanHistory(@Param('jobId') jobId: number): Promise<any[]> {
+  //   return await this.jobService.getJobScanHistory(jobId);
+  // }
+
+
+// @UseGuards(JwtAuthGuard)
+// @Get(':jobId/scan-history')
+// async getJobScanHistory(
+//   @Param('jobId') jobId: number,
+//   @Request() req, // Add this to access the authenticated user
+//   @Query('startDate') startDate?: string,
+//   @Query('endDate') endDate?: string,
+// ): Promise<any> {
+//   const userId = req.user.id; // Get user ID from the authenticated request
+//   return await this.jobService.getJobScanHistory(jobId, userId, startDate, endDate);
+// }
+
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/scan-history')
-  async getJobScanHistory(@Param('jobId') jobId: number): Promise<any[]> {
-    return await this.jobService.getJobScanHistory(jobId);
+  async getJobScanHistory(
+    @Param('jobId') jobId: number,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ): Promise<any> {
+    return await this.jobService.getJobScanHistory(jobId, startDate, endDate);
   }
 
   @UseGuards(JwtAuthGuard)

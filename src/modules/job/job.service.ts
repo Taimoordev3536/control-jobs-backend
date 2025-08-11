@@ -347,6 +347,9 @@ async getAllJobsByEmployerFromToken(userId: number) {
       jobName: job.jobName,
       clientName: job.client?.name || '',
       workCenter: job.workCenter?.name || '',
+      startDate: job.startDate, // Added
+      endDate: job.endDate,     // Added
+      status: job.status || JobStatus.SCHEDULED, // Added status if available
       totalShifts: job.shifts?.length || 0,
       expectedDuration: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0),
       tasks: job.tasks?.map(task => task.name) || [],
@@ -560,223 +563,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
   }
 
 
-// Add this to your JobService class
-
-/**
- * Get detailed job attendance information for worker dashboard
- */
-// async getJobAttendanceDetailsForWorker(userId: number, jobId: number) {
-//   try {
-//     // Verify worker user and get worker ID
-//     const workerUser = await this.workerUserRepo.findOne({
-//       where: { user: { id: userId } },
-//       relations: ['worker'],
-//     });
-
-//     if (!workerUser?.worker?.id) {
-//       throw new Error('Worker not found for this user');
-//     }
-
-//     const workerId = workerUser.worker.id;
-
-//     // Get the job with all necessary relations
-//     const job = await this.jobRepo.findOne({
-//       where: { id: jobId },
-//       relations: [
-//         'client',
-//         'workCenter',
-//         'workers',
-//         'shifts',
-//         'tasks',
-//         'signingMethods',
-//         'workSessions',
-//         'scanLogs'
-//       ],
-//     });
-
-//     if (!job) {
-//       throw new Error('Job not found');
-//     }
-
-//     // Check if worker is assigned to this job
-//     const isWorkerAssigned = job.workers.some(w => w.id === workerId);
-//     if (!isWorkerAssigned) {
-//       throw new Error('Worker is not assigned to this job');
-//     }
-
-//     // Get worker's name
-//     const workerName = workerUser.user?.name || 'Unknown Worker';
-
-//     // Get all work sessions for this worker and job
-//     const workSessions = await this.workSessionRepo.find({
-//       where: {
-//         job: { id: jobId },
-//         worker: { id: workerId },
-//       },
-//       order: { checkInTime: 'DESC' },
-//     });
-
-//     // Get all scan logs for this worker and job
-//     const scanLogs = await this.scanLogRepo.find({
-//       where: {
-//         jobId,
-//         workerId,
-//       },
-//       order: { scanTime: 'DESC' },
-//     });
-
-//     // Get active session if exists
-//     const activeSession = workSessions.find(s => !s.checkOutTime);
-
-//     // Format job header information
-//     const jobHeader = {
-//       id: job.id,
-//       jobId: `JOB-${String(job.id).padStart(4, '0')}`,
-//       title: job.jobName,
-//       client: {
-//         id: job.client?.id || 0,
-//         name: job.client?.name || 'Unknown Client',
-//       },
-//       workCenter: {
-//         id: job.workCenter?.id || 0,
-//         name: job.workCenter?.name || 'Unknown Location',
-//         address: job.workCenter?.address || '',
-//         coordinates: {
-//           lat: job.workCenter?.latitude || 0,
-//           lng: job.workCenter?.longitude || 0,
-//         },
-//       },
-//       shift: job.shifts?.length > 0 ? {
-//         type: job.shifts[0].shiftType as "morning" | "afternoon" | "evening",
-//         startTime: job.shifts[0].startTime,
-//         endTime: job.shifts[0].endTime,
-//         duration: job.shifts[0].totalHours.toString(),
-//         scheduleType: job.shifts[0].scheduleType as "fixed" | "flexible",
-//       } : null,
-//       status: job.status.toLowerCase() as "scheduled" | "in_progress" | "completed",
-//       startDate: job.startDate,
-//       endDate: job.endDate,
-//       signingMethods: {
-//         qrCode: job.signingMethods?.some(m => m.methodType === 'QR_CODE') || false,
-//         gps: job.signingMethods?.some(m => m.methodType === 'GPS') || false,
-//         wifi: job.signingMethods?.some(m => m.methodType === 'WIFI') || false,
-//         ip: job.signingMethods?.some(m => m.methodType === 'IP_ADDRESS') || false,
-//         callerId: job.signingMethods?.some(m => m.methodType === 'CALLER_ID') || false,
-//       },
-//       checkInTime: activeSession?.checkInTime,
-//       checkOutTime: activeSession?.checkOutTime,
-//       isOnBreak: activeSession?.isOnBreak || false,
-//       breakStartTime: activeSession?.currentBreakStart,
-//       totalBreakTime: activeSession?.totalBreakMinutes || 0,
-//       workedTime: activeSession?.totalWorkMinutes || 0,
-//       expectedHours: job.tasks?.reduce((sum, task) => sum + (task.expectedDuration || 0), 0) || 0,
-//       tags: [], // You can add tags if needed
-//       hasAttendanceRecord: workSessions.length > 0,
-//     };
-
-//     // Format time entries (attendance history)
-//     const timeEntries = workSessions.map(session => {
-//       const checkInScan = scanLogs.find(scan => 
-//         scan.scanType === 'check-in' && 
-//         new Date(scan.scanTime).toISOString() === session.checkInTime.toISOString()
-//       );
-
-//       const checkOutScan = session.checkOutTime 
-//         ? scanLogs.find(scan => 
-//             scan.scanType === 'check-out' && 
-//             new Date(scan.scanTime).toISOString() === session.checkOutTime.toISOString()
-//           )
-//         : null;
-
-//       // Get tasks completed during this session
-//       const sessionTasks = job.tasks?.filter(task => 
-//         task.completedAt && 
-//         task.completedAt >= session.checkInTime && 
-//         (!session.checkOutTime || task.completedAt <= session.checkOutTime) &&
-//         task.completedByWorkerId === workerId
-//       ) || [];
-
-//       return {
-//         date: session.checkInTime.toISOString().split('T')[0],
-//         checkIn: session.checkInTime.toTimeString().substring(0, 5),
-//         checkOut: session.checkOutTime?.toTimeString().substring(0, 5) || null,
-//         totalHours: session.checkOutTime 
-//           ? ((session.totalWorkMinutes || 0) / 60).toFixed(1)
-//           : null,
-//         status: session.checkOutTime 
-//           ? 'completed' 
-//           : session.isOnBreak 
-//             ? 'active' 
-//             : 'pending',
-//         taskStatus: sessionTasks.length === job.tasks?.length 
-//           ? 'completed' 
-//           : sessionTasks.length > 0 
-//             ? 'pending' 
-//             : 'absent',
-//         notes: checkInScan?.notes || checkOutScan?.notes || '',
-//         completedTasks: sessionTasks.map(t => t.id),
-//       };
-//     });
-
-//     // Calculate statistics
-//     const totalWorkedHours = workSessions
-//       .filter(s => s.checkOutTime)
-//       .reduce((sum, session) => sum + (session.totalWorkMinutes || 0), 0) / 60;
-
-//     const thisMonth = new Date().getMonth();
-//     const thisYear = new Date().getFullYear();
-    
-//     const thisMonthHours = workSessions
-//       .filter(s => 
-//         s.checkOutTime && 
-//         s.checkInTime.getMonth() === thisMonth &&
-//         s.checkInTime.getFullYear() === thisYear
-//       )
-//       .reduce((sum, session) => sum + (session.totalWorkMinutes || 0), 0) / 60;
-
-//     const totalDays = workSessions.filter(s => s.checkOutTime).length;
-    
-//     const thisMonthWorkingDays = workSessions
-//       .filter(s => 
-//         s.checkOutTime && 
-//         s.checkInTime.getMonth() === thisMonth &&
-//         s.checkInTime.getFullYear() === thisYear
-//       ).length;
-
-//     return {
-//       message: 'Success',
-//       data: {
-//         jobHeader,
-//         statistics: {
-//           totalWorkedHours: Math.round(totalWorkedHours),
-//           thisMonthHours: Math.round(thisMonthHours),
-//           totalDays,
-//           thisMonthWorkingDays,
-//         },
-//         timeEntries,
-//         availableTasks: job.tasks?.map(task => ({
-//           id: task.id,
-//           name: task.name,
-//           description: task.note || '',
-//           completed: task.isCompleted || false,
-//           duration: task.expectedDuration?.toString() || '0',
-//           timing: 'during' as const, // Default to 'during' unless you have this field
-//         })) || [],
-//       },
-//       isSuccess: true,
-//       statusCode: 200,
-//       developerError: '',
-//     };
-//   } catch (error) {
-//     return {
-//       message: 'Error fetching job attendance details',
-//       data: null,
-//       isSuccess: false,
-//       statusCode: 500,
-//       developerError: error.message,
-//     };
-//   }
-// }
 
 
 
@@ -1512,18 +1298,308 @@ async getAllJobsByWorkerFromToken(userId: number) {
     return workerUser.worker.id;
   }
 
-  /**
-   * Get scan history for a job
-   */
-  async getJobScanHistory(jobId: number): Promise<any[]> {
-    try {
-      const scanLogs = await this.scanLogRepo.find({
-        where: { jobId },
-        relations: ['worker', 'worker.user'],
-        order: { scanTime: 'DESC' },
-      });
+  // /**
+  //  * Get scan history for a job
+  //  */
+  // async getJobScanHistory(jobId: number): Promise<any[]> {
+  //   try {
+  //     const scanLogs = await this.scanLogRepo.find({
+  //       where: { jobId },
+  //       relations: ['worker', 'worker.user'],
+  //       order: { scanTime: 'DESC' },
+  //     });
 
-      return scanLogs.map(log => ({
+  //     return scanLogs.map(log => ({
+  //       id: log.id,
+  //       scanType: log.scanType,
+  //       scanTime: log.scanTime,
+  //       location: log.location,
+  //       notes: log.notes,
+  //       worker: {
+  //         id: log.worker.id,
+  //         code: log.worker.code,
+  //         name: log.worker.user?.name || null,
+  //       },
+  //     }));
+  //   } catch (error) {
+  //     throw new Error(`Failed to fetch scan history: ${error.message}`);
+  //   }
+  // }
+
+
+
+
+
+/**
+ * Get scan history for a job, grouped by date for daily history cards, restricted by user role
+ */
+// async getJobScanHistory(jobId: number, userId: number, startDate?: string, endDate?: string): Promise<any> {
+//   try {
+//     // Step 1: Determine user role and verify access to the job
+//     let hasAccess = false;
+//     let userRole = '';
+
+//     // Check if user is an Employer
+//     const employerUser = await this.employerUserRepo.findOne({
+//       where: { user: { id: userId } },
+//       relations: ['employer'],
+//     });
+
+//     if (employerUser?.employer?.id) {
+//       // Verify job belongs to this employer
+//       const employerJob = await this.jobRepo.findOne({
+//         where: { 
+//           id: jobId, 
+//           employer: { id: employerUser.employer.id } 
+//         },
+//       });
+//       if (employerJob) {
+//         hasAccess = true;
+//         userRole = 'employer';
+//       }
+//     } else {
+//       // Check if user is a Client
+//       const clientUser = await this.clientUserRepo.findOne({
+//         where: { user: { id: userId } },
+//         relations: ['client'],
+//       });
+
+//       if (clientUser?.client?.id) {
+//         // Verify job belongs to this client
+//         const clientJob = await this.jobRepo.findOne({
+//           where: { 
+//             id: jobId, 
+//             client: { id: clientUser.client.id } 
+//           },
+//         });
+//         if (clientJob) {
+//           hasAccess = true;
+//           userRole = 'client';
+//         }
+//       } else {
+//         // Check if user is a Worker
+//         const workerUser = await this.workerUserRepo.findOne({
+//           where: { user: { id: userId } },
+//           relations: ['worker'],
+//         });
+
+//         if (workerUser?.worker?.id) {
+//           // Verify worker is assigned to this job
+//           const workerJob = await this.jobRepo.findOne({
+//             where: { 
+//               id: jobId, 
+//               workers: { id: workerUser.worker.id } 
+//             },
+//             relations: ['workers'],
+//           });
+//           if (workerJob) {
+//             hasAccess = true;
+//             userRole = 'worker';
+//           }
+//         }
+//       }
+//     }
+
+//     if (!hasAccess) {
+//       throw new Error('Job not found or user lacks permission to access it');
+//     }
+
+//     // Step 2: Build scan logs query
+//     const scanQuery = this.scanLogRepo.createQueryBuilder('scanLog')
+//       .leftJoinAndSelect('scanLog.worker', 'worker')
+//       .leftJoinAndSelect('worker.user', 'user')
+//       .where('scanLog.jobId = :jobId', { jobId });
+
+//     // Step 3: Apply role-based filtering for worker
+//     if (userRole === 'worker') {
+//       const workerUser = await this.workerUserRepo.findOne({
+//         where: { user: { id: userId } },
+//         relations: ['worker'],
+//       });
+//       // Workers can only see their own scan history
+//       scanQuery.andWhere('scanLog.workerId = :workerId', { workerId: workerUser.worker.id });
+//     }
+
+//     // Step 4: Apply date filtering
+//     if (startDate) {
+//       scanQuery.andWhere('scanLog.scanTime >= :startDate', { startDate });
+//     }
+//     if (endDate) {
+//       scanQuery.andWhere('scanLog.scanTime < :endDate', { 
+//         endDate: new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)) 
+//       });
+//     }
+
+//     const scanLogs = await scanQuery.orderBy('scanLog.scanTime', 'ASC').getMany();
+
+//     // Step 5: Build work sessions query
+//     const sessionQuery = this.workSessionRepo.createQueryBuilder('workSession')
+//       .leftJoinAndSelect('workSession.worker', 'worker')
+//       .leftJoinAndSelect('worker.user', 'user')
+//       .where('workSession.jobId = :jobId', { jobId });
+
+//     // Apply role-based filtering for worker sessions
+//     if (userRole === 'worker') {
+//       const workerUser = await this.workerUserRepo.findOne({
+//         where: { user: { id: userId } },
+//         relations: ['worker'],
+//       });
+//       sessionQuery.andWhere('workSession.workerId = :workerId', { workerId: workerUser.worker.id });
+//     }
+
+//     // Apply date filtering for sessions
+//     if (startDate) {
+//       sessionQuery.andWhere('workSession.checkInTime >= :startDate', { startDate });
+//     }
+//     if (endDate) {
+//       sessionQuery.andWhere('workSession.checkInTime < :endDate', { 
+//         endDate: new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)) 
+//       });
+//     }
+
+//     const workSessions = await sessionQuery.getMany();
+
+//     // Step 6: Group scan logs by date
+//     const groupedByDate = scanLogs.reduce((acc, log) => {
+//       const date = log.scanTime.toISOString().split('T')[0]; // Extract YYYY-MM-DD
+//       if (!acc[date]) {
+//         acc[date] = [];
+//       }
+//       acc[date].push({
+//         id: log.id,
+//         scanType: log.scanType,
+//         scanTime: log.scanTime,
+//         location: log.location,
+//         notes: log.notes,
+//         worker: {
+//           id: log.worker.id,
+//           code: log.worker.code,
+//           name: log.worker.user?.name || null,
+//         },
+//       });
+//       return acc;
+//     }, {});
+
+//     // Step 7: Pair break-start and break-end events for each day
+//     const breaksByDate = {};
+//     for (const date in groupedByDate) {
+//       breaksByDate[date] = [];
+//       let currentBreakStart = null;
+//       for (const log of groupedByDate[date]) {
+//         if (log.scanType === 'break-start') {
+//           currentBreakStart = log;
+//         } else if (log.scanType === 'break-end' && currentBreakStart) {
+//           const durationMinutes = Math.floor((new Date(log.scanTime).getTime() - new Date(currentBreakStart.scanTime).getTime()) / (1000 * 60));
+//           breaksByDate[date].push({
+//             breakStart: {
+//               id: currentBreakStart.id,
+//               scanTime: currentBreakStart.scanTime,
+//               notes: currentBreakStart.notes,
+//             },
+//             breakEnd: {
+//               id: log.id,
+//               scanTime: log.scanTime,
+//               notes: log.notes,
+//             },
+//             durationMinutes,
+//             worker: log.worker,
+//           });
+//           currentBreakStart = null;
+//         }
+//       }
+//     }
+
+//     // Step 8: Group work sessions by date
+//     const sessionsByDate = workSessions.reduce((acc, session) => {
+//       const date = session.checkInTime.toISOString().split('T')[0]; // Extract YYYY-MM-DD
+//       if (!acc[date]) {
+//         acc[date] = [];
+//       }
+//       acc[date].push({
+//         id: session.id,
+//         worker: {
+//           id: session.worker.id,
+//           code: session.worker.code,
+//           name: session.worker.user?.name || null,
+//         },
+//         checkInTime: session.checkInTime,
+//         checkOutTime: session.checkOutTime,
+//         totalWorkMinutes: session.totalWorkMinutes,
+//         totalBreakMinutes: session.totalBreakMinutes,
+//         isOnBreak: session.isOnBreak,
+//       });
+//       return acc;
+//     }, {});
+
+//     // Step 9: Combine into daily history cards
+//     const result = Object.keys(groupedByDate).map(date => ({
+//       date,
+//       scans: groupedByDate[date],
+//       breaks: breaksByDate[date],
+//       sessions: sessionsByDate[date] || [],
+//     }));
+
+//     return {
+//       message: 'Success',
+//       data: result,
+//       userRole, // Include user role in response for frontend reference
+//       isSuccess: true,
+//       statusCode: 200,
+//       developerError: '',
+//     };
+//   } catch (error) {
+//     return {
+//       message: 'Failed to fetch scan history',
+//       data: [],
+//       isSuccess: false,
+//       statusCode: 500,
+//       developerError: error.message,
+//     };
+//   }
+// }
+
+/**
+ * Get scan history for a job, grouped by date for daily history cards
+ */
+async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Promise<any> {
+  try {
+    // Query scan logs
+    const scanQuery = this.scanLogRepo.createQueryBuilder('scanLog')
+      .leftJoinAndSelect('scanLog.worker', 'worker')
+      .leftJoinAndSelect('worker.user', 'user')
+      .where('scanLog.jobId = :jobId', { jobId });
+
+    if (startDate) {
+      scanQuery.andWhere('scanLog.scanTime >= :startDate', { startDate });
+    }
+    if (endDate) {
+      scanQuery.andWhere('scanLog.scanTime < :endDate', { endDate: new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)) });
+    }
+
+    const scanLogs = await scanQuery.orderBy('scanLog.scanTime', 'ASC').getMany();
+
+    // Query work sessions for the same job and date range
+    const sessionQuery = this.workSessionRepo.createQueryBuilder('workSession')
+      .leftJoinAndSelect('workSession.worker', 'worker')
+      .leftJoinAndSelect('worker.user', 'user')
+      .where('workSession.jobId = :jobId', { jobId });
+
+    if (startDate) {
+      sessionQuery.andWhere('workSession.checkInTime >= :startDate', { startDate });
+    }
+    if (endDate) {
+      sessionQuery.andWhere('workSession.checkInTime < :endDate', { endDate: new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)) });
+    }
+
+    const workSessions = await sessionQuery.getMany();
+
+    // Group scan logs by date
+    const groupedByDate = scanLogs.reduce((acc, log) => {
+      const date = log.scanTime.toISOString().split('T')[0]; // Extract YYYY-MM-DD
+      if (!acc[date]) {
+        acc[date] = [];
+      }
+      acc[date].push({
         id: log.id,
         scanType: log.scanType,
         scanTime: log.scanTime,
@@ -1534,11 +1610,87 @@ async getAllJobsByWorkerFromToken(userId: number) {
           code: log.worker.code,
           name: log.worker.user?.name || null,
         },
-      }));
-    } catch (error) {
-      throw new Error(`Failed to fetch scan history: ${error.message}`);
+      });
+      return acc;
+    }, {});
+
+    // Pair break-start and break-end events for each day
+    const breaksByDate = {};
+    for (const date in groupedByDate) {
+      breaksByDate[date] = [];
+      let currentBreakStart = null;
+      for (const log of groupedByDate[date]) {
+        if (log.scanType === 'break-start') {
+          currentBreakStart = log;
+        } else if (log.scanType === 'break-end' && currentBreakStart) {
+          const durationMinutes = Math.floor((new Date(log.scanTime).getTime() - new Date(currentBreakStart.scanTime).getTime()) / (1000 * 60));
+          breaksByDate[date].push({
+            breakStart: {
+              id: currentBreakStart.id,
+              scanTime: currentBreakStart.scanTime,
+              notes: currentBreakStart.notes,
+            },
+            breakEnd: {
+              id: log.id,
+              scanTime: log.scanTime,
+              notes: log.notes,
+            },
+            durationMinutes,
+            worker: log.worker,
+          });
+          currentBreakStart = null;
+        }
+      }
     }
+
+    // Group work sessions by date
+    const sessionsByDate = workSessions.reduce((acc, session) => {
+      const date = session.checkInTime.toISOString().split('T')[0]; // Extract YYYY-MM-DD
+      if (!acc[date]) {
+        acc[date] = [];
+      }
+      acc[date].push({
+        id: session.id,
+        worker: {
+          id: session.worker.id,
+          code: session.worker.code,
+          name: session.worker.user?.name || null,
+        },
+        checkInTime: session.checkInTime,
+        checkOutTime: session.checkOutTime,
+        totalWorkMinutes: session.totalWorkMinutes,
+        totalBreakMinutes: session.totalBreakMinutes,
+        isOnBreak: session.isOnBreak,
+      });
+      return acc;
+    }, {});
+
+    // Combine into daily history cards
+    const result = Object.keys(groupedByDate).map(date => ({
+      date,
+      scans: groupedByDate[date],
+      breaks: breaksByDate[date],
+      sessions: sessionsByDate[date] || [],
+    }));
+
+    return {
+      message: 'Success',
+      data: result,
+      isSuccess: true,
+      statusCode: 200,
+      developerError: '',
+    };
+  } catch (error) {
+    return {
+      message: 'Failed to fetch scan history',
+      data: [],
+      isSuccess: false,
+      statusCode: 500,
+      developerError: error.message,
+    };
   }
+}
+
 
   /**
    * Get scan history for a worker
