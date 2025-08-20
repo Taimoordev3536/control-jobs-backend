@@ -3,6 +3,7 @@ import { Gender } from '../../../shared/entities/gender.entity';
 import { User } from '../../users/entities/user.entity';
 import { ScanLog } from '../../job/entities/scan-log.entity';
 import { WorkSession } from '../../job/entities/work-session.entity';
+import { TaskHistory } from '../../job/entities/task-history.entity';
 
 @Entity('workers')
 export class Worker {
@@ -60,12 +61,6 @@ user: User;
   @OneToMany(() => WorkSession, workSession => workSession.worker)
   workSessions: WorkSession[];
 
-  // @Column({ type: 'json' })
-  // idNumbers: any; // JSON containing nationalId, passport, etc.
-
-  // @Column()
-  // position: string;
-
-  // @Column({ type: 'json' })
-  // contactInfo: any; // JSON containing phone, email, address, etc.
+   @OneToMany(() => TaskHistory, (taskHistory) => taskHistory.completedBy)
+  taskHistories: TaskHistory[];
 }

@@ -212,4 +212,28 @@ async getJobAnalyticsForClient(@Req() req) {
     return await this.jobService.getJobTaskStatus(jobId);
   }
 
+  // @Post(':taskId/toggle-task/:workerId')
+  // async toggleTaskCompletion(
+  //   @Param('taskId') taskId: number,
+  //   @Param('workerId') workerId: number,
+  //   @Req() req: any,
+  // ) {
+  //   const userId = req.user.id; // Assuming user ID is available in request (e.g., from JWT)
+  //   return await this.jobService.toggleTaskCompletion(taskId, workerId, userId);
+  // }
+
+// job.controller.ts
+// job.controller.ts
+  @UseGuards(JwtAuthGuard)
+  @Post(':jobId/tasks/:taskId/toggle') // ✅ Correct path parameter syntax
+  async toggleTaskCompletion(
+    @Param('jobId') jobId: number,
+    @Param('taskId') taskId: number,
+    @Req() req
+  ) {
+    const userId = req.user.id;
+    const workerId = await this.jobService.getWorkerIdFromUserId(userId);
+    return this.jobService.toggleTaskCompletion(taskId, workerId, jobId);
+  }
+
 }

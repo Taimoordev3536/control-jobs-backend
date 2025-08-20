@@ -6,6 +6,7 @@ import { Shift } from './entities/shift.entity';
 import { SigningMethod } from './entities/signing-method.entity';
 import { Alert } from './entities/alert.entity';
 import { Task } from './entities/task.entity';
+import { TaskHistory } from './entities/task-history.entity';
 import { ScanLog } from './entities/scan-log.entity';
 import { WorkSession } from './entities/work-session.entity';
 import { Worker } from '../workers/entities/worker.entity';
@@ -33,6 +34,7 @@ export class JobService {
     @InjectRepository(SigningMethod) private signingMethodRepo: Repository<SigningMethod>,
     @InjectRepository(Alert) private alertRepo: Repository<Alert>,
     @InjectRepository(Task) private taskRepo: Repository<Task>,
+    @InjectRepository(TaskHistory) private taskHistoryRepo: Repository<TaskHistory>,
     @InjectRepository(ScanLog) private scanLogRepo: Repository<ScanLog>,
     @InjectRepository(WorkSession) private workSessionRepo: Repository<WorkSession>,
     @InjectRepository(Worker) private workerRepo: Repository<Worker>,
@@ -1298,266 +1300,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
     return workerUser.worker.id;
   }
 
-  // /**
-  //  * Get scan history for a job
-  //  */
-  // async getJobScanHistory(jobId: number): Promise<any[]> {
-  //   try {
-  //     const scanLogs = await this.scanLogRepo.find({
-  //       where: { jobId },
-  //       relations: ['worker', 'worker.user'],
-  //       order: { scanTime: 'DESC' },
-  //     });
-
-  //     return scanLogs.map(log => ({
-  //       id: log.id,
-  //       scanType: log.scanType,
-  //       scanTime: log.scanTime,
-  //       location: log.location,
-  //       notes: log.notes,
-  //       worker: {
-  //         id: log.worker.id,
-  //         code: log.worker.code,
-  //         name: log.worker.user?.name || null,
-  //       },
-  //     }));
-  //   } catch (error) {
-  //     throw new Error(`Failed to fetch scan history: ${error.message}`);
-  //   }
-  // }
-
-
-
-
-
-/**
- * Get scan history for a job, grouped by date for daily history cards, restricted by user role
- */
-// async getJobScanHistory(jobId: number, userId: number, startDate?: string, endDate?: string): Promise<any> {
-//   try {
-//     // Step 1: Determine user role and verify access to the job
-//     let hasAccess = false;
-//     let userRole = '';
-
-//     // Check if user is an Employer
-//     const employerUser = await this.employerUserRepo.findOne({
-//       where: { user: { id: userId } },
-//       relations: ['employer'],
-//     });
-
-//     if (employerUser?.employer?.id) {
-//       // Verify job belongs to this employer
-//       const employerJob = await this.jobRepo.findOne({
-//         where: { 
-//           id: jobId, 
-//           employer: { id: employerUser.employer.id } 
-//         },
-//       });
-//       if (employerJob) {
-//         hasAccess = true;
-//         userRole = 'employer';
-//       }
-//     } else {
-//       // Check if user is a Client
-//       const clientUser = await this.clientUserRepo.findOne({
-//         where: { user: { id: userId } },
-//         relations: ['client'],
-//       });
-
-//       if (clientUser?.client?.id) {
-//         // Verify job belongs to this client
-//         const clientJob = await this.jobRepo.findOne({
-//           where: { 
-//             id: jobId, 
-//             client: { id: clientUser.client.id } 
-//           },
-//         });
-//         if (clientJob) {
-//           hasAccess = true;
-//           userRole = 'client';
-//         }
-//       } else {
-//         // Check if user is a Worker
-//         const workerUser = await this.workerUserRepo.findOne({
-//           where: { user: { id: userId } },
-//           relations: ['worker'],
-//         });
-
-//         if (workerUser?.worker?.id) {
-//           // Verify worker is assigned to this job
-//           const workerJob = await this.jobRepo.findOne({
-//             where: { 
-//               id: jobId, 
-//               workers: { id: workerUser.worker.id } 
-//             },
-//             relations: ['workers'],
-//           });
-//           if (workerJob) {
-//             hasAccess = true;
-//             userRole = 'worker';
-//           }
-//         }
-//       }
-//     }
-
-//     if (!hasAccess) {
-//       throw new Error('Job not found or user lacks permission to access it');
-//     }
-
-//     // Step 2: Build scan logs query
-//     const scanQuery = this.scanLogRepo.createQueryBuilder('scanLog')
-//       .leftJoinAndSelect('scanLog.worker', 'worker')
-//       .leftJoinAndSelect('worker.user', 'user')
-//       .where('scanLog.jobId = :jobId', { jobId });
-
-//     // Step 3: Apply role-based filtering for worker
-//     if (userRole === 'worker') {
-//       const workerUser = await this.workerUserRepo.findOne({
-//         where: { user: { id: userId } },
-//         relations: ['worker'],
-//       });
-//       // Workers can only see their own scan history
-//       scanQuery.andWhere('scanLog.workerId = :workerId', { workerId: workerUser.worker.id });
-//     }
-
-//     // Step 4: Apply date filtering
-//     if (startDate) {
-//       scanQuery.andWhere('scanLog.scanTime >= :startDate', { startDate });
-//     }
-//     if (endDate) {
-//       scanQuery.andWhere('scanLog.scanTime < :endDate', { 
-//         endDate: new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)) 
-//       });
-//     }
-
-//     const scanLogs = await scanQuery.orderBy('scanLog.scanTime', 'ASC').getMany();
-
-//     // Step 5: Build work sessions query
-//     const sessionQuery = this.workSessionRepo.createQueryBuilder('workSession')
-//       .leftJoinAndSelect('workSession.worker', 'worker')
-//       .leftJoinAndSelect('worker.user', 'user')
-//       .where('workSession.jobId = :jobId', { jobId });
-
-//     // Apply role-based filtering for worker sessions
-//     if (userRole === 'worker') {
-//       const workerUser = await this.workerUserRepo.findOne({
-//         where: { user: { id: userId } },
-//         relations: ['worker'],
-//       });
-//       sessionQuery.andWhere('workSession.workerId = :workerId', { workerId: workerUser.worker.id });
-//     }
-
-//     // Apply date filtering for sessions
-//     if (startDate) {
-//       sessionQuery.andWhere('workSession.checkInTime >= :startDate', { startDate });
-//     }
-//     if (endDate) {
-//       sessionQuery.andWhere('workSession.checkInTime < :endDate', { 
-//         endDate: new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)) 
-//       });
-//     }
-
-//     const workSessions = await sessionQuery.getMany();
-
-//     // Step 6: Group scan logs by date
-//     const groupedByDate = scanLogs.reduce((acc, log) => {
-//       const date = log.scanTime.toISOString().split('T')[0]; // Extract YYYY-MM-DD
-//       if (!acc[date]) {
-//         acc[date] = [];
-//       }
-//       acc[date].push({
-//         id: log.id,
-//         scanType: log.scanType,
-//         scanTime: log.scanTime,
-//         location: log.location,
-//         notes: log.notes,
-//         worker: {
-//           id: log.worker.id,
-//           code: log.worker.code,
-//           name: log.worker.user?.name || null,
-//         },
-//       });
-//       return acc;
-//     }, {});
-
-//     // Step 7: Pair break-start and break-end events for each day
-//     const breaksByDate = {};
-//     for (const date in groupedByDate) {
-//       breaksByDate[date] = [];
-//       let currentBreakStart = null;
-//       for (const log of groupedByDate[date]) {
-//         if (log.scanType === 'break-start') {
-//           currentBreakStart = log;
-//         } else if (log.scanType === 'break-end' && currentBreakStart) {
-//           const durationMinutes = Math.floor((new Date(log.scanTime).getTime() - new Date(currentBreakStart.scanTime).getTime()) / (1000 * 60));
-//           breaksByDate[date].push({
-//             breakStart: {
-//               id: currentBreakStart.id,
-//               scanTime: currentBreakStart.scanTime,
-//               notes: currentBreakStart.notes,
-//             },
-//             breakEnd: {
-//               id: log.id,
-//               scanTime: log.scanTime,
-//               notes: log.notes,
-//             },
-//             durationMinutes,
-//             worker: log.worker,
-//           });
-//           currentBreakStart = null;
-//         }
-//       }
-//     }
-
-//     // Step 8: Group work sessions by date
-//     const sessionsByDate = workSessions.reduce((acc, session) => {
-//       const date = session.checkInTime.toISOString().split('T')[0]; // Extract YYYY-MM-DD
-//       if (!acc[date]) {
-//         acc[date] = [];
-//       }
-//       acc[date].push({
-//         id: session.id,
-//         worker: {
-//           id: session.worker.id,
-//           code: session.worker.code,
-//           name: session.worker.user?.name || null,
-//         },
-//         checkInTime: session.checkInTime,
-//         checkOutTime: session.checkOutTime,
-//         totalWorkMinutes: session.totalWorkMinutes,
-//         totalBreakMinutes: session.totalBreakMinutes,
-//         isOnBreak: session.isOnBreak,
-//       });
-//       return acc;
-//     }, {});
-
-//     // Step 9: Combine into daily history cards
-//     const result = Object.keys(groupedByDate).map(date => ({
-//       date,
-//       scans: groupedByDate[date],
-//       breaks: breaksByDate[date],
-//       sessions: sessionsByDate[date] || [],
-//     }));
-
-//     return {
-//       message: 'Success',
-//       data: result,
-//       userRole, // Include user role in response for frontend reference
-//       isSuccess: true,
-//       statusCode: 200,
-//       developerError: '',
-//     };
-//   } catch (error) {
-//     return {
-//       message: 'Failed to fetch scan history',
-//       data: [],
-//       isSuccess: false,
-//       statusCode: 500,
-//       developerError: error.message,
-//     };
-//   }
-// }
-
 /**
  * Get scan history for a job, grouped by date for daily history cards
  */
@@ -1864,4 +1606,118 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
     }
   }
 
+
+
+ /**
+   * Toggle task completion status for a worker on a specific date
+   */
+  // async toggleTaskCompletion(taskId: number, workerId: number, userId: number): Promise<TaskHistory> {
+  //   try {
+  //     // Verify worker is associated with the user
+  //     const workerUser = await this.workerUserRepo.findOne({
+  //       where: { user: { id: userId }, worker: { id: workerId } },
+  //       relations: ['worker'],
+  //     });
+  //     if (!workerUser?.worker) {
+  //       throw new Error('Worker not found or not associated with this user');
+  //     }
+
+  //     // Verify task exists and get associated job
+  //     const task = await this.taskRepo.findOne({
+  //       where: { id: taskId },
+  //       relations: ['job', 'job.workers'],
+  //     });
+  //     if (!task) {
+  //       throw new Error('Task not found');
+  //     }
+
+  //     // Verify worker is assigned to the job
+  //     const isWorkerAssigned = task.job.workers.some(w => w.id === workerId);
+  //     if (!isWorkerAssigned) {
+  //       throw new Error('Worker is not assigned to this job');
+  //     }
+
+  //     // Get today's date (YYYY-MM-DD)
+  //     const today = new Date();
+  //     today.setHours(0, 0, 0, 0);
+
+  //     // Check if there's an existing TaskHistory record for today
+  //     let taskHistory = await this.taskHistoryRepo.findOne({
+  //       where: {
+  //         task: { id: taskId },
+  //         completedBy: { id: workerId },
+  //         date: today,
+  //       },
+  //     });
+
+  //     if (taskHistory) {
+  //       // Toggle completion status
+  //       taskHistory.isCompleted = !taskHistory.isCompleted;
+  //       taskHistory.completedAt = taskHistory.isCompleted ? new Date() : null;
+  //       taskHistory.completedByWorkerId = taskHistory.isCompleted ? workerId : null;
+  //     } else {
+  //       // Create new TaskHistory record
+  //       taskHistory = this.taskHistoryRepo.create({
+  //         taskId,
+  //         date: today,
+  //         isCompleted: true,
+  //         completedAt: new Date(),
+  //         completedByWorkerId: workerId,
+  //         task: { id: taskId },
+  //         completedBy: { id: workerId },
+  //       });
+  //     }
+
+  //     // Save the TaskHistory record
+  //     const savedTaskHistory = await this.taskHistoryRepo.save(taskHistory);
+
+  //     return savedTaskHistory;
+  //   } catch (error) {
+  //     throw new Error(`Failed to toggle task completion: ${error.message}`);
+  //   }
+  // }
+
+// job.service.ts
+// job.service.ts
+async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
+  // Verify task exists and belongs to this job
+  const task = await this.taskRepo.findOne({
+    where: { id: taskId, job: { id: jobId } },
+    relations: ['job', 'job.workers'],
+  });
+
+  if (!task) {
+    throw new Error('Task not found in this job');
+  }
+
+  // Verify worker is assigned to this job
+  const isWorkerAssigned = task.job.workers.some(w => w.id === workerId);
+  if (!isWorkerAssigned) {
+    throw new Error('Worker not assigned to this job');
+  }
+
+  // Toggle completion status
+  task.isCompleted = !task.isCompleted;
+  task.completedAt = task.isCompleted ? new Date() : null;
+  task.completedByWorkerId = task.isCompleted ? workerId : null;
+
+  const updatedTask = await this.taskRepo.save(task);
+
+  // Create history record
+  const history = this.taskHistoryRepo.create({
+    taskId,
+    jobId,
+    date: new Date(),
+    isCompleted: task.isCompleted,
+    completedAt: task.completedAt,
+    completedByWorkerId: task.completedByWorkerId,
+  });
+  await this.taskHistoryRepo.save(history);
+
+  return updatedTask;
+}
+
+
 } 
+
+

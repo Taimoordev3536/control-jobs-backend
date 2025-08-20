@@ -12,6 +12,7 @@ import { User } from '../../users/entities/user.entity';
 import { ScanLog } from './scan-log.entity';
 import { WorkSession } from './work-session.entity';
 import { JobStatus } from '../enums/job-status.enum';
+import { TaskHistory } from './task-history.entity';
 
 @Entity('job')
 export class Job {
@@ -87,4 +88,7 @@ user: User;
 
   @OneToMany(() => WorkSession, workSession => workSession.job)
   workSessions: WorkSession[];
+
+  @OneToMany(() => TaskHistory, (taskHistory) => taskHistory.job)
+  taskHistories: TaskHistory[];
 } 

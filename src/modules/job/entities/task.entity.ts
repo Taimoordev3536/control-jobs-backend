@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne,OneToMany } from 'typeorm';
 import { Job } from './job.entity';
 import { ShiftType } from './shift.entity';
+import { TaskHistory } from '../entities/task-history.entity';
 
 export enum TaskTiming {
   BEFORE = 'before',
@@ -60,4 +61,7 @@ export class Task {
 
   @Column({ type: 'int', nullable: true })
   completedByWorkerId: number;
+
+    @OneToMany(() => TaskHistory, (taskHistory) => taskHistory.task)
+  taskHistories: TaskHistory[];
 } 

@@ -5,6 +5,7 @@ import { Shift } from './entities/shift.entity';
 import { SigningMethod } from './entities/signing-method.entity';
 import { Alert } from './entities/alert.entity';
 import { Task } from './entities/task.entity';
+import {TaskHistory} from './entities/task-history.entity'
 import { ScanLog } from './entities/scan-log.entity';
 import { WorkSession } from './entities/work-session.entity';
 import { JobService } from './job.service';
@@ -27,6 +28,7 @@ import { ClientUser } from '../clients/entities/client-user.entity';
       SigningMethod,
       Alert,
       Task,
+      TaskHistory,
       ScanLog,
       WorkSession,
       Worker,
