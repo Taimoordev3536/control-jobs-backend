@@ -13,7 +13,7 @@
     "deploy:firebase": "firebase deploy --only functions",
     "logs": "firebase functions:log",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "start": "node dist/main",
+    "start": "node dist/src/main.js",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
