@@ -49,7 +49,6 @@ export class JobService {
     private dataSource: DataSource,
   ) {}
 
-  //create job
   async createJob(createJobDto: CreateJobDto, employerUserId: number): Promise<Job> {
     let job: Job;
     await this.dataSource.transaction(async manager => {
@@ -82,19 +81,19 @@ export class JobService {
       await manager.save(job);
 
       // Shifts
-      for (const shiftDto of createJobDto.shifts) {
+      for (const shiftDto of createJobDto.shifts || []) {
         const shift = manager.create(Shift, { ...shiftDto, job });
         await manager.save(shift);
       }
 
       // Signing Methods
-      for (const signingDto of createJobDto.signingMethods) {
+      for (const signingDto of createJobDto.signingMethods || []) {
         const signingMethod = manager.create(SigningMethod, { ...signingDto, job });
         await manager.save(signingMethod);
       }
 
       // Alerts
-      for (const alertDto of createJobDto.alerts) {
+      for (const alertDto of createJobDto.alerts || []) {
         const alert = manager.create(Alert, { ...alertDto, job });
         await manager.save(alert);
       }
@@ -116,12 +115,13 @@ export class JobService {
         });
         await manager.save(survey);
         // Survey Questions
-        for (const questionDto of createJobDto.survey.questions) {
+        for (const questionDto of createJobDto.survey.questions || []) {
           const question = manager.create(SurveyQuestion, { ...questionDto, survey });
           await manager.save(question);
         }
       }
     });
+
     // Fetch with all relations
     return this.jobRepo.findOne({
       where: { id: job.id },
@@ -381,6 +381,105 @@ async getAllJobsByEmployerFromToken(userId: number) {
 }
 
 // worker dashboard job card
+// async getAllJobsByWorkerFromToken(userId: number) {
+//   try {
+//     const workerUser = await this.workerUserRepo.findOne({
+//       where: { user: { id: userId } },
+//       relations: ['worker'],
+//     });
+
+//     if (!workerUser?.worker?.id) {
+//       throw new Error('Worker not found for this user');
+//     }
+
+//     const workerId = workerUser.worker.id;
+
+//     const jobs = await this.jobRepo.find({
+//       where: {
+//         workers: { id: workerId }, // Filter jobs where this worker is assigned
+//       },
+//       relations: ['client', 'workCenter', 'tasks', 'shifts', 'signingMethods', 'workSessions'],
+//       order: { id: 'ASC' },
+//     });
+
+//     // Get active work sessions for this worker
+//     const activeWorkSessions = await this.workSessionRepo.find({
+//       where: {
+//         worker: { id: workerId },
+//         checkOutTime: IsNull(),
+//       },
+//       relations: ['job'],
+//     });
+
+//     const activeSessionsByJobId = new Map();
+//     activeWorkSessions.forEach(session => {
+//       activeSessionsByJobId.set(session.job.id, session);
+//     });
+
+//     const formatted = jobs.map(job => {
+//       const activeSession = activeSessionsByJobId.get(job.id);
+      
+//       return {
+//         jobId: job.id,
+//         jobName: job.jobName,
+//         clientName: job.client?.name || '',
+//         workCenter: job.workCenter?.name || '',
+//         status: job.status || JobStatus.SCHEDULED,
+//         startDate: job.startDate, // ✅ Added
+//         endDate: job.endDate,     // ✅ Added
+//         totalShifts: job.shifts?.length || 0,
+//         expectedDuration: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0),
+//         tasks: job.tasks?.map(task => ({
+//           id: task.id,
+//           name: task.name,
+//           note: task.note,
+//           expectedDuration: task.expectedDuration,
+//           isCompleted: task.isCompleted || false,
+//           completedAt: task.completedAt,
+//           completedByWorkerId: task.completedByWorkerId,
+//         })) || [],
+//         shifts: job.shifts?.map(shift => ({
+//           shiftType: shift.shiftType,
+//           startTime: shift.startTime,
+//           endTime: shift.endTime,
+//           totalHours: shift.totalHours,
+//         })) || [],
+//         signingMethods: job.signingMethods?.map(sm => ({
+//           methodType: sm.methodType,
+//           methodDetails: sm.methodDetails,
+//           verifyIdentity: sm.verifyIdentity,
+//         })) || [],
+//         workSession: activeSession ? {
+//           id: activeSession.id,
+//           checkInTime: activeSession.checkInTime,
+//           isOnBreak: activeSession.isOnBreak,
+//           currentBreakStart: activeSession.currentBreakStart,
+//           totalWorkMinutes: activeSession.totalWorkMinutes,
+//           totalBreakMinutes: activeSession.totalBreakMinutes,
+//         } : null,
+//       };
+//     });
+
+//     return {
+//       message: 'Success',
+//       data: formatted,
+//       isSuccess: true,
+//       statusCode: 200,
+//       developerError: '',
+//     };
+//   } catch (error) {
+//     return {
+//       message: 'Error fetching jobs',
+//       data: [],
+//       isSuccess: false,
+//       statusCode: 500,
+//       developerError: error.message,
+//     };
+//   }
+// }
+
+
+// Updated method in job.service.ts
 async getAllJobsByWorkerFromToken(userId: number) {
   try {
     const workerUser = await this.workerUserRepo.findOne({
@@ -394,11 +493,23 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
     const workerId = workerUser.worker.id;
 
+    // Get today's date for TaskHistory filtering
+    const today = new Date();
+    const todayString = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+
     const jobs = await this.jobRepo.find({
       where: {
-        workers: { id: workerId }, // Filter jobs where this worker is assigned
+        workers: { id: workerId },
       },
-      relations: ['client', 'workCenter', 'tasks', 'shifts', 'signingMethods', 'workSessions'],
+      relations: [
+        'client', 
+        'workCenter', 
+        'tasks', 
+        'tasks.taskHistories', // Include task histories
+        'shifts', 
+        'signingMethods', 
+        'workSessions'
+      ],
       order: { id: 'ASC' },
     });
 
@@ -425,19 +536,42 @@ async getAllJobsByWorkerFromToken(userId: number) {
         clientName: job.client?.name || '',
         workCenter: job.workCenter?.name || '',
         status: job.status || JobStatus.SCHEDULED,
-        startDate: job.startDate, // ✅ Added
-        endDate: job.endDate,     // ✅ Added
+        startDate: job.startDate,
+        endDate: job.endDate,
         totalShifts: job.shifts?.length || 0,
         expectedDuration: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0),
-        tasks: job.tasks?.map(task => ({
-          id: task.id,
-          name: task.name,
-          note: task.note,
-          expectedDuration: task.expectedDuration,
-          isCompleted: task.isCompleted || false,
-          completedAt: task.completedAt,
-          completedByWorkerId: task.completedByWorkerId,
-        })) || [],
+        
+        // Enhanced task mapping with TaskHistory
+        tasks: job.tasks?.map(task => {
+          // Find today's TaskHistory for this specific task
+          const todayHistory = task.taskHistories?.find(
+            history => {
+              const historyDate = new Date(history.date).toISOString().split('T')[0];
+              return historyDate === todayString;
+            }
+          );
+
+          return {
+            id: task.id,
+            name: task.name,
+            note: task.note,
+            expectedDuration: task.expectedDuration,
+            // Use TaskHistory data if available, otherwise use task's default completion status
+            isCompleted: todayHistory ? todayHistory.isCompleted : (task.isCompleted || false),
+            completedAt: todayHistory ? todayHistory.completedAt : task.completedAt,
+            completedByWorkerId: todayHistory ? todayHistory.completedByWorkerId : task.completedByWorkerId,
+            // Include TaskHistory for frontend reference
+            taskHistories: task.taskHistories?.map(history => ({
+              id: history.id,
+              taskId: history.taskId,
+              date: history.date,
+              isCompleted: history.isCompleted,
+              completedAt: history.completedAt,
+              completedByWorkerId: history.completedByWorkerId,
+            })) || []
+          };
+        }) || [],
+        
         shifts: job.shifts?.map(shift => ({
           shiftType: shift.shiftType,
           startTime: shift.startTime,
@@ -477,6 +611,8 @@ async getAllJobsByWorkerFromToken(userId: number) {
     };
   }
 }
+
+
 
 
   //client dashboard job card
@@ -1607,115 +1743,154 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
   }
 
 
+// async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
+//   try {
+//     // Verify task exists and belongs to this job
+//     const task = await this.taskRepo.findOne({
+//       where: { id: taskId, job: { id: jobId } },
+//       relations: ['job', 'job.workers'],
+//     });
 
- /**
-   * Toggle task completion status for a worker on a specific date
-   */
-  // async toggleTaskCompletion(taskId: number, workerId: number, userId: number): Promise<TaskHistory> {
-  //   try {
-  //     // Verify worker is associated with the user
-  //     const workerUser = await this.workerUserRepo.findOne({
-  //       where: { user: { id: userId }, worker: { id: workerId } },
-  //       relations: ['worker'],
-  //     });
-  //     if (!workerUser?.worker) {
-  //       throw new Error('Worker not found or not associated with this user');
-  //     }
+//     if (!task) {
+//       throw new Error('Task not found in this job');
+//     }
 
-  //     // Verify task exists and get associated job
-  //     const task = await this.taskRepo.findOne({
-  //       where: { id: taskId },
-  //       relations: ['job', 'job.workers'],
-  //     });
-  //     if (!task) {
-  //       throw new Error('Task not found');
-  //     }
+//     // Verify worker is assigned to this job
+//     const isWorkerAssigned = task.job.workers.some(w => w.id === workerId);
+//     if (!isWorkerAssigned) {
+//       throw new Error('Worker not assigned to this job');
+//     }
 
-  //     // Verify worker is assigned to the job
-  //     const isWorkerAssigned = task.job.workers.some(w => w.id === workerId);
-  //     if (!isWorkerAssigned) {
-  //       throw new Error('Worker is not assigned to this job');
-  //     }
+//     // Toggle completion status
+//     task.isCompleted = !task.isCompleted;
+//     task.completedAt = task.isCompleted ? new Date() : null;
+//     task.completedByWorkerId = task.isCompleted ? workerId : null;
 
-  //     // Get today's date (YYYY-MM-DD)
-  //     const today = new Date();
-  //     today.setHours(0, 0, 0, 0);
+//     const updatedTask = await this.taskRepo.save(task);
 
-  //     // Check if there's an existing TaskHistory record for today
-  //     let taskHistory = await this.taskHistoryRepo.findOne({
-  //       where: {
-  //         task: { id: taskId },
-  //         completedBy: { id: workerId },
-  //         date: today,
-  //       },
-  //     });
+//     // Create history record
+//     const history = this.taskHistoryRepo.create({
+//       taskId,
+//       jobId,
+//       date: new Date(),
+//       isCompleted: task.isCompleted,
+//       completedAt: task.completedAt,
+//       completedByWorkerId: task.completedByWorkerId,
+//     });
+//     await this.taskHistoryRepo.save(history);
 
-  //     if (taskHistory) {
-  //       // Toggle completion status
-  //       taskHistory.isCompleted = !taskHistory.isCompleted;
-  //       taskHistory.completedAt = taskHistory.isCompleted ? new Date() : null;
-  //       taskHistory.completedByWorkerId = taskHistory.isCompleted ? workerId : null;
-  //     } else {
-  //       // Create new TaskHistory record
-  //       taskHistory = this.taskHistoryRepo.create({
-  //         taskId,
-  //         date: today,
-  //         isCompleted: true,
-  //         completedAt: new Date(),
-  //         completedByWorkerId: workerId,
-  //         task: { id: taskId },
-  //         completedBy: { id: workerId },
-  //       });
-  //     }
+//     return {
+//       message: 'Task completion toggled successfully',
+//       isCompleted: task.isCompleted,
+//       isSuccess: true,
+//       statusCode: 200,
+//       developerError: '',
+//     };
+//   } catch (error) {
+//     return {
+//       message: 'Failed to toggle task completion',
+//       isCompleted: null,
+//       isSuccess: false,
+//       statusCode: 500,
+//       developerError: error.message,
+//     };
+//   }
+// }
 
-  //     // Save the TaskHistory record
-  //     const savedTaskHistory = await this.taskHistoryRepo.save(taskHistory);
 
-  //     return savedTaskHistory;
-  //   } catch (error) {
-  //     throw new Error(`Failed to toggle task completion: ${error.message}`);
-  //   }
-  // }
-
-// job.service.ts
-// job.service.ts
 async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
-  // Verify task exists and belongs to this job
-  const task = await this.taskRepo.findOne({
-    where: { id: taskId, job: { id: jobId } },
-    relations: ['job', 'job.workers'],
-  });
+  try {
+    const today = new Date();
+    const todayString = today.toISOString().split('T')[0]; // YYYY-MM-DD format
 
-  if (!task) {
-    throw new Error('Task not found in this job');
+    // Verify task exists and belongs to this job
+    const task = await this.taskRepo.findOne({
+      where: { id: taskId, job: { id: jobId } },
+      relations: ['job', 'job.workers', 'taskHistories'],
+    });
+
+    if (!task) {
+      throw new Error('Task not found in this job');
+    }
+
+    // Verify worker is assigned to this job
+    const isWorkerAssigned = task.job.workers.some(w => w.id === workerId);
+    if (!isWorkerAssigned) {
+      throw new Error('Worker not assigned to this job');
+    }
+
+    // Find or create TaskHistory for today
+    let todayHistory = task.taskHistories?.find(history => {
+      const historyDate = new Date(history.date).toISOString().split('T')[0];
+      return historyDate === todayString;
+    });
+
+    if (todayHistory) {
+      // Update existing TaskHistory
+      todayHistory.isCompleted = !todayHistory.isCompleted;
+      todayHistory.completedAt = todayHistory.isCompleted ? new Date() : null;
+      todayHistory.completedByWorkerId = todayHistory.isCompleted ? workerId : null;
+      
+      const updatedHistory = await this.taskHistoryRepo.save(todayHistory);
+      
+      return {
+        message: 'Task completion toggled successfully',
+        isCompleted: updatedHistory.isCompleted,
+        taskHistory: {
+          id: updatedHistory.id,
+          taskId: updatedHistory.taskId,
+          jobId: updatedHistory.jobId,
+          date: updatedHistory.date,
+          isCompleted: updatedHistory.isCompleted,
+          completedAt: updatedHistory.completedAt,
+          completedByWorkerId: updatedHistory.completedByWorkerId,
+        },
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    } else {
+      // Create new TaskHistory for today (marking as completed)
+      const newHistory = this.taskHistoryRepo.create({
+        taskId,
+        jobId,
+        date: new Date(todayString), // Store as date
+        isCompleted: true, // First toggle always marks as complete
+        completedAt: new Date(),
+        completedByWorkerId: workerId,
+      });
+
+      const savedHistory = await this.taskHistoryRepo.save(newHistory);
+
+      return {
+        message: 'Task marked as completed successfully',
+        isCompleted: true,
+        taskHistory: {
+          id: savedHistory.id,
+          taskId: savedHistory.taskId,
+          jobId: savedHistory.jobId,
+          date: savedHistory.date,
+          isCompleted: savedHistory.isCompleted,
+          completedAt: savedHistory.completedAt,
+          completedByWorkerId: savedHistory.completedByWorkerId,
+        },
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    }
+  } catch (error) {
+    return {
+      message: 'Failed to toggle task completion',
+      isCompleted: null,
+      isSuccess: false,
+      statusCode: 500,
+      developerError: error.message,
+    };
   }
-
-  // Verify worker is assigned to this job
-  const isWorkerAssigned = task.job.workers.some(w => w.id === workerId);
-  if (!isWorkerAssigned) {
-    throw new Error('Worker not assigned to this job');
-  }
-
-  // Toggle completion status
-  task.isCompleted = !task.isCompleted;
-  task.completedAt = task.isCompleted ? new Date() : null;
-  task.completedByWorkerId = task.isCompleted ? workerId : null;
-
-  const updatedTask = await this.taskRepo.save(task);
-
-  // Create history record
-  const history = this.taskHistoryRepo.create({
-    taskId,
-    jobId,
-    date: new Date(),
-    isCompleted: task.isCompleted,
-    completedAt: task.completedAt,
-    completedByWorkerId: task.completedByWorkerId,
-  });
-  await this.taskHistoryRepo.save(history);
-
-  return updatedTask;
 }
+
+
 
 
 } 

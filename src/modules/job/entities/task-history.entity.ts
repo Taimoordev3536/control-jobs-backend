@@ -36,3 +36,5 @@ export class TaskHistory {
   @ManyToOne(() => Job, (job) => job.taskHistories) // Add relation to Job
   job: Job;
 }
+
+

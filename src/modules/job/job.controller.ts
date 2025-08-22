@@ -1,5 +1,5 @@
 
-import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Query,Delete,Request } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Query,Delete,Request,HttpException, HttpStatus, } from '@nestjs/common';
 import { JobService } from './job.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
@@ -11,13 +11,28 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 export class JobController {
   constructor(private readonly jobService: JobService) {}
 
-  @UseGuards(JwtAuthGuard)
-  @Post()
-  async createJob(@Body() createJobDto: CreateJobDto, @Req() req) {
+  // @UseGuards(JwtAuthGuard)
+  // @Post()
+  // async createJob(@Body() createJobDto: CreateJobDto, @Req() req) {
+  //   const employerUserId = req.user.id;
+  //   const job = await this.jobService.createJob(createJobDto, employerUserId);
+  //   return { message: 'Job created successfully', data: job };
+  // }
+
+@UseGuards(JwtAuthGuard)
+@Post()
+async createJob(@Body() createJobDto: CreateJobDto, @Req() req) {
+  try {
     const employerUserId = req.user.id;
     const job = await this.jobService.createJob(createJobDto, employerUserId);
     return { message: 'Job created successfully', data: job };
+  } catch (error) {
+    throw new HttpException({
+      message: 'Failed to create job',
+      error: error.message,
+    }, HttpStatus.BAD_REQUEST);
   }
+}
 
   //##### delete job ####
 
