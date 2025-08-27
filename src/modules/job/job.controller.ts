@@ -251,4 +251,15 @@ async getJobAnalyticsForClient(@Req() req) {
     return this.jobService.toggleTaskCompletion(taskId, workerId, jobId);
   }
 
+
+  // Fetch task history for a job, worker, and date
+  @Get(':jobId/task-history')
+  async getTaskHistoryForJobWorkerDate(
+    @Param('jobId') jobId: number,
+    @Query('workerId') workerId: number,
+    @Query('date') date?: string
+  ): Promise<any> {
+    return await this.jobService.getTaskHistoryForJobWorkerDate(jobId, workerId, date);
+  }
+
 }

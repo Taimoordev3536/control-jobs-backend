@@ -1287,7 +1287,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
       }
     }
 
-    return updatedSession;
+  // Save all task statuses for today when worker checks out
+  await this.saveAllTaskStatusesOnCheckout(jobId, workerId);
+  return updatedSession;
   }
 
   /**
@@ -1890,8 +1892,88 @@ async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
   }
 }
 
+/**
+   * Save all tasks' statuses for the job for today when a worker checks out
+   */
+  private async saveAllTaskStatusesOnCheckout(jobId: number, workerId: number) {
+    const todayString = new Date().toISOString().split('T')[0];
+    const job = await this.jobRepo.findOne({
+      where: { id: jobId },
+      relations: ['tasks', 'tasks.taskHistories', 'workers'],
+    });
+    if (!job) return;
+    for (const task of job.tasks) {
+      // Only save for assigned workers
+      const isWorkerAssigned = job.workers.some(w => w.id === workerId);
+      if (!isWorkerAssigned) continue;
+      let todayHistory = task.taskHistories?.find(history => {
+        const historyDate = new Date(history.date).toISOString().split('T')[0];
+        return historyDate === todayString && history.completedByWorkerId === workerId;
+      });
+      // If a completed history already exists for this task/worker/date, do NOT overwrite it
+      if (todayHistory && todayHistory.isCompleted) {
+        continue;
+      }
+      if (todayHistory) {
+        todayHistory.isCompleted = !!task.isCompleted;
+        todayHistory.completedAt = task.isCompleted ? new Date() : null;
+        todayHistory.completedByWorkerId = workerId; // Always set to current worker
+        await this.taskHistoryRepo.save(todayHistory);
+      } else {
+        const newHistory = this.taskHistoryRepo.create({
+          taskId: task.id,
+          jobId,
+          date: new Date(todayString),
+          isCompleted: !!task.isCompleted,
+          completedAt: task.isCompleted ? new Date() : null,
+          completedByWorkerId: workerId, // Always set to current worker
+        });
+        await this.taskHistoryRepo.save(newHistory);
+      }
+    }
+  }
 
 
+    /**
+   * Fetch task history for a job, worker, and date
+   */
+async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: string): Promise<any> {
+  try {
+    const query = this.taskHistoryRepo.createQueryBuilder('taskHistory')
+      .leftJoinAndSelect('taskHistory.task', 'task')
+      .where('taskHistory.jobId = :jobId', { jobId })
+      .andWhere('taskHistory.completedByWorkerId = :workerId', { workerId });
+    if (date) {
+      query.andWhere('taskHistory.date = :date', { date });
+    }
+    const histories = await query.getMany();
+    const grouped: { [date: string]: any[] } = {};
+    histories.forEach(h => {
+      const dateObj = new Date(h.date); // Ensure date is a Date object
+      const d = dateObj.toISOString().split('T')[0];
+      if (!grouped[d]) grouped[d] = [];
+      grouped[d].push({
+        id: h.taskId,
+        name: h.task?.name || '',
+        completed: h.isCompleted,
+        completedByWorkerId: h.completedByWorkerId,
+      });
+    });
+    return {
+      data: Object.entries(grouped).map(([date, tasks]) => ({ date, tasks })),
+      isSuccess: true,
+      message: 'Success',
+    };
+  } catch (error) {
+    return {
+      data: [],
+      isSuccess: false,
+      message: 'Failed to fetch task history',
+      statusCode: 500,
+      developerError: error.message,
+    };
+  }
+}
 
 } 
 

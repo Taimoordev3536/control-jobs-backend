@@ -201,6 +201,8 @@ export class ClientsService {
    * @param clientId - The client ID
    */
   async getWorkCentersByClient(clientId: number) {
-    return this.workCenterRepo.find({ where: { clientId } });
+  const client = await this.clientRepo.findOne({ where: { id: clientId } });
+  if (!client) throw new NotFoundException('Client not found');
+  return [{ address: client.address }];
   }
 }
