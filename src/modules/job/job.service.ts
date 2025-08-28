@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+// Mock WorkCenter data (used for every client)
+const MOCK_WORK_CENTER = { id: 1, name: 'WorkCenter 1' };
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull } from 'typeorm';
 import { Job } from './entities/job.entity';
@@ -39,7 +41,7 @@ export class JobService {
     @InjectRepository(WorkSession) private workSessionRepo: Repository<WorkSession>,
     @InjectRepository(Worker) private workerRepo: Repository<Worker>,
     @InjectRepository(Client) private clientRepo: Repository<Client>,
-    @InjectRepository(WorkCenter) private workCenterRepo: Repository<WorkCenter>,
+    // @InjectRepository(WorkCenter) private workCenterRepo: Repository<WorkCenter> // Commented: API WorkCenter logic
     @InjectRepository(Employer) private employerRepo: Repository<Employer>,
     @InjectRepository(EmployerUser) private employerUserRepo: Repository<EmployerUser>,
     @InjectRepository(ClientUser) private clientUserRepo: Repository<ClientUser>,
@@ -63,7 +65,13 @@ export class JobService {
       const employer = employerUserLink.employer;
 
       const client = await manager.findOneOrFail(Client, { where: { id: createJobDto.clientId } });
-      const workCenter = await manager.findOneOrFail(WorkCenter, { where: { id: createJobDto.workCenterId } });
+    // Use the mock WorkCenter for every client
+    const workCenter = { ...MOCK_WORK_CENTER, clientId: createJobDto.clientId };
+
+    /*
+    // Previous code to fetch WorkCenter from DB
+    // const workCenter = await manager.findOneOrFail(WorkCenter, { where: { id: createJobDto.workCenterId } });
+    */
       const workers = await manager.findByIds(Worker, createJobDto.workerIds);
 
       // Create job
