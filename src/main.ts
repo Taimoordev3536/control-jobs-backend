@@ -9,6 +9,7 @@ import * as https from 'https';
 import { ValidationPipe } from '@nestjs/common';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 
 async function bootstrap() {
   const server = express();
@@ -36,14 +37,14 @@ async function bootstrap() {
   // Use global exception filter
   app.useGlobalFilters(new HttpExceptionFilter());
 
+  // Attach Socket.IO adapter so gateways bind under the same HTTP server
+  app.useWebSocketAdapter(new IoAdapter(app));
+
   const configService = app.get<ConfigService>(ConfigService);
   const httpPort = configService.get<number>('HTTP_PORT') || 5000 || 8000;
   const httpsPort = configService.get<number>('HTTPS_PORT') || 443;
 
-  await app.init();
-
-  http.createServer(server).listen(httpPort, () => {
-    console.log(`HTTP Server running on port ${httpPort}`);
-  });
+  await app.listen(httpPort);
+  console.log(`HTTP Server running on port ${httpPort}`);
 }
 bootstrap();

@@ -19,6 +19,7 @@ import { SurveyQuestion } from '../survey/entities/survey-question.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
+import { AlertsModule } from '../realtime/alerts.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { ClientUser } from '../clients/entities/client-user.entity';
       WorkerUser,
       ClientUser,
     ]),
+    AlertsModule,
   ],
   providers: [JobService],
   controllers: [JobController],

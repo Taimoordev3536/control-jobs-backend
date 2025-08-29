@@ -27,6 +27,7 @@ import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
 import { UpdateJobStatusDto } from './dto/update-job-status.dto';
 import { JobStatus } from './enums/job-status.enum';
 import * as QRCode from 'qrcode';
+import { AlertsService } from '../realtime/alerts.service';
 
 @Injectable()
 export class JobService {
@@ -49,6 +50,7 @@ export class JobService {
     @InjectRepository(SurveyQuestion) private surveyQuestionRepo: Repository<SurveyQuestion>,
     @InjectRepository(WorkerUser) private workerUserRepo: Repository<WorkerUser>,
     private dataSource: DataSource,
+    private alertsService: AlertsService,
   ) {}
 
   async createJob(createJobDto: CreateJobDto, employerUserId: number): Promise<Job> {
@@ -1076,7 +1078,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       // Verify job exists
       const job = await this.jobRepo.findOne({
         where: { id: recordScanDto.jobId },
-        relations: ['workers'],
+        relations: ['workers','employer','client'],
       });
 
       if (!job) {
@@ -1106,6 +1108,23 @@ async getAllJobsByWorkerFromToken(userId: number) {
       switch (recordScanDto.scanType) {
         case 'check-in':
           workSession = await this.handleCheckIn(recordScanDto.jobId, workerId);
+          // Emit alert to linked employer and client
+          if (job?.employer?.id && job?.client?.id) {
+            // Find employer userId and client userId via link tables
+            const employerUser = await this.employerUserRepo.findOne({ where: { employer: { id: job.employer.id } }, relations: ['user'] });
+            const clientUser = await this.clientUserRepo.findOne({ where: { client: { id: job.client.id } }, relations: ['user'] });
+            if (employerUser?.user?.id && clientUser?.user?.id) {
+              await this.alertsService.createAndEmitAlert({
+                type: 'CHECK_IN',
+                jobId: job.id,
+                workerId,
+                employerUserId: employerUser.user.id,
+                clientUserId: clientUser.user.id,
+                message: `Worker checked in to ${job.jobName}`,
+                meta: { jobName: job.jobName },
+              });
+            }
+          }
           break;
         case 'break-start':
           workSession = await this.handleBreakStart(recordScanDto.jobId, workerId);
@@ -1115,6 +1134,21 @@ async getAllJobsByWorkerFromToken(userId: number) {
           break;
         case 'check-out':
           workSession = await this.handleCheckOut(recordScanDto.jobId, workerId);
+          if (job?.employer?.id && job?.client?.id) {
+            const employerUser = await this.employerUserRepo.findOne({ where: { employer: { id: job.employer.id } }, relations: ['user'] });
+            const clientUser = await this.clientUserRepo.findOne({ where: { client: { id: job.client.id } }, relations: ['user'] });
+            if (employerUser?.user?.id && clientUser?.user?.id) {
+              await this.alertsService.createAndEmitAlert({
+                type: 'CHECK_OUT',
+                jobId: job.id,
+                workerId,
+                employerUserId: employerUser.user.id,
+                clientUserId: clientUser.user.id,
+                message: `Worker checked out from ${job.jobName}`,
+                meta: { jobName: job.jobName },
+              });
+            }
+          }
           break;
       }
 

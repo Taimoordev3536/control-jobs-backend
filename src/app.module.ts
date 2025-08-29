@@ -10,6 +10,7 @@ import {ClientsModule } from './modules/clients/clients.module';
 import { WorkersModule } from './modules/workers/workers.module';
 import { JobModule } from './modules/job/job.module';
 import { config } from 'dotenv';
+import { AlertsModule } from './modules/realtime/alerts.module';
 
 config();
 
@@ -43,6 +44,7 @@ config();
     ClientsModule,
     WorkersModule,
     JobModule,
+    AlertsModule,
   ],
 })
 export class AppModule { }
