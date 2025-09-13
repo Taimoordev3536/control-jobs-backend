@@ -13,10 +13,10 @@ export class WorkSession {
   @Column({ name: 'worker_id' })
   workerId: number;
 
-  @Column({ type: 'timestamp', name: 'check_in_time' })
+  @Column({ type: 'timestamptz', name: 'check_in_time'})
   checkInTime: Date;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'check_out_time' })
+  @Column({ type: 'timestamptz', nullable: true, name: 'check_out_time' })
   checkOutTime: Date;
 
   @Column({ type: 'int', default: 0, name: 'total_work_minutes' })
@@ -31,16 +31,16 @@ export class WorkSession {
   @Column({ type: 'boolean', default: false, name: 'is_on_break' })
   isOnBreak: boolean; // Current break status
 
-  @Column({ type: 'timestamp', nullable: true, name: 'current_break_start' })
+  @Column({ type: 'timestamptz', nullable: true, name: 'current_break_start' })
   currentBreakStart: Date;
 
   @Column({ type: 'text', nullable: true })
   notes: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
   // Relations

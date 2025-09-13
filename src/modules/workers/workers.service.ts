@@ -12,6 +12,7 @@ import { Employer } from '../../modules/employers/entities/employer.entity';
 import { EmployerWorker } from '../../modules/employers/entities/employer-worker.entity';
 import { EmployerUser } from '../../modules/employers/entities/employer-user.entity';
 import * as bcrypt from 'bcryptjs';
+import { EmailService } from '../../common/services/email.service';
 
 @Injectable()
 export class WorkersService {
@@ -29,6 +30,7 @@ export class WorkersService {
     @InjectRepository(EmployerWorker)
     private employerWorkerRepo: Repository<EmployerWorker>,
     private dataSource: DataSource,
+    private readonly emailService: EmailService,
   ) {}
 
   findAll() {
@@ -138,6 +140,23 @@ export class WorkersService {
         userId: savedUser.id,
       });
       await manager.save(WorkerUser, workerUser);
+
+      // Send credentials email if accessAccountStatus is 'request'
+      if ((dto as any).accessAccountStatus === 'request') {
+        try {
+          const emailTo = (dto as any).accessEmail || dto.email;
+          await this.emailService.sendUserCredentials(
+            emailTo,
+            dto.name,
+            rawPassword,
+            'worker',
+            dto.email,
+          );
+        } catch (emailError) {
+          console.error('Failed to send worker credentials email:', emailError?.message || emailError);
+        }
+      }
+
       return { worker: savedWorker, user: savedUser };
     });
   }

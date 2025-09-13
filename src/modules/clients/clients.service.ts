@@ -13,6 +13,7 @@ import * as bcrypt from 'bcryptjs';
 import { WorkCenter } from '../work-centers/entities/work-center.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { randomBytes } from 'crypto';
+import { EmailService } from '../../common/services/email.service';
 
 @Injectable()
 export class ClientsService {
@@ -32,6 +33,7 @@ export class ClientsService {
     @InjectRepository(WorkCenter)
     private workCenterRepo: Repository<WorkCenter>,
     private dataSource: DataSource,
+  private readonly emailService: EmailService,
   ) {}
 
   findAll() {
@@ -147,6 +149,21 @@ export class ClientsService {
         isDefault: true,
       });
       await manager.save(ClientUser, clientUser);
+      // Send credentials email if accessAccountStatus is 'request'
+      if (dto.accessAccountStatus === 'request') {
+        try {
+          const emailTo = dto.accessEmail || dto.email;
+          await this.emailService.sendUserCredentials(
+            emailTo,
+            dto.name,
+            rawPassword,
+            'client',
+            dto.email,
+          );
+        } catch (emailError) {
+          console.error('Failed to send client credentials email:', emailError?.message || emailError);
+        }
+      }
       return { client: savedClient, user: savedUser };
     });
   }

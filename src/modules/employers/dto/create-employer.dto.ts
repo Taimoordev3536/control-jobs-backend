@@ -101,6 +101,10 @@ export class CreateEmployerDto {
   @IsOptional()
   accessAccountStatus?: 'postpone' | 'request';
 
+  @IsEmail()
+  @IsOptional()
+  accessEmail?: string;
+
   @IsBoolean()
   @IsOptional()
   createUserAccount?: boolean;

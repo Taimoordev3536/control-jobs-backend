@@ -1,8 +1,8 @@
 // shared/enums/payment-method.enum.ts
 export enum PaymentMethodEnum {
   TRANSFER = 'Transfer',
-  CASH = 'Cash',
+  DIRECT_DEBIT = 'Direct Debit',
   CARD = 'Card',
   PAYPAL = 'PayPal',
-  OTHER = 'Other'
+  OTHERS = 'Others'
 }

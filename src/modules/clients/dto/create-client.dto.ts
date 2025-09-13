@@ -67,4 +67,8 @@ export class CreateClientDto {
   @IsString()
   @IsOptional()
   accessAccountStatus?: 'postpone' | 'request'; // ✅ New field
+  
+  @IsEmail()
+  @IsOptional()
+  accessEmail?: string;
 }

@@ -8,6 +8,7 @@ import { PartnerUser } from './entities/partner-user.entity';
 import { User } from '../users/entities/user.entity';
 import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { AuthModule } from '../auth/auth.module';
+import { CommonModule } from '../../common/common.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { AuthModule } from '../auth/auth.module';
       PaymentMethod
     ]),
     AuthModule,
+    CommonModule,
   ],
   controllers: [PartnersController],
   providers: [PartnersService],

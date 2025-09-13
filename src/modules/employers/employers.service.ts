@@ -18,6 +18,7 @@ import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { UpdateEmployerDto } from './dto/update-employer.dto';
 import { Role } from '../users/entities/role.entity';
 import { randomBytes } from 'crypto';
+import { EmailService } from '../../common/services/email.service';
 
 @Injectable()
 export class EmployersService {
@@ -36,6 +37,7 @@ export class EmployersService {
     private readonly paymentMethodRepository: Repository<PaymentMethod>,
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
+    private readonly emailService: EmailService,
   ) {}
 
   async create(
@@ -122,6 +124,26 @@ export class EmployersService {
             isDefault: true,
           });
           await manager.save(EmployerUser, employerUser);
+
+          // Send credentials email if accessAccountStatus is 'request'
+          if (createEmployerDto.accessAccountStatus === 'request') {
+            try {
+              // Use accessEmail if provided, otherwise use the main email
+              const emailTo = createEmployerDto.accessEmail || createEmployerDto.user.email;
+              
+              // Send credentials to the specified email, but use the main email as login
+              await this.emailService.sendUserCredentials(
+                emailTo,
+                createEmployerDto.name,
+                rawPassword,
+                'employer',
+                createEmployerDto.user.email // This is the actual login email
+              );
+            } catch (emailError) {
+              console.error('Failed to send employer credentials email:', emailError.message);
+              // Continue with the process even if email fails
+            }
+          }
 
           return {
             message: 'Employer created successfully',

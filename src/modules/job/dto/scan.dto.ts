@@ -15,6 +15,10 @@ export class RecordScanDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsString()
+  userTimezone?: string;
 }
 
 export class GenerateQrCodeDto {

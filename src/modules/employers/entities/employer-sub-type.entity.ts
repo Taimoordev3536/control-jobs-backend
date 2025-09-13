@@ -1,9 +1,9 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 export enum EmployerSubTypeEnum {
-    INDIVIDUAL = 'individual',
-    FREELANCER = 'freelancer',
-    COMPANY = 'company'
+    Individual = 'Individual',
+    SelfEmployed = 'Self-Employed',
+    Company = 'Company'
 }
 
 @Entity('employerSubTypes')
@@ -17,8 +17,8 @@ export class EmployerSubType {
     })
     name: EmployerSubTypeEnum;
 
-    @Column('text')
-    invoicingRules: string;
+   @Column('text', { nullable: true })
+   invoicingRules: string;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;

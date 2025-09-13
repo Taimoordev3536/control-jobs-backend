@@ -86,8 +86,7 @@ export enum TaskPeriodicity {
   DAILY = 'daily',
   WEEKLY = 'weekly',
   MONTHLY = 'monthly',
-  ANNUALLY = 'annually',
-  PERSONALIZED = 'personalized',
+  YEARLY = 'yearly',
 }
 
 @Entity('task')
@@ -116,8 +115,37 @@ export class Task {
   @Column({ type: 'enum', enum: TaskPeriodicity })
   periodicity: TaskPeriodicity;
 
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  periodicityValue: string;
+  // ---------- Periodicity Config ----------
+  @Column({ type: 'date', nullable: true })
+  startDate: Date;
+
+  @Column({ type: 'date', nullable: true })
+  endDate: Date;
+
+  @Column({ type: 'int', default: 1 })
+  interval: number; // every X days/weeks/months/years
+
+  // Once
+  @Column({ type: 'date', nullable: true })
+  onceDate: Date;
+
+  // Weekly
+  @Column('simple-array', { nullable: true })
+  weeklyDays: number[]; // 0=Sunday … 6=Saturday
+
+  // Monthly
+  @Column('simple-array', { nullable: true })
+  monthlyDays: number[]; // 1–31
+
+  @Column('simple-array', { nullable: true })
+  monthlyWeekdays: number[]; // 0=Sunday … 6=Saturday
+
+  // Yearly
+  @Column('simple-array', { nullable: true })
+  yearlyMonths: number[]; // 1–12
+
+  @Column('simple-array', { nullable: true })
+  yearlyDays: number[]; // 1–31
 
   @Column({ type: 'boolean', default: false })
   alertTask: boolean;
@@ -137,13 +165,5 @@ export class Task {
   @OneToMany(() => TaskHistory, (taskHistory) => taskHistory.task)
   taskHistories: TaskHistory[];
 
-  // New fields for advanced periodicity
-  @Column({ type: 'date', nullable: true })
-  periodicityDate: string; // e.g., '2025-08-21' for 'once' or 'personalized'
-
-  @Column('simple-array', { nullable: true })
-  weeklyDays: string[]; // e.g., ['L', 'M', 'X'] for 'weekly'
-
-  @Column({ type: 'int', nullable: true })
-  monthlyDay: number; // e.g., 15 for 'monthly'
+  // ----------------------------------------
 }

@@ -22,8 +22,11 @@ export class ScanLog {
   @Column({ type: 'text', nullable: true })
   notes: string;
 
-  @CreateDateColumn({ name: 'scan_time' })
+  @CreateDateColumn({ name: 'scan_time', type: 'timestamptz' })
   scanTime: Date;
+
+  @Column({ type: 'text', nullable: true, name: 'user_timezone' })
+  userTimezone?: string;
 
   // Relations
   @ManyToOne(() => Job, job => job.scanLogs)

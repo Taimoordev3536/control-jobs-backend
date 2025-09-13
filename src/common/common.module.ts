@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EmailCheckerService } from './services/email-checker.service';
+import { EmailService } from './services/email.service';
 import { User } from '../modules/users/entities/user.entity';
 import { PartnerUser } from '../modules/partners/entities/partner-user.entity';
 import { Employer } from '../modules/employers/entities/employer.entity';
@@ -13,7 +14,7 @@ import { Employer } from '../modules/employers/entities/employer.entity';
             Employer
         ])
     ],
-    providers: [EmailCheckerService],
-    exports: [EmailCheckerService],
+    providers: [EmailCheckerService, EmailService],
+    exports: [EmailCheckerService, EmailService],
 })
-export class CommonModule { } 
+export class CommonModule { }

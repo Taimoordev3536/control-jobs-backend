@@ -1,0 +1,5 @@
+export enum EmployerSubTypeEnum {
+  INDIVIDUAL = 'INDIVIDUAL',
+  SELF_EMPLOYED = 'SELF_EMPLOYED',
+  COMPANY = 'COMPANY'
+}

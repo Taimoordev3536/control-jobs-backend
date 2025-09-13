@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { DateTime } from 'luxon';
 // Mock WorkCenter data (used for every client)
 const MOCK_WORK_CENTER = { id: 1, name: 'WorkCenter 1' };
 import { InjectRepository } from '@nestjs/typeorm';
@@ -390,105 +391,6 @@ async getAllJobsByEmployerFromToken(userId: number) {
   }
 }
 
-// worker dashboard job card
-// async getAllJobsByWorkerFromToken(userId: number) {
-//   try {
-//     const workerUser = await this.workerUserRepo.findOne({
-//       where: { user: { id: userId } },
-//       relations: ['worker'],
-//     });
-
-//     if (!workerUser?.worker?.id) {
-//       throw new Error('Worker not found for this user');
-//     }
-
-//     const workerId = workerUser.worker.id;
-
-//     const jobs = await this.jobRepo.find({
-//       where: {
-//         workers: { id: workerId }, // Filter jobs where this worker is assigned
-//       },
-//       relations: ['client', 'workCenter', 'tasks', 'shifts', 'signingMethods', 'workSessions'],
-//       order: { id: 'ASC' },
-//     });
-
-//     // Get active work sessions for this worker
-//     const activeWorkSessions = await this.workSessionRepo.find({
-//       where: {
-//         worker: { id: workerId },
-//         checkOutTime: IsNull(),
-//       },
-//       relations: ['job'],
-//     });
-
-//     const activeSessionsByJobId = new Map();
-//     activeWorkSessions.forEach(session => {
-//       activeSessionsByJobId.set(session.job.id, session);
-//     });
-
-//     const formatted = jobs.map(job => {
-//       const activeSession = activeSessionsByJobId.get(job.id);
-      
-//       return {
-//         jobId: job.id,
-//         jobName: job.jobName,
-//         clientName: job.client?.name || '',
-//         workCenter: job.workCenter?.name || '',
-//         status: job.status || JobStatus.SCHEDULED,
-//         startDate: job.startDate, // ✅ Added
-//         endDate: job.endDate,     // ✅ Added
-//         totalShifts: job.shifts?.length || 0,
-//         expectedDuration: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0),
-//         tasks: job.tasks?.map(task => ({
-//           id: task.id,
-//           name: task.name,
-//           note: task.note,
-//           expectedDuration: task.expectedDuration,
-//           isCompleted: task.isCompleted || false,
-//           completedAt: task.completedAt,
-//           completedByWorkerId: task.completedByWorkerId,
-//         })) || [],
-//         shifts: job.shifts?.map(shift => ({
-//           shiftType: shift.shiftType,
-//           startTime: shift.startTime,
-//           endTime: shift.endTime,
-//           totalHours: shift.totalHours,
-//         })) || [],
-//         signingMethods: job.signingMethods?.map(sm => ({
-//           methodType: sm.methodType,
-//           methodDetails: sm.methodDetails,
-//           verifyIdentity: sm.verifyIdentity,
-//         })) || [],
-//         workSession: activeSession ? {
-//           id: activeSession.id,
-//           checkInTime: activeSession.checkInTime,
-//           isOnBreak: activeSession.isOnBreak,
-//           currentBreakStart: activeSession.currentBreakStart,
-//           totalWorkMinutes: activeSession.totalWorkMinutes,
-//           totalBreakMinutes: activeSession.totalBreakMinutes,
-//         } : null,
-//       };
-//     });
-
-//     return {
-//       message: 'Success',
-//       data: formatted,
-//       isSuccess: true,
-//       statusCode: 200,
-//       developerError: '',
-//     };
-//   } catch (error) {
-//     return {
-//       message: 'Error fetching jobs',
-//       data: [],
-//       isSuccess: false,
-//       statusCode: 500,
-//       developerError: error.message,
-//     };
-//   }
-// }
-
-
 // Updated method in job.service.ts
 async getAllJobsByWorkerFromToken(userId: number) {
   try {
@@ -537,10 +439,60 @@ async getAllJobsByWorkerFromToken(userId: number) {
       activeSessionsByJobId.set(session.job.id, session);
     });
 
-    const formatted = jobs.map(job => {
+    const formatted: any[] = []
+    for (const job of jobs) {
       const activeSession = activeSessionsByJobId.get(job.id);
-      
-      return {
+
+      // Build tasks list by asking the recurrence generator for occurrences
+      const tasksForJob: any[] = []
+      const tasksList = job.tasks || []
+
+      // fetch recurrences in parallel for tasks of this job
+      const recurrencePromises = tasksList.map(t => this.generateRecurrenceForTask(t.id, false).catch(() => null))
+      const recurrenceResults = await Promise.all(recurrencePromises)
+
+      const todayKey = todayString
+
+      for (let i = 0; i < tasksList.length; i++) {
+        const task = tasksList[i]
+        const recur = recurrenceResults[i]
+
+        let occursToday = false
+        if (recur && recur.data && Array.isArray(recur.data.occurrences)) {
+          const occKeys = recur.data.occurrences.map((d: any) => {
+            const dd = new Date(d)
+            return dd.toISOString().split('T')[0]
+          })
+          occursToday = occKeys.includes(todayKey)
+        }
+
+        if (!occursToday) continue
+
+        const todayHistory = task.taskHistories?.find((history: any) => {
+          const historyDate = new Date(history.date).toISOString().split('T')[0]
+          return historyDate === todayKey
+        })
+
+        tasksForJob.push({
+          id: task.id,
+          name: task.name,
+          note: task.note,
+          expectedDuration: task.expectedDuration,
+          isCompleted: todayHistory ? todayHistory.isCompleted : (task.isCompleted || false),
+          completedAt: todayHistory ? todayHistory.completedAt : task.completedAt,
+          completedByWorkerId: todayHistory ? todayHistory.completedByWorkerId : task.completedByWorkerId,
+          taskHistories: task.taskHistories?.map((history: any) => ({
+            id: history.id,
+            taskId: history.taskId,
+            date: history.date,
+            isCompleted: history.isCompleted,
+            completedAt: history.completedAt,
+            completedByWorkerId: history.completedByWorkerId,
+          })) || [],
+        })
+      }
+
+      formatted.push({
         jobId: job.id,
         jobName: job.jobName,
         clientName: job.client?.name || '',
@@ -550,38 +502,8 @@ async getAllJobsByWorkerFromToken(userId: number) {
         endDate: job.endDate,
         totalShifts: job.shifts?.length || 0,
         expectedDuration: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0),
-        
-        // Enhanced task mapping with TaskHistory
-        tasks: job.tasks?.map(task => {
-          // Find today's TaskHistory for this specific task
-          const todayHistory = task.taskHistories?.find(
-            history => {
-              const historyDate = new Date(history.date).toISOString().split('T')[0];
-              return historyDate === todayString;
-            }
-          );
+        tasks: tasksForJob,
 
-          return {
-            id: task.id,
-            name: task.name,
-            note: task.note,
-            expectedDuration: task.expectedDuration,
-            // Use TaskHistory data if available, otherwise use task's default completion status
-            isCompleted: todayHistory ? todayHistory.isCompleted : (task.isCompleted || false),
-            completedAt: todayHistory ? todayHistory.completedAt : task.completedAt,
-            completedByWorkerId: todayHistory ? todayHistory.completedByWorkerId : task.completedByWorkerId,
-            // Include TaskHistory for frontend reference
-            taskHistories: task.taskHistories?.map(history => ({
-              id: history.id,
-              taskId: history.taskId,
-              date: history.date,
-              isCompleted: history.isCompleted,
-              completedAt: history.completedAt,
-              completedByWorkerId: history.completedByWorkerId,
-            })) || []
-          };
-        }) || [],
-        
         shifts: job.shifts?.map(shift => ({
           shiftType: shift.shiftType,
           startTime: shift.startTime,
@@ -601,8 +523,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
           totalWorkMinutes: activeSession.totalWorkMinutes,
           totalBreakMinutes: activeSession.totalBreakMinutes,
         } : null,
-      };
-    });
+      }
+      )
+    }
 
     return {
       message: 'Success',
@@ -895,95 +818,95 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Get detailed job analytics for client dashboard
    */
-  async getJobAnalyticsForClient(userId: number) {
-    try {
-      const clientUser = await this.clientUserRepo.findOne({
-        where: { user: { id: userId } },
-        relations: ['client'],
-      });
+  // async getJobAnalyticsForClient(userId: number) {
+  //   try {
+  //     const clientUser = await this.clientUserRepo.findOne({
+  //       where: { user: { id: userId } },
+  //       relations: ['client'],
+  //     });
 
-      if (!clientUser?.client?.id) {
-        throw new Error('Client not found for this user');
-      }
+  //     if (!clientUser?.client?.id) {
+  //       throw new Error('Client not found for this user');
+  //     }
 
-      const clientId = clientUser.client.id;
+  //     const clientId = clientUser.client.id;
 
-      const jobs = await this.jobRepo.find({
-        where: { client: { id: clientId } },
-        relations: ['tasks', 'workSessions', 'scanLogs', 'signingMethods'],
-      });
+  //     const jobs = await this.jobRepo.find({
+  //       where: { client: { id: clientId } },
+  //       relations: ['tasks', 'workSessions', 'scanLogs', 'signingMethods'],
+  //     });
 
-      // Calculate analytics
-      const totalJobs = jobs.length;
-      const completedJobs = jobs.filter(job => job.status === JobStatus.COMPLETED).length;
-      const inProgressJobs = jobs.filter(job => job.status === JobStatus.IN_PROGRESS).length;
-      const scheduledJobs = jobs.filter(job => job.status === JobStatus.SCHEDULED).length;
+  //     // Calculate analytics
+  //     const totalJobs = jobs.length;
+  //     const completedJobs = jobs.filter(job => job.status === JobStatus.COMPLETED).length;
+  //     const inProgressJobs = jobs.filter(job => job.status === JobStatus.IN_PROGRESS).length;
+  //     const scheduledJobs = jobs.filter(job => job.status === JobStatus.SCHEDULED).length;
 
-      // Time analytics
-      const totalWorkMinutes = jobs.reduce((sum, job) => {
-        return sum + (job.workSessions?.reduce((sessSum, sess) => sessSum + (sess.totalWorkMinutes || 0), 0) || 0);
-      }, 0);
+  //     // Time analytics
+  //     const totalWorkMinutes = jobs.reduce((sum, job) => {
+  //       return sum + (job.workSessions?.reduce((sessSum, sess) => sessSum + (sess.totalWorkMinutes || 0), 0) || 0);
+  //     }, 0);
 
-      // Task analytics
-      const totalTasks = jobs.reduce((sum, job) => sum + (job.tasks?.length || 0), 0);
-      const completedTasks = jobs.reduce((sum, job) => {
-        return sum + (job.tasks?.filter(task => task.isCompleted).length || 0);
-      }, 0);
+  //     // Task analytics
+  //     const totalTasks = jobs.reduce((sum, job) => sum + (job.tasks?.length || 0), 0);
+  //     const completedTasks = jobs.reduce((sum, job) => {
+  //       return sum + (job.tasks?.filter(task => task.isCompleted).length || 0);
+  //     }, 0);
 
-      // Security method usage
-      const securityMethodUsage = new Map<string, number>();
-      jobs.forEach(job => {
-        job.signingMethods?.forEach(method => {
-          const count = securityMethodUsage.get(method.methodType) || 0;
-          securityMethodUsage.set(method.methodType, count + 1);
-        });
-      });
+  //     // Security method usage
+  //     const securityMethodUsage = new Map<string, number>();
+  //     jobs.forEach(job => {
+  //       job.signingMethods?.forEach(method => {
+  //         const count = securityMethodUsage.get(method.methodType) || 0;
+  //         securityMethodUsage.set(method.methodType, count + 1);
+  //       });
+  //     });
 
-      // Recent activity (last 30 days)
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  //     // Recent activity (last 30 days)
+  //     const thirtyDaysAgo = new Date();
+  //     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      const recentJobs = jobs.filter(job => new Date(job.startDate) >= thirtyDaysAgo);
+  //     const recentJobs = jobs.filter(job => new Date(job.startDate) >= thirtyDaysAgo);
 
-      return {
-        message: 'Success',
-        data: {
-          jobStats: {
-            total: totalJobs,
-            completed: completedJobs,
-            inProgress: inProgressJobs,
-            scheduled: scheduledJobs,
-            completionRate: totalJobs > 0 ? Math.round((completedJobs / totalJobs) * 100) : 0,
-          },
-          timeStats: {
-            totalHours: Math.round((totalWorkMinutes / 60) * 100) / 100,
-            averageJobHours: totalJobs > 0 ? Math.round(((totalWorkMinutes / 60) / totalJobs) * 100) / 100 : 0,
-          },
-          taskStats: {
-            total: totalTasks,
-            completed: completedTasks,
-            completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
-          },
-          securityMethodStats: Object.fromEntries(securityMethodUsage),
-          recentActivity: {
-            last30Days: recentJobs.length,
-            trend: 'stable', // Could be calculated based on historical data
-          },
-        },
-        isSuccess: true,
-        statusCode: 200,
-        developerError: '',
-      };
-    } catch (error) {
-      return {
-        message: 'Error fetching job analytics',
-        data: null,
-        isSuccess: false,
-        statusCode: 500,
-        developerError: error.message,
-      };
-    }
-  }
+  //     return {
+  //       message: 'Success',
+  //       data: {
+  //         jobStats: {
+  //           total: totalJobs,
+  //           completed: completedJobs,
+  //           inProgress: inProgressJobs,
+  //           scheduled: scheduledJobs,
+  //           completionRate: totalJobs > 0 ? Math.round((completedJobs / totalJobs) * 100) : 0,
+  //         },
+  //         timeStats: {
+  //           totalHours: Math.round((totalWorkMinutes / 60) * 100) / 100,
+  //           averageJobHours: totalJobs > 0 ? Math.round(((totalWorkMinutes / 60) / totalJobs) * 100) / 100 : 0,
+  //         },
+  //         taskStats: {
+  //           total: totalTasks,
+  //           completed: completedTasks,
+  //           completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+  //         },
+  //         securityMethodStats: Object.fromEntries(securityMethodUsage),
+  //         recentActivity: {
+  //           last30Days: recentJobs.length,
+  //           trend: 'stable', // Could be calculated based on historical data
+  //         },
+  //       },
+  //       isSuccess: true,
+  //       statusCode: 200,
+  //       developerError: '',
+  //     };
+  //   } catch (error) {
+  //     return {
+  //       message: 'Error fetching job analytics',
+  //       data: null,
+  //       isSuccess: false,
+  //       statusCode: 500,
+  //       developerError: error.message,
+  //     };
+  //   }
+  // }
 
   // ========== QR Code Generation and Scanning Methods ========== //
 
@@ -1091,6 +1014,12 @@ async getAllJobsByWorkerFromToken(userId: number) {
         throw new Error('Worker is not assigned to this job');
       }
 
+      // Get user's timezone from request data (frontend should send this)
+      // If not available, default to UTC
+      const userTimezone = recordScanDto.userTimezone || 
+        Intl.DateTimeFormat().resolvedOptions().timeZone || 
+        'UTC';
+      
       // Create scan log entry
       const scanLog = this.scanLogRepo.create({
         jobId: recordScanDto.jobId,
@@ -1098,6 +1027,8 @@ async getAllJobsByWorkerFromToken(userId: number) {
         scanType: recordScanDto.scanType,
         location: recordScanDto.location,
         notes: recordScanDto.notes,
+        userTimezone: userTimezone,
+        // scanTime will be automatically set by @CreateDateColumn in UTC
       });
 
       const savedScanLog = await this.scanLogRepo.save(scanLog);
@@ -1179,11 +1110,24 @@ async getAllJobsByWorkerFromToken(userId: number) {
       throw new Error('Worker already has an active session for this job');
     }
 
-    // Create new work session
+    // Get user timezone from the most recent scan log
+    const recentScanLog = await this.scanLogRepo.findOne({
+      where: {
+        jobId: jobId,
+        workerId: workerId,
+      },
+      order: { id: 'DESC' }
+    });
+    
+    const userTimezone = recentScanLog?.userTimezone || 'UTC';
+    
+    // Create new work session using Luxon to ensure UTC storage
+    const utcNow = DateTime.utc().toJSDate();
+    
     const workSession = this.workSessionRepo.create({
-      job: { id: jobId },
-      worker: { id: workerId },
-      checkInTime: new Date(),
+      jobId: jobId,
+      workerId: workerId,
+      checkInTime: utcNow,
       totalWorkMinutes: 0,
       totalBreakMinutes: 0,
     });
@@ -1250,9 +1194,12 @@ async getAllJobsByWorkerFromToken(userId: number) {
       throw new Error('Worker is not currently on break');
     }
 
-    // Calculate break duration and add to total
-    const breakDuration = Math.floor((new Date().getTime() - activeSession.currentBreakStart.getTime()) / (1000 * 60));
-    activeSession.totalBreakMinutes += breakDuration;
+    // Calculate break duration and add to total using Luxon
+    const utcNow = DateTime.utc();
+    const breakStartUtc = DateTime.fromJSDate(activeSession.currentBreakStart, { zone: 'UTC' });
+    const breakDurationMinutes = Math.floor(utcNow.diff(breakStartUtc, 'minutes').minutes);
+    
+    activeSession.totalBreakMinutes += breakDurationMinutes;
     activeSession.isOnBreak = false;
     activeSession.currentBreakStart = null;
 
@@ -1277,16 +1224,21 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
     // If worker is on break, end the break first
     if (activeSession.isOnBreak && activeSession.currentBreakStart) {
-      const breakDuration = Math.floor((new Date().getTime() - activeSession.currentBreakStart.getTime()) / (1000 * 60));
-      activeSession.totalBreakMinutes += breakDuration;
+      const utcNow = DateTime.utc();
+      const breakStartUtc = DateTime.fromJSDate(activeSession.currentBreakStart, { zone: 'UTC' });
+      const breakDurationMinutes = Math.floor(utcNow.diff(breakStartUtc, 'minutes').minutes);
+      activeSession.totalBreakMinutes += breakDurationMinutes;
       activeSession.isOnBreak = false;
       activeSession.currentBreakStart = null;
     }
 
-    // Calculate total work time
-    const checkOutTime = new Date();
-    const totalSessionTime = Math.floor((checkOutTime.getTime() - activeSession.checkInTime.getTime()) / (1000 * 60));
-    activeSession.totalWorkMinutes = totalSessionTime - activeSession.totalBreakMinutes;
+    // Calculate total work time using Luxon for UTC consistency
+    const utcNow = DateTime.utc();
+    const checkOutTime = utcNow.toJSDate();
+    const checkInTime = DateTime.fromJSDate(activeSession.checkInTime, { zone: 'UTC' });
+    
+    const totalSessionMinutes = Math.floor(utcNow.diff(checkInTime, 'minutes').minutes);
+    activeSession.totalWorkMinutes = totalSessionMinutes - activeSession.totalBreakMinutes;
     activeSession.checkOutTime = checkOutTime;
 
     const updatedSession = await this.workSessionRepo.save(activeSession);
@@ -1464,6 +1416,8 @@ async getAllJobsByWorkerFromToken(userId: number) {
     };
   }
 
+
+
   /**
    * Get worker ID from user ID
    */
@@ -1514,6 +1468,22 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
     }
 
     const workSessions = await sessionQuery.getMany();
+    
+    // Query task history for this job
+    const taskHistoryQuery = this.taskHistoryRepo.createQueryBuilder('taskHistory')
+      .leftJoinAndSelect('taskHistory.task', 'task')
+      .leftJoinAndSelect('taskHistory.completedBy', 'worker')
+      .where('taskHistory.jobId = :jobId', { jobId });
+    
+    if (startDate) {
+      taskHistoryQuery.andWhere('taskHistory.date >= :startDate', { startDate });
+    }
+    if (endDate) {
+      taskHistoryQuery.andWhere('taskHistory.date <= :endDate', { endDate });
+    }
+    
+    const taskHistories = await taskHistoryQuery.getMany();
+    console.log('Task histories found:', taskHistories);
 
     // Group scan logs by date
     const groupedByDate = scanLogs.reduce((acc, log) => {
@@ -1586,14 +1556,44 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
       });
       return acc;
     }, {});
+    
+    // Group task histories by date
+    const tasksByDate = taskHistories.reduce((acc, task) => {
+      // Convert to YYYY-MM-DD format
+      const dateObj = new Date(task.date);
+      const date = dateObj.toISOString().split('T')[0];
+      
+      if (!acc[date]) {
+        acc[date] = [];
+      }
+      
+      acc[date].push({
+        id: task.taskId,
+        name: task.task?.name || '',
+        completed: task.isCompleted,
+        completedByWorkerId: task.completedByWorkerId,
+      });
+      
+      return acc;
+    }, {});
+
+    // Get all unique dates from scans, sessions, and tasks
+    const allDates = new Set([
+      ...Object.keys(groupedByDate),
+      ...Object.keys(sessionsByDate),
+      ...Object.keys(tasksByDate)
+    ]);
 
     // Combine into daily history cards
-    const result = Object.keys(groupedByDate).map(date => ({
+    const result = Array.from(allDates).map(date => ({
       date,
-      scans: groupedByDate[date],
-      breaks: breaksByDate[date],
+      scans: groupedByDate[date] || [],
+      breaks: breaksByDate[date] || [],
       sessions: sessionsByDate[date] || [],
+      tasks: tasksByDate[date] || [], // Include tasks for each date
     }));
+    
+    console.log('Final result with tasks:', JSON.stringify(result, null, 2));
 
     return {
       message: 'Success',
@@ -1786,61 +1786,7 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
     }
   }
 
-
-// async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
-//   try {
-//     // Verify task exists and belongs to this job
-//     const task = await this.taskRepo.findOne({
-//       where: { id: taskId, job: { id: jobId } },
-//       relations: ['job', 'job.workers'],
-//     });
-
-//     if (!task) {
-//       throw new Error('Task not found in this job');
-//     }
-
-//     // Verify worker is assigned to this job
-//     const isWorkerAssigned = task.job.workers.some(w => w.id === workerId);
-//     if (!isWorkerAssigned) {
-//       throw new Error('Worker not assigned to this job');
-//     }
-
-//     // Toggle completion status
-//     task.isCompleted = !task.isCompleted;
-//     task.completedAt = task.isCompleted ? new Date() : null;
-//     task.completedByWorkerId = task.isCompleted ? workerId : null;
-
-//     const updatedTask = await this.taskRepo.save(task);
-
-//     // Create history record
-//     const history = this.taskHistoryRepo.create({
-//       taskId,
-//       jobId,
-//       date: new Date(),
-//       isCompleted: task.isCompleted,
-//       completedAt: task.completedAt,
-//       completedByWorkerId: task.completedByWorkerId,
-//     });
-//     await this.taskHistoryRepo.save(history);
-
-//     return {
-//       message: 'Task completion toggled successfully',
-//       isCompleted: task.isCompleted,
-//       isSuccess: true,
-//       statusCode: 200,
-//       developerError: '',
-//     };
-//   } catch (error) {
-//     return {
-//       message: 'Failed to toggle task completion',
-//       isCompleted: null,
-//       isSuccess: false,
-//       statusCode: 500,
-//       developerError: error.message,
-//     };
-//   }
-// }
-
+// mark the task complete or leave for incomplete
 
 async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
   try {
@@ -1944,18 +1890,42 @@ async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
       relations: ['tasks', 'tasks.taskHistories', 'workers'],
     });
     if (!job) return;
-    for (const task of job.tasks) {
-      // Only save for assigned workers
-      const isWorkerAssigned = job.workers.some(w => w.id === workerId);
-      if (!isWorkerAssigned) continue;
+    // Only save histories for tasks that are scheduled for today according to recurrence rules.
+    const isWorkerAssigned = job.workers.some(w => w.id === workerId);
+    if (!isWorkerAssigned) return;
+
+    // Fetch recurrence results in parallel to avoid N+1 latency
+    const recurrenceResults = await Promise.all((job.tasks || []).map(t => this.generateRecurrenceForTask(t.id, false).catch(() => null)));
+
+    for (let i = 0; i < (job.tasks || []).length; i++) {
+      const task = job.tasks[i];
+      const recur = recurrenceResults[i];
+
+      // If recurrence generator failed or doesn't list occurrences, skip this task
+      let occursToday = false;
+      if (recur && recur.data && Array.isArray(recur.data.occurrences)) {
+        const occKeys = recur.data.occurrences.map((d: any) => {
+          const dd = new Date(d);
+          return dd.toISOString().split('T')[0];
+        });
+        occursToday = occKeys.includes(todayString);
+      }
+
+      if (!occursToday) {
+        // don't persist histories for tasks that are not scheduled today
+        continue;
+      }
+
       let todayHistory = task.taskHistories?.find(history => {
         const historyDate = new Date(history.date).toISOString().split('T')[0];
         return historyDate === todayString && history.completedByWorkerId === workerId;
       });
+
       // If a completed history already exists for this task/worker/date, do NOT overwrite it
       if (todayHistory && todayHistory.isCompleted) {
         continue;
       }
+
       if (todayHistory) {
         todayHistory.isCompleted = !!task.isCompleted;
         todayHistory.completedAt = task.isCompleted ? new Date() : null;
@@ -2016,6 +1986,362 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     };
   }
 }
+
+  /**
+   * Get all tasks for a job and worker, including today's task-history for that worker
+   */
+  async getTasksForJobWorker(jobId: number, workerId: number): Promise<any> {
+    try {
+      const job = await this.jobRepo.findOne({
+        where: { id: jobId },
+        relations: ['client', 'workCenter', 'tasks', 'tasks.taskHistories', 'workers'],
+      });
+
+      if (!job) {
+        throw new Error('Job not found');
+      }
+
+      // Verify worker assigned to job
+      const isAssigned = job.workers?.some(w => w.id === Number(workerId));
+      if (!isAssigned) {
+        // Find if the worker exists (to provide better error messages)
+        const worker = await this.workerRepo.findOne({ 
+          where: { id: workerId },
+          relations: ['user']
+        });
+        const workerName = worker?.user?.name || 'Unknown worker';
+        
+        // Return a specific error with all fields needed by frontend to handle this gracefully
+        return {
+          message: `Worker (ID: ${workerId}) is not assigned to this job`,
+          data: {
+            jobId,
+            workerId,
+            allowedWorkers: await Promise.all((job.workers || []).map(async (w) => {
+              const workerWithUser = await this.workerRepo.findOne({
+                where: { id: w.id },
+                relations: ['user']
+              });
+              return { 
+                id: w.id, 
+                name: workerWithUser?.user?.name || `Worker ${w.id}`
+              };
+            })),
+            isSuccess: false, // Include inside data for better client detection
+            statusCode: 403,
+            developerError: `Worker ${workerId} is not assigned to Job ${jobId}`,
+            errorCode: 'WORKER_NOT_ASSIGNED'
+          },
+          isSuccess: false, // Keep top-level for backward compatibility
+          statusCode: 403, // Forbidden is more accurate than 500 for this business rule violation
+          developerError: `Worker ${workerId} is not assigned to Job ${jobId}`,
+          errorCode: 'WORKER_NOT_ASSIGNED'
+        };
+      }
+
+      const todayString = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+      // Get worker name if available
+      const workerUser = await this.workerUserRepo.findOne({
+        where: { workerId: workerId },
+        relations: ['user'],
+      });
+      const workerName = workerUser?.user?.name || null;
+
+      const tasks = (job.tasks || []).map(task => {
+        const histories = task.taskHistories || [];
+        const todayHistory = histories.find(h => {
+          const hDate = new Date(h.date).toISOString().split('T')[0];
+          return h.completedByWorkerId === workerId && hDate === todayString;
+        }) || null;
+
+        return {
+          id: task.id,
+          name: task.name,
+          note: task.note,
+          expectedDuration: task.expectedDuration,
+          defaultIsCompleted: !!task.isCompleted,
+          // Per-worker todays status (null if none)
+          workerIsCompletedToday: todayHistory ? !!todayHistory.isCompleted : null,
+          completedAt: todayHistory ? todayHistory.completedAt : null,
+          completedByWorkerId: todayHistory ? todayHistory.completedByWorkerId : null,
+          // Include recent histories for frontend if required
+          taskHistories: histories.map(h => ({
+            id: h.id,
+            date: h.date,
+            isCompleted: h.isCompleted,
+            completedAt: h.completedAt,
+            completedByWorkerId: h.completedByWorkerId,
+          })),
+          // periodicity fields
+          periodicity: task.periodicity || null,
+          periodicityValue: (task as any)?.periodicityValue ?? (task as any)?.interval ?? null,
+          interval: (task as any)?.interval ?? null,
+        };
+      });
+
+      return {
+        message: 'Success',
+        data: {
+          jobId: job.id,
+          jobName: job.jobName,
+          clientName: job.client?.name || '',
+          workCenter: job.workCenter?.name || '',
+          workerName,
+          tasks,
+        },
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    } catch (error) {
+      return {
+        message: 'Error fetching tasks for job and worker',
+        data: null,
+        isSuccess: false,
+        statusCode: 500,
+        developerError: error.message,
+      };
+    }
+  }
+
+
+
+  /**
+   * Fetch a single task by its id with relations
+   */
+  async getTaskById(taskId: number) {
+    try {
+      const task = await this.taskRepo.findOne({
+        where: { id: taskId },
+        relations: ['job', 'taskHistories'],
+      });
+
+      if (!task) {
+        return {
+          message: 'Task not found',
+          data: null,
+          isSuccess: false,
+          statusCode: 404,
+          developerError: '',
+        };
+      }
+
+      return {
+        message: 'Success',
+        data: task,
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    } catch (error) {
+      return {
+        message: 'Error fetching task',
+        data: null,
+        isSuccess: false,
+        statusCode: 500,
+        developerError: error?.message || String(error),
+      };
+    }
+  }
+
+  /**
+   * Generate recurrence occurrences for a task based on its periodicity config.
+   * If persist is true, updates task.periodicityValue/startDate/endDate accordingly.
+   */
+  async generateRecurrenceForTask(taskId: number, persist = false) {
+    try {
+      const task = await this.taskRepo.findOne({ where: { id: taskId } })
+
+      if (!task) {
+        return { message: 'Task not found', data: null, isSuccess: false, statusCode: 404, developerError: '' }
+      }
+
+  // normalize dates to UTC midnight (avoid local timezone shifting when serialized)
+  const rawStart = task.startDate ? new Date(task.startDate) : (() => { const d = new Date(); d.setDate(d.getDate()+1); return d })()
+  const startDate = new Date(Date.UTC(rawStart.getFullYear(), rawStart.getMonth(), rawStart.getDate()))
+  const rawEnd = task.endDate ? new Date(task.endDate) : new Date(new Date(rawStart).setFullYear(rawStart.getFullYear()+1))
+  const endDate = new Date(Date.UTC(rawEnd.getFullYear(), rawEnd.getMonth(), rawEnd.getDate()))
+      const interval = (task as any).interval || 1
+
+      const occurrences: Date[] = []
+
+      const addIfInRange = (d: Date) => {
+        // normalize candidate to UTC midnight so JSON serialization keeps the same calendar date
+        const dd = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+        const s = new Date(Date.UTC(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()))
+        const e = new Date(Date.UTC(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()))
+        if (dd >= s && dd <= e) {
+          occurrences.push(dd)
+        }
+      }
+
+      if (task.periodicity === 'once') {
+        if (task.onceDate) addIfInRange(new Date(task.onceDate))
+      } else if (task.periodicity === 'daily') {
+        const cur = new Date(startDate)
+        while (cur <= endDate) {
+          addIfInRange(new Date(cur))
+          cur.setDate(cur.getDate() + interval)
+        }
+      } else if (task.periodicity === 'weekly') {
+        // weeklyDays stored as simple-array of numbers (0..6)
+        const weekDays: number[] = (task.weeklyDays || []).map((v: any) => Number(v))
+        if (weekDays.length) {
+          const cur = new Date(startDate)
+          // move to start of week window
+          while (cur <= endDate) {
+            const weekStart = new Date(cur)
+            // for each weekday
+            for (const wd of weekDays) {
+              const candidate = new Date(weekStart)
+              candidate.setDate(weekStart.getDate() + ((wd - weekStart.getDay() + 7) % 7))
+              addIfInRange(candidate)
+            }
+            cur.setDate(cur.getDate() + 7 * interval)
+          }
+        }
+      } else if (task.periodicity === 'monthly') {
+        // monthlyDays: array of numeric days 1..31
+        const monthlyDays: number[] = (task as any).monthlyDays || []
+        if (monthlyDays && monthlyDays.length) {
+          const cur = new Date(startDate.getFullYear(), startDate.getMonth(), 1)
+          while (cur <= endDate) {
+            const year = cur.getFullYear(); const month = cur.getMonth()
+            for (const day of monthlyDays) {
+              const lastDay = new Date(year, month+1, 0).getDate()
+              const validDay = Math.min(Math.max(1, Number(day)), lastDay)
+              const candidate = new Date(year, month, validDay)
+              addIfInRange(candidate)
+            }
+            cur.setMonth(cur.getMonth() + interval)
+          }
+        }
+        // monthlyWeekdays: support selecting weekdays (1..7 where 7 may be used for Sunday)
+        // Expected behavior: for each selected weekday produce up to the first 4 weekly occurrences in the month
+        const monthlyWeekdays: number[] = (task as any).monthlyWeekdays || []
+        if (monthlyWeekdays && monthlyWeekdays.length) {
+          const cur = new Date(startDate.getFullYear(), startDate.getMonth(), 1)
+          while (cur <= endDate) {
+            const year = cur.getFullYear(); const month = cur.getMonth()
+            const firstDayOfMonth = new Date(year, month, 1).getDay() // 0..6 (Sun..Sat)
+
+            for (const rawWd of monthlyWeekdays) {
+              // normalize stored value: allow 1..7 or 0..6; treat 7 as 0 (Sunday)
+              let wd = Number(rawWd)
+              if (isNaN(wd)) continue
+              if (wd === 7) wd = 0
+              if (wd === 0) wd = 0
+              // If user stored 1..7 (Mon..Sun) convert to 0..6 (Sun..Sat) assuming 1=Mon
+              // Heuristics: if values appear in range 1..7 and not 0..6, try converting where 1=>1 (Mon) isn't correct for JS, so if any value >6 map (value % 7)
+              if (wd > 6) wd = wd % 7
+
+              // find first occurrence of wd in this month
+              const offset = (wd - firstDayOfMonth + 7) % 7
+              const firstOccurDay = 1 + offset // day-of-month for first occurrence
+
+              // add up to 4 weekly occurrences (first + 0..3 weeks)
+              for (let weekIndex = 0; weekIndex < 4; weekIndex++) {
+                const dayOfMonth = firstOccurDay + weekIndex * 7
+                const lastDay = new Date(year, month + 1, 0).getDate()
+                if (dayOfMonth > lastDay) break
+                const candidate = new Date(year, month, dayOfMonth)
+                addIfInRange(candidate)
+              }
+            }
+
+            cur.setMonth(cur.getMonth() + interval)
+          }
+        }
+      } else if (task.periodicity === 'yearly') {
+        const months: number[] = (task as any).yearlyMonths || [] // 1..12
+        const days: number[] = (task as any).yearlyDays || []
+        if (months.length && days.length) {
+          const startYear = startDate.getFullYear(); const endYear = endDate.getFullYear()
+          for (let y = startYear; y <= endYear; y += interval) {
+            for (const m of months) {
+              for (const d of days) {
+                const lastDay = new Date(y, m, 0).getDate()
+                const validDay = Math.min(Math.max(1, Number(d)), lastDay)
+                addIfInRange(new Date(y, m-1, validDay))
+              }
+            }
+          }
+        }
+      }
+
+      // sort unique
+      const map = new Map<string, Date>()
+      occurrences.forEach(d => map.set(d.toDateString(), d))
+      const unique = Array.from(map.values()).sort((a,b)=>a.getTime()-b.getTime())
+
+      // create a human readable periodicityValue
+      let periodicityValue = ''
+      const startDateStr = startDate.toISOString().split('T')[0]
+      if (task.periodicity === 'weekly') {
+        const names = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+        const wd = (task.weeklyDays||[]).map((v:any)=>names[Number(v)]).filter(Boolean)
+        periodicityValue = `Every ${interval} week(s) on ${wd.join(', ')} starting ${startDateStr}`
+      } else if (task.periodicity === 'monthly') {
+        const md = (task as any).monthlyDays || []
+        const mw = (task as any).monthlyWeekdays || []
+        if (md && md.length) {
+          periodicityValue = `Every ${interval} month(s) on days ${md.join(', ')}`
+        } else if (mw && mw.length) {
+          // normalize to 0..6 where 0=Sunday
+          const norm = mw.map((v:any) => {
+            let n = Number(v)
+            if (isNaN(n)) return null
+            if (n === 7) return 0
+            if (n > 6) return n % 7
+            return n
+          }).filter((v:any) => v !== null) as number[]
+          const names = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+          const nameList = norm.map(n => names[n]).filter(Boolean)
+          // match requested format and include numeric mapping note
+          periodicityValue = `Every ${interval} month(s) on weekdays ${nameList.join(', ')} (0=Sunday, 1=Monday, …, 6=Saturday) starting ${startDateStr}`
+        } else {
+          periodicityValue = `Every ${interval} month(s) starting ${startDateStr}`
+        }
+      } else if (task.periodicity === 'daily') {
+        periodicityValue = `Every ${interval} day(s) starting ${startDateStr}`
+      } else if (task.periodicity === 'once') {
+        periodicityValue = `Once on ${task.onceDate ? new Date(task.onceDate).toISOString().split('T')[0] : startDate.toISOString().split('T')[0]}`
+      } else if (task.periodicity === 'yearly') {
+        const months: number[] = (task as any).yearlyMonths || [] // 1..12
+        const days: number[] = (task as any).yearlyDays || []
+        if (months.length && days.length) {
+          const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+          const mapped = months.map(m => {
+            const idx = Number(m) - 1
+            return monthNames[idx] || String(m)
+          })
+          periodicityValue = `Every ${interval} year(s) on ${mapped.join(', ')} ${days.join(', ')} starting ${startDateStr}`
+        } else {
+          periodicityValue = `Every ${interval} year(s) starting ${startDateStr}`
+        }
+      }
+
+      // Optionally persist periodicityValue/start/end to task
+      if (persist) {
+        try {
+          (task as any).periodicityValue = periodicityValue
+          task.startDate = startDate
+          task.endDate = endDate
+          await this.taskRepo.save(task)
+        } catch (err) {
+          // ignore persistence error but include developerError
+          return { message: 'Recurrence generated with persistence error', data: { startDate, endDate, periodicityValue, occurrences: unique, monthlyDays: (task as any).monthlyDays || null, monthlyWeekdays: (task as any).monthlyWeekdays || null, yearlyMonths: (task as any).yearlyMonths || null, yearlyDays: (task as any).yearlyDays || null }, isSuccess: true, statusCode: 200, developerError: String(err) }
+        }
+      }
+
+      return { message: 'Success', data: { startDate, endDate, periodicityValue, occurrences: unique, monthlyDays: (task as any).monthlyDays || null, monthlyWeekdays: (task as any).monthlyWeekdays || null, yearlyMonths: (task as any).yearlyMonths || null, yearlyDays: (task as any).yearlyDays || null, explanation: `Generated ${unique.length} occurrences` }, isSuccess: true, statusCode: 200, developerError: '' }
+    } catch (error) {
+      return { message: 'Error generating recurrence', data: null, isSuccess: false, statusCode: 500, developerError: error?.message || String(error) }
+    }
+  }
+
+
 
 } 
 

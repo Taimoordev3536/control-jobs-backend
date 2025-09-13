@@ -10,19 +10,19 @@ import {
 } from 'class-validator';
 
 export enum PartnerType {
-  BASIC = 'Basic',
-  PREMIUM = 'Premium',
-  GOLD = 'Gold',
-  BRONZE = 'bronze',
-  AFFILIATE = 'affiliate',
+  GOLD = "Gold",
+  SILVER = "Silver",
+  BRONZE = "Bronze",
+  AFFILIATE = "Affiliate",
 }
 
+
 export enum PaymentMethodEnum {
-  Card = 'card',
-  Cash = 'direct',
+  Transfer = 'Transfer',
+  Cash = 'Direct Debit',
+  Card = 'Card',
   Paypal = 'PayPal',
   Others = 'Others',
-  Transfer = 'Transfer', // <-- Add this line
 }
 
 export class CreatePartnerDto {
@@ -95,6 +95,10 @@ export class CreatePartnerDto {
   @IsString()
   @IsOptional()
   accessAccountStatus?: 'postpone' | 'request'; // ✅ New field
+  
+  @IsEmail()
+  @IsOptional()
+  accessEmail?: string; // Email to send credentials to
 
   @IsOptional() // ✅ allow it to be missing
   @IsString()

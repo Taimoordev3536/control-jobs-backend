@@ -28,8 +28,10 @@ config();
         username: configService.get('DATABASE_USERNAME') || 'jobs_control',
         password: configService.get('DATABASE_PASSWORD') || 'jobscontrol123',
         database: configService.get('DATABASE_NAME') || 'jobscontrol',
+        // entities: [__dirname + '/**/*.entity{.ts,.js}'],
+        // synchronize: true,
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: true,
+        synchronize: configService.get('DB_SYNC') === 'true',
         ssl: configService.get('NODE_ENV') === 'production' ? {
           rejectUnauthorized: false
         } : false,

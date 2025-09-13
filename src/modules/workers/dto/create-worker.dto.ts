@@ -48,4 +48,8 @@ export class CreateWorkerDto {
   @IsEmail()
   @IsNotEmpty()
   email: string;
+
+  @IsEmail()
+  @IsOptional()
+  accessEmail?: string;
 }

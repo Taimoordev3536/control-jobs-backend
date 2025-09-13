@@ -1,9 +1,9 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 export enum EmployerTypeEnum {
-    HOME = 'home',
-    STATIC = 'static',
-    REMOTE = 'remote'
+    Home = 'Home',
+    Static = 'Static',
+    Remote = 'Remote'
 }
 
 @Entity('employerTypes')
@@ -17,7 +17,7 @@ export class EmployerType {
     })
     name: EmployerTypeEnum;
 
-    @Column('decimal', { precision: 5, scale: 2 })
+    @Column('decimal', { nullable: true })
     defaultRate: number;
 
     @CreateDateColumn({ name: 'created_at' })

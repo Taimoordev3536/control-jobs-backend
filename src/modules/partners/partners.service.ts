@@ -12,6 +12,7 @@ import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { PartnerUser } from './entities/partner-user.entity';
 import { User } from '../users/entities/user.entity';
 import { PartnerTier } from './entities/partner-type.entity';
+import { EmailService } from '../../common/services/email.service';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 
@@ -26,6 +27,7 @@ export class PartnersService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(PartnerTier)
     private readonly partnerTierRepository: Repository<PartnerTier>,
+    private readonly emailService: EmailService,
   ) {}
 
   /**
@@ -108,8 +110,31 @@ export class PartnersService {
       });
       await this.partnerUserRepository.save(partnerUser);
 
+      // Send email with credentials if accessAccountStatus is 'request'
+      if (createPartnerDto.accessAccountStatus === 'request') {
+        try {
+          // Use accessEmail if provided, otherwise use the partner's email
+          const emailToSendTo = createPartnerDto.accessEmail || createPartnerDto.email;
+          
+          // Always use the partner's main email as the login email, regardless of where we send the notification
+          await this.emailService.sendUserCredentials(
+            emailToSendTo,  // Send TO this email address
+            createPartnerDto.name,
+            rawPassword,
+            'partner',
+            createPartnerDto.email  // This is the actual login email
+          );
+          console.log(`Email with credentials sent to: ${emailToSendTo}`);
+        } catch (emailError) {
+          console.error('Failed to send email with credentials:', emailError);
+          // Continue with the process even if email sending fails
+        }
+      }
+
       return {
-        message: 'Partner created successfully',
+        message: createPartnerDto.accessAccountStatus === 'request' 
+          ? 'Partner created successfully and credentials sent by email' 
+          : 'Partner created successfully',
         data: savedPartner, // Keep the original partner data
         generatedPassword: rawPassword, // Add password as separate field
         isSuccess: true,
@@ -120,6 +145,7 @@ export class PartnersService {
       throw error;
     }
   }
+  
   /**
    * Get all partners
    * @returns List of all partners

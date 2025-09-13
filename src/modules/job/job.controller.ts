@@ -93,12 +93,12 @@ async getJobHistoryForClient(@Req() req, @Query('jobId') jobId?: number) {
   return this.jobService.getJobHistoryForClient(userId, jobId ? parseInt(jobId.toString()) : undefined);
 }
 
-@UseGuards(JwtAuthGuard)
-@Get('client/analytics')
-async getJobAnalyticsForClient(@Req() req) {
-  const userId = req.user?.id;
-  return this.jobService.getJobAnalyticsForClient(userId);
-}
+// @UseGuards(JwtAuthGuard)
+// @Get('client/analytics')
+// async getJobAnalyticsForClient(@Req() req) {
+//   const userId = req.user?.id;
+//   return this.jobService.getJobAnalyticsForClient(userId);
+// }
 
   // ========== QR Code and Scanning Endpoints ========== //
 
@@ -261,5 +261,38 @@ async getJobAnalyticsForClient(@Req() req) {
   ): Promise<any> {
     return await this.jobService.getTaskHistoryForJobWorkerDate(jobId, workerId, date);
   }
+
+  // Get all tasks for a job and worker (includes today's per-worker status)
+  @UseGuards(JwtAuthGuard)
+  @Get(':jobId/worker/:workerId/tasks')
+  async getTasksForJobWorker(
+    @Param('jobId') jobId: number,
+    @Param('workerId') workerId: number,
+  ): Promise<any> {
+    return await this.jobService.getTasksForJobWorker(jobId, workerId);
+  }
+
+  // Get task detail by task id
+  @UseGuards(JwtAuthGuard)
+  @Get('tasks/:taskId')
+  async getTaskById(@Param('taskId') taskId: number): Promise<any> {
+    return await this.jobService.getTaskById(taskId);
+  }
+
+  // Generate recurrence for a task based on stored config
+  // @UseGuards(JwtAuthGuard)
+  // @Post('tasks/:taskId/generate-recurrence')
+  // async generateRecurrenceForTask(@Param('taskId') taskId: number, @Query('persist') persist?: string): Promise<any> {
+  //   const doPersist = persist === 'true'
+  //   return await this.jobService.generateRecurrenceForTask(taskId, doPersist)
+  // }
+
+  // Convenience: allow GET for quick testing (no persistence)
+  @UseGuards(JwtAuthGuard)
+  @Get('tasks/:taskId/generate-recurrence')
+  async generateRecurrenceForTaskGet(@Param('taskId') taskId: number): Promise<any> {
+    return await this.jobService.generateRecurrenceForTask(taskId, false)
+  }
+
 
 }

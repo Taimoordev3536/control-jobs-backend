@@ -40,10 +40,9 @@
 
 
 // src/dto/create-task.dto.ts
-import { IsString, IsInt, IsEnum, IsArray, IsOptional, ValidateIf, IsDateString, IsBoolean,IsNotEmpty } from 'class-validator';
-import { ShiftType } from '../entities/shift.entity'; // Adjust import
-import { TaskTiming } from '../entities/task.entity'; // Adjust import
-import { TaskPeriodicity } from '../entities/task.entity'
+import { IsString, IsInt, IsEnum, IsArray, IsOptional, ValidateIf, IsDateString, IsBoolean, IsNotEmpty, ArrayNotEmpty, ArrayUnique, Min } from 'class-validator';
+import { ShiftType } from '../entities/shift.entity';
+import { TaskTiming, TaskPeriodicity } from '../entities/task.entity';
 
 export class CreateTaskDto {
   @IsString()
@@ -68,10 +67,6 @@ export class CreateTaskDto {
   @IsEnum(TaskPeriodicity)
   periodicity: TaskPeriodicity;
 
-  @IsString()
-  @IsOptional()
-  periodicityValue?: string;
-
   @IsBoolean()
   @IsOptional()
   alertTask?: boolean;
@@ -80,20 +75,58 @@ export class CreateTaskDto {
   @IsOptional()
   pendingTask?: boolean;
 
-  // New optional fields with conditions
-  @ValidateIf(o => o.periodicity === TaskPeriodicity.ONCE || o.periodicity === TaskPeriodicity.PERSONALIZED)
+  // ---------- Common periodicity fields ----------
   @IsDateString()
   @IsOptional()
-  periodicityDate?: string;
+  startDate?: string;
 
+  @IsDateString()
+  @IsOptional()
+  endDate?: string;
+
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  interval?: number;
+
+  // ---------- Once ----------
+  @ValidateIf(o => o.periodicity === TaskPeriodicity.ONCE)
+  @IsDateString()
+  onceDate?: string;
+
+  // ---------- Weekly ----------
   @ValidateIf(o => o.periodicity === TaskPeriodicity.WEEKLY)
   @IsArray()
-  @IsString({ each: true })
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsInt({ each: true })
+  weeklyDays?: number[];
+
+  // ---------- Monthly ----------
+  @ValidateIf(o => o.periodicity === TaskPeriodicity.MONTHLY)
+  @IsArray()
   @IsOptional()
-  weeklyDays?: string[];
+  @IsInt({ each: true })
+  monthlyDays?: number[];
 
   @ValidateIf(o => o.periodicity === TaskPeriodicity.MONTHLY)
-  @IsInt()
+  @IsArray()
   @IsOptional()
-  monthlyDay?: number;
+  @IsInt({ each: true })
+  monthlyWeekdays?: number[];
+
+  // ---------- Yearly ----------
+  @ValidateIf(o => o.periodicity === TaskPeriodicity.YEARLY)
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsInt({ each: true })
+  yearlyMonths?: number[];
+
+  @ValidateIf(o => o.periodicity === TaskPeriodicity.YEARLY)
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsInt({ each: true })
+  yearlyDays?: number[];
 }
