@@ -27,9 +27,14 @@ async createJob(@Body() createJobDto: CreateJobDto, @Req() req) {
     const job = await this.jobService.createJob(createJobDto, employerUserId);
     return { message: 'Job created successfully', data: job };
   } catch (error) {
+    // Include full error details in the response to aid debugging
+    const errMsg = error?.message || String(error);
+    const errStack = error?.stack || '';
+    console.error('createJob error:', errMsg, errStack);
     throw new HttpException({
       message: 'Failed to create job',
-      error: error.message,
+      error: errMsg,
+      details: process.env.NODE_ENV === 'development' ? errStack : undefined,
     }, HttpStatus.BAD_REQUEST);
   }
 }

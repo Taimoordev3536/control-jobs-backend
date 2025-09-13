@@ -68,8 +68,33 @@ export class JobService {
       const employer = employerUserLink.employer;
 
       const client = await manager.findOneOrFail(Client, { where: { id: createJobDto.clientId } });
-    // Use the mock WorkCenter for every client
-    const workCenter = { ...MOCK_WORK_CENTER, clientId: createJobDto.clientId };
+
+      // Ensure a WorkCenter entity exists for this job. The code previously used a MOCK_WORK_CENTER
+      // object which caused a foreign key violation when no matching row existed in the DB.
+      let workCenter = null as any;
+
+      // Try provided workCenterId first (if frontend sent one)
+      if (createJobDto.workCenterId) {
+        workCenter = await manager.findOne(WorkCenter, { where: { id: createJobDto.workCenterId } });
+      }
+
+      // If not found, try to find a default/mock work center by id
+      if (!workCenter) {
+        workCenter = await manager.findOne(WorkCenter, { where: { id: MOCK_WORK_CENTER.id } });
+      }
+
+      // If still not found, create a simple WorkCenter linked to the client so FK is satisfied
+      if (!workCenter) {
+        workCenter = manager.create(WorkCenter, {
+          name: MOCK_WORK_CENTER.name,
+          address: 'Auto-created work center',
+          contactName: null,
+          contactPhone: null,
+          contactEmail: null,
+          clientId: createJobDto.clientId,
+        });
+        await manager.save(workCenter);
+      }
 
     /*
     // Previous code to fetch WorkCenter from DB
