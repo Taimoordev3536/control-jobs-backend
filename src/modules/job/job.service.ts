@@ -67,33 +67,38 @@ export class JobService {
       }
       const employer = employerUserLink.employer;
 
-      const client = await manager.findOneOrFail(Client, { where: { id: createJobDto.clientId } });
+      let client: Client | null = null;
+      if (createJobDto.clientId) {
+        client = await manager.findOne(Client, { where: { id: createJobDto.clientId } });
+        if (!client) {
+          throw new Error(`Client with id ${createJobDto.clientId} not found`);
+        }
+      }
 
-      // Ensure a WorkCenter entity exists for this job. The code previously used a MOCK_WORK_CENTER
-      // object which caused a foreign key violation when no matching row existed in the DB.
-      let workCenter = null as any;
+      // Ensure a WorkCenter entity exists for this job only if a workCenterId or client is provided.
+      let workCenter: WorkCenter | null = null;
 
-      // Try provided workCenterId first (if frontend sent one)
       if (createJobDto.workCenterId) {
         workCenter = await manager.findOne(WorkCenter, { where: { id: createJobDto.workCenterId } });
-      }
-
-      // If not found, try to find a default/mock work center by id
-      if (!workCenter) {
+        if (!workCenter) {
+          throw new Error(`WorkCenter with id ${createJobDto.workCenterId} not found`);
+        }
+      } else if (client) {
+        // Try to find a default/mock work center by id
         workCenter = await manager.findOne(WorkCenter, { where: { id: MOCK_WORK_CENTER.id } });
-      }
 
-      // If still not found, create a simple WorkCenter linked to the client so FK is satisfied
-      if (!workCenter) {
-        workCenter = manager.create(WorkCenter, {
-          name: MOCK_WORK_CENTER.name,
-          address: 'Auto-created work center',
-          contactName: null,
-          contactPhone: null,
-          contactEmail: null,
-          clientId: createJobDto.clientId,
-        });
-        await manager.save(workCenter);
+        // If still not found, create a simple WorkCenter linked to the client so FK is satisfied
+        if (!workCenter) {
+          workCenter = manager.create(WorkCenter, {
+            name: MOCK_WORK_CENTER.name,
+            address: 'Auto-created work center',
+            contactName: null,
+            contactPhone: null,
+            contactEmail: null,
+            clientId: client.id,
+          });
+          await manager.save(workCenter);
+        }
       }
 
     /*
@@ -108,8 +113,8 @@ export class JobService {
         startDate: createJobDto.startDate,
         endDate: createJobDto.endDate,
         employer,
-        client,
-        workCenter,
+        client: client || null,
+        workCenter: workCenter || null,
         workers,
         note: createJobDto.note,
         status: createJobDto.status || JobStatus.SCHEDULED, // Default to SCHEDULED if not provided

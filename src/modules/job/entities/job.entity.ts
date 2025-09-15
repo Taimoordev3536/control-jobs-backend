@@ -37,13 +37,13 @@ user: User;
   @JoinColumn({ name: 'employerId' })
   employer: Employer;
   
-  @ManyToOne(() => Client, { nullable: false })
+  @ManyToOne(() => Client, { nullable: true })
   @JoinColumn({ name: 'clientId' })
-  client: Client;
+  client?: Client | null;
   
-  @ManyToOne(() => WorkCenter, { nullable: false })
+  @ManyToOne(() => WorkCenter, { nullable: true })
   @JoinColumn({ name: 'workCenterId' })
-  workCenter: WorkCenter;
+  workCenter?: WorkCenter | null;
 
   @Column({ type: 'varchar', length: 255 })
   jobName: string;
@@ -59,7 +59,7 @@ user: User;
   workers: Worker[];
 
   @Column({ type: 'text', nullable: true })
-  note: string;
+  note?: string | null;
 
   @Column({
     type: 'enum',

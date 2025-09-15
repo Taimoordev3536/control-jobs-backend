@@ -19,11 +19,14 @@ export class CreateJobDto {
   endDate: string;
 
   @IsInt()
-  clientId: number;
+  @IsOptional()
+  @Type(() => Number)
+  clientId?: number;
 
   @IsInt()
+  @IsOptional()
   @Type(() => Number)
-  workCenterId: number;
+  workCenterId?: number;
 
   @IsArray()
   @IsInt({ each: true })
@@ -32,6 +35,10 @@ export class CreateJobDto {
   @IsString()
   @IsOptional()
   note?: string;
+
+  @IsString()
+  @IsOptional()
+  // note is used as observation; keep single field
 
   @IsEnum(JobStatus)
   @IsOptional()
