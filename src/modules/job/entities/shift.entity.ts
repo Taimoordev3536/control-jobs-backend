@@ -1,5 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
-import { Job } from './job.entity';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import { SeasonalSchedule } from './seasonal-schedule.entity';
 
 export enum ShiftType {
   MORNING = 'morning',
@@ -9,12 +9,23 @@ export enum ShiftType {
 
 export enum ScheduleType {
   FIXED = 'fixed',
-  FLEXIBLE = 'flexible',
+  FREE = 'free',
+  SEASONAL = 'seasonal',
 }
 
 export enum Season {
+  NORMAL = 'normal',
   SUMMER = 'summer',
-  WINTER = 'winter',
+}
+
+export enum Weekday {
+  MONDAY = 'monday',
+  TUESDAY = 'tuesday',
+  WEDNESDAY = 'wednesday',
+  THURSDAY = 'thursday',
+  FRIDAY = 'friday',
+  SATURDAY = 'saturday',
+  SUNDAY = 'sunday',
 }
 
 @Entity('shift')
@@ -22,27 +33,28 @@ export class Shift {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => Job, job => job.shifts, { nullable: false })
-  job: Job;
+  @ManyToOne(() => SeasonalSchedule, seasonalSchedule => seasonalSchedule.shifts, { nullable: false })
+  @JoinColumn({ name: 'seasonal_schedule_id' })
+  seasonalSchedule: SeasonalSchedule;
 
-  @Column({ type: 'varchar', length: 20 })
-  day: string;
+  @Column({ name: 'seasonal_schedule_id' })
+  seasonalScheduleId: number;
 
-  @Column({ type: 'enum', enum: ShiftType })
-  shiftType: ShiftType;
+  @Column({ type: 'enum', enum: Weekday, enumName: 'weekday_enum', nullable: false, name: 'start_weekday' })
+  startWeekday: Weekday;
 
-  @Column({ type: 'time', nullable: true })
-  startTime: string;
+  @Column({ type: 'enum', enum: Weekday, enumName: 'weekday_enum', nullable: false, name: 'end_weekday' })
+  endWeekday: Weekday;
 
-  @Column({ type: 'time', nullable: true })
-  endTime: string;
+  @Column({ type: 'time', nullable: false, name: 'base_start_time' })
+  baseStartTime: string;
 
-  @Column({ type: 'int' })
-  totalHours: number;
+  @Column({ type: 'time', nullable: false, name: 'base_end_time' })
+  baseEndTime: string;
 
-  @Column({ type: 'enum', enum: ScheduleType })
-  scheduleType: ScheduleType;
+  @Column({ type: 'boolean', default: false, name: 'is_continuous' })
+  isContinuous: boolean;
 
-  @Column({ type: 'enum', enum: Season })
-  season: Season;
-} 
+  @Column({ type: 'int', nullable: true, name: 'total_hours' })
+  totalHours?: number;
+}

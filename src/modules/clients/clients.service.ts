@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Client } from './entities/client.entity';
@@ -14,6 +14,7 @@ import { WorkCenter } from '../work-centers/entities/work-center.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
+import { In } from 'typeorm';
 
 @Injectable()
 export class ClientsService {
@@ -187,8 +188,16 @@ export class ClientsService {
     });
     // For each client, get the related user (for name)
     const clientIds = employerClients.map(ec => ec.client.id);
+
+    // Also check if the current employer user is itself linked as a client (employer may also be a client)
+    const ownClientRelations = await this.clientUserRepo.find({ where: { userId: employerUser.id } });
+    const ownClientIds = ownClientRelations.map(cu => cu.clientId);
+
+    // Merge client IDs (employer's clients + any client records where the current user is a client)
+    const mergedClientIds = Array.from(new Set([...clientIds, ...ownClientIds]));
+
     const clientUsers = await this.clientUserRepo.find({
-      where: clientIds.length ? clientIds.map(id => ({ clientId: id })) : undefined,
+      where: mergedClientIds.length ? mergedClientIds.map(id => ({ clientId: id })) : undefined,
       relations: ['user'],
     });
     // Map clientId to user name
@@ -198,28 +207,302 @@ export class ClientsService {
         clientIdToUserName.set(cu.clientId, cu.user.name);
       }
     });
-    // Map to frontend expectations
+    // If the current user is also a client, add those client records to the list (avoid duplicates)
+    if (ownClientIds.length) {
+      const ownClients = await this.clientRepo.find({ where: ownClientIds.map(id => ({ id })) });
+      ownClients.forEach(c => {
+        if (!employerClients.some(ec => ec.client.id === c.id)) {
+          // Push a synthetic EmployerClient-like object so mapping below can treat it the same
+          employerClients.push({ employer: { id: employerId } as any, client: c, isActive: true } as any);
+        }
+      });
+    }
+
+    // Additionally, include the employer itself as a selectable "client" when relevant.
+    // This allows an employer (company) to create jobs for their own workers using the employer as the client.
+    try {
+      const employer = await this.employerRepo.findOne({ where: { id: employerId } });
+      if (employer) {
+        // Check if an equivalent client record already exists (by name/address or id)
+        const alreadyIncluded = employerClients.some(ec => {
+          const c = ec.client;
+          return (c.name && employer.name && c.name === employer.name) || (c.address && employer.address && c.address === employer.address) || (c.id === (employer as any).id);
+        });
+
+        if (!alreadyIncluded) {
+          // Create a lightweight client-like object using employer fields so frontend can treat it the same
+          const syntheticClient: any = {
+            id: -(employer.id), // negative id to avoid collision with real client ids
+            name: employer.name || '',
+            address: employer.address || '',
+            type: 'employer',
+            responsible: employer.responsible || '',
+            mobile: employer.mobile || '',
+            status: 'Active',
+          };
+
+          employerClients.push({ employer: { id: employerId } as any, client: syntheticClient, isActive: true } as any);
+        }
+      }
+    } catch (err) {
+      // Non-fatal: if employer lookup fails, just continue without adding
+      console.error('Error while including employer as client:', err?.message || err);
+    }
+
+    // Map to frontend expectations. Include `isSelf` when the client corresponds
+    // to the current user (own client records) or when we added the synthetic
+    // employer entry (negative id).
     return employerClients.map(ec => {
       const c = ec.client;
+      const isSelf = ownClientIds.includes(c.id) || (typeof c.id === 'number' && c.id < 0);
       return {
         id: c.id,
-        name: clientIdToUserName.get(c.id) || '',
+        name: clientIdToUserName.get(c.id) || c.name || '',
         locality: c.address,
         type: c.type,
         responsible: c.responsible,
         telephones: c.mobile,
         asset: c.status === 'Active' ? 'yeah' : 'no',
+        isSelf,
       };
     });
   }
 
+
+    //clients And employer for add job (Select client dropdown)
+  async findClientsForAddJob(employerUser: User) {
+  // Find employer for this user
+  const employerUserLink = await this.dataSource.getRepository(EmployerUser).findOne({
+    where: { user: { id: employerUser.id } },
+    relations: ['employer'],
+  });
+  if (!employerUserLink || !employerUserLink.employer) {
+    throw new Error('Employer not found for this user');
+  }
+  const employerId = employerUserLink.employer.id;
+
+  // Get employer's active clients
+  const employerClients = await this.employerClientRepo.find({
+    where: { employer: { id: employerId }, isActive: true },
+    relations: ['client'],
+  });
+
+  // Collect all client IDs
+  const clientIds = employerClients.map(ec => ec.client.id);
+
+  // Check if user is directly a client
+  const ownClientRelations = await this.clientUserRepo.find({
+    where: { userId: employerUser.id },
+  });
+  const ownClientIds = ownClientRelations.map(cu => cu.clientId);
+
+  // Merge client IDs
+  const mergedClientIds = Array.from(new Set([...clientIds, ...ownClientIds]));
+
+  // Fetch client → default user mappings
+  const clientUsers = await this.clientUserRepo.find({
+    where: mergedClientIds.length
+      ? mergedClientIds.map(id => ({ clientId: id }))
+      : undefined,
+    relations: ['user'],
+  });
+
+  const clientIdToUserName = new Map<number, string>();
+  clientUsers.forEach(cu => {
+    if (cu.isDefault && cu.user) {
+      clientIdToUserName.set(cu.clientId, cu.user.name);
+    }
+  });
+
+  // Final client list
+  const result = employerClients.map(ec => {
+    const c = ec.client;
+    return {
+      id: c.id,
+      name: clientIdToUserName.get(c.id) || c.name || '',
+      locality: c.address,
+      type: c.type,
+      responsible: c.responsible,
+      telephones: c.mobile,
+      asset: c.status === 'Active' ? 'yeah' : 'no',
+      isSelf: ownClientIds.includes(c.id),
+      isEmployer: false,
+    };
+  });
+
+  // Add the employer itself as a pseudo-client
+  const employer = employerUserLink.employer;
+  // Represent the employer as a pseudo-client using a negative id to avoid
+  // collision with real client ids and to keep the id numeric (frontend
+  // expects numeric ids). The frontend can detect isEmployer or id < 0.
+  result.push({
+    id: -(employer.id),
+    name: employer.name,
+    locality: employer.address,
+    type: 'employer',
+    responsible: employer.responsible,
+    telephones: employer.mobile,
+    asset: 'yeah',
+    isSelf: true,
+    isEmployer: true,
+  });
+
+  return result;
+}
+
+
+
+
+  
   /**
    * Get all work centers for a given client
    * @param clientId - The client ID
    */
+  
+  // async getWorkCentersByClient(clientId: number) {
+  // const client = await this.clientRepo.findOne({ where: { id: clientId } });
+  // if (!client) throw new NotFoundException('Client not found');
+
+  // // Return actual work centers for this client
+  // const workCenters = await this.workCenterRepo.find({ where: { clientId } });
+  // return workCenters;
+  // }
+
   async getWorkCentersByClient(clientId: number) {
-  const client = await this.clientRepo.findOne({ where: { id: clientId } });
-  if (!client) throw new NotFoundException('Client not found');
-  return [{ address: client.address }];
+    // Support pseudo-client negative ids representing employer entries.
+    if (clientId == null) {
+      throw new NotFoundException('Client not found');
+    }
+
+    if (clientId <= 0) {
+      const employerId = Math.abs(clientId);
+      const employer = await this.employerRepo.findOne({ where: { id: employerId } });
+      if (!employer) throw new NotFoundException('Employer not found');
+
+      // Return work centers owned by the employer
+      const workCenters = await this.workCenterRepo.find({ where: { employerId } });
+      return workCenters;
+    }
+
+    const client = await this.clientRepo.findOne({ where: { id: clientId } });
+    if (!client) throw new NotFoundException('Client not found');
+
+    // Return actual work centers for this client
+    const workCenters = await this.workCenterRepo.find({ where: { clientId } });
+    return workCenters;
   }
+
+  /**
+   * Get work centers for the authenticated employer user (derived from req.user)
+   */
+  async getWorkCentersForAuthenticatedEmployer(user: any) {
+    // Find employer for this user
+    const employerUserLink = await this.dataSource.getRepository(EmployerUser).findOne({
+      where: { user: { id: user.id } },
+      relations: ['employer'],
+    });
+    if (!employerUserLink || !employerUserLink.employer) {
+      throw new NotFoundException('Employer not found for this user');
+    }
+    const employerId = employerUserLink.employer.id;
+    const workCenters = await this.workCenterRepo.find({ where: { employerId } });
+    return workCenters;
+  }
+
+  
+  /**
+   * Create a work center for a given client
+   * @param clientId - The client the work center belongs to
+   * @param dto - Data for the new work center
+   * @param actor - (optional) the user performing the action - can be used for authorization/audit
+   */
+
+  
+  async createWorkCenter(clientId: number, dto: any, actor?: User) {
+    const client = await this.clientRepo.findOne({ where: { id: clientId } });
+    if (!client) throw new NotFoundException('Client not found');
+
+    // Ensure actor is provided and is an employer linked to the client
+    if (!actor) throw new ForbiddenException('Unauthorized')
+
+    const employerUserLink = await this.dataSource.getRepository(EmployerUser).findOne({
+      where: { user: { id: actor.id } },
+      relations: ['employer'],
+    });
+
+    if (!employerUserLink || !employerUserLink.employer) {
+      throw new ForbiddenException('Only employer users can create work centers');
+    }
+
+    const employerId = employerUserLink.employer.id;
+
+    // Check employer is associated with this client
+    const association = await this.employerClientRepo.findOne({
+      where: { employer: { id: employerId }, client: { id: clientId }, isActive: true },
+    });
+
+    if (!association) {
+      throw new ForbiddenException('Employer is not associated with this client');
+    }
+
+    // If the caller specifies employerId and it matches the acting employer,
+    // create an employer-owned work center (clientId will be NULL).
+    let workCenterData: any = {
+      name: dto.name,
+      address: dto.address,
+      contactName: dto.contactName,
+      contactPhone: dto.contactPhone,
+      contactEmail: dto.contactEmail,
+      landline: dto.landline,
+      postalCode: dto.postalCode,
+    };
+
+    if (dto.employerId && Number(dto.employerId) === employerId) {
+      workCenterData.employerId = employerId;
+      workCenterData.clientId = null;
+    } else {
+      workCenterData.clientId = clientId;
+      workCenterData.employerId = null;
+    }
+
+    const workCenter = this.workCenterRepo.create(workCenterData);
+
+    const saved = await this.workCenterRepo.save(workCenter);
+    return saved;
+  }
+
+  /**
+   * Create an employer-owned work center for the authenticated employer user.
+   */
+  async createWorkCenterForAuthenticatedEmployer(user: any, dto: any) {
+    // Find employer for this user
+    const employerUserLink = await this.dataSource.getRepository(EmployerUser).findOne({
+      where: { user: { id: user.id } },
+      relations: ['employer'],
+    });
+    if (!employerUserLink || !employerUserLink.employer) {
+      throw new NotFoundException('Employer not found for this user');
+    }
+    const employerId = employerUserLink.employer.id;
+
+    const workCenterData: any = {
+      name: dto.name,
+      address: dto.address,
+      contactName: dto.contactName,
+      contactPhone: dto.contactPhone,
+      contactEmail: dto.contactEmail,
+      landline: dto.landline,
+      postalCode: dto.postalCode,
+      employerId,
+      clientId: null,
+    };
+
+    const workCenter = this.workCenterRepo.create(workCenterData);
+    const saved = await this.workCenterRepo.save(workCenter);
+    return saved;
+  }
+
+
+
+
 }

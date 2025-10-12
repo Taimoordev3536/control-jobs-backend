@@ -75,6 +75,11 @@ export class CreateTaskDto {
   @IsOptional()
   pendingTask?: boolean;
 
+  // Optional per-task work center (select one of the job's work centers)
+  @IsInt()
+  @IsOptional()
+  workCenterId?: number;
+
   // ---------- Common periodicity fields ----------
   @IsDateString()
   @IsOptional()

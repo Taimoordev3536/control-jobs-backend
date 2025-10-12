@@ -1,6 +1,9 @@
 import { IsString, IsDateString, IsInt, IsArray, IsOptional, IsNotEmpty, ValidateNested, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CreateShiftDto } from './create-shift.dto';
+import { ScheduleType } from '../entities/shift.entity';
+import { CreateSeasonPeriodDto } from './create-season-period.dto';
+import { CreateSeasonalScheduleDto } from './create-seasonal-schedule.dto';
 import { CreateSigningMethodDto } from './create-signing-method.dto';
 import { CreateAlertDto } from './create-alert.dto';
 import { CreateTaskDto } from './create-task.dto';
@@ -23,10 +26,13 @@ export class CreateJobDto {
   @Type(() => Number)
   clientId?: number;
 
-  @IsInt()
+  // Deprecated single workCenterId removed in favor of workCenterIds array
+  // Use workCenterIds to pass multiple work center IDs from frontend
+  @IsArray()
+  @IsInt({ each: true })
   @IsOptional()
   @Type(() => Number)
-  workCenterId?: number;
+  workCenterIds?: number[];
 
   @IsArray()
   @IsInt({ each: true })
@@ -44,10 +50,27 @@ export class CreateJobDto {
   @IsOptional()
   status?: JobStatus;
 
+  @IsEnum(ScheduleType)
+  @IsOptional()
+  scheduleType?: ScheduleType;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateShiftDto)
-  shifts: CreateShiftDto[];
+  @IsOptional()
+  shifts?: CreateShiftDto[];
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateSeasonalScheduleDto)
+  @IsOptional()
+  seasonalSchedules?: CreateSeasonalScheduleDto[];
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateSeasonPeriodDto)
+  @IsOptional()
+  seasonPeriods?: CreateSeasonPeriodDto[];
 
   @IsArray()
   @ValidateNested({ each: true })

@@ -10,6 +10,7 @@ import { LocalStrategy } from './strategies/local.strategy';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Role } from '../users/entities/role.entity';
+import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { RolesGuard } from './guards/roles.guard';
 import { CaslGuard } from './guards/casl.guard';
 import { AbilityFactory } from './casl/ability.factory';
@@ -22,7 +23,7 @@ import { PartnerUser } from '../partners/entities/partner-user.entity';
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([Role, Partner, PartnerUser]),
+  TypeOrmModule.forFeature([Role, Partner, PartnerUser, EmployerUser]),
     OTPModule,
     PassportModule,
     JwtModule.registerAsync({

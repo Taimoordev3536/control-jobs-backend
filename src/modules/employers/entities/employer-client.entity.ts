@@ -21,4 +21,5 @@ export class EmployerClient {
 
     @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
+    
 } 

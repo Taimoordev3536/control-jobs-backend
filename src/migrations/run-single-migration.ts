@@ -20,11 +20,14 @@ async function runSingle() {
   await AppDataSource.initialize();
   const queryRunner = AppDataSource.createQueryRunner();
   try {
-    const migrationModule = await import('./1694770000000-MakeClientWorkCenterNullableAddObservation');
+    const requested = process.argv[2];
+    const defaultMigration = '.1765760000000-MigrateJobWorkCenters.ts';
+    const migrationImportPath = requested || defaultMigration;
+    const migrationModule = await import(migrationImportPath);
     const MigrationClass = Object.values(migrationModule)[0] as any;
     const migration = new MigrationClass();
     await migration.up(queryRunner);
-    console.log('Applied migration: 1694770000000-MakeClientWorkCenterNullableAddObservation');
+    console.log('Applied migration:', migrationImportPath);
   } catch (err) {
     console.error('Migration failed', err);
     process.exitCode = 1;

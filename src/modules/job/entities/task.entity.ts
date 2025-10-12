@@ -1,70 +1,3 @@
-// import { Entity, PrimaryGeneratedColumn, Column, ManyToOne,OneToMany } from 'typeorm';
-// import { Job } from './job.entity';
-// import { ShiftType } from './shift.entity';
-// import { TaskHistory } from '../entities/task-history.entity';
-
-// export enum TaskTiming {
-//   BEFORE = 'before',
-//   DURING = 'during',
-//   AFTER = 'after',
-// }
-
-// export enum TaskPeriodicity {
-//   ONCE = 'once',
-//   DAILY = 'daily',
-//   WEEKLY = 'weekly',
-//   MONTHLY = 'monthly',
-//   ANNUALLY = 'annually',
-//   PERSONALIZED = 'personalized',
-// }
-
-// @Entity('task')
-// export class Task {
-//   @PrimaryGeneratedColumn()
-//   id: number;
-
-//   @ManyToOne(() => Job, job => job.tasks, { nullable: false })
-//   job: Job;
-
-//   @Column({ type: 'varchar', length: 255 })
-//   name: string;
-
-//   @Column({ type: 'text', nullable: true })
-//   note: string;
-
-//   @Column({ type: 'int', nullable: true })
-//   expectedDuration: number;
-
-//   @Column({ type: 'enum', enum: ShiftType, nullable: true })
-//   shift: ShiftType;
-
-//   @Column({ type: 'enum', enum: TaskTiming })
-//   timing: TaskTiming;
-
-//   @Column({ type: 'enum', enum: TaskPeriodicity })
-//   periodicity: TaskPeriodicity;
-
-//   @Column({ type: 'varchar', length: 50, nullable: true })
-//   periodicityValue: string;
-
-//   @Column({ type: 'boolean', default: false })
-//   alertTask: boolean;
-
-//   @Column({ type: 'boolean', default: false })
-//   pendingTask: boolean;
-
-//   @Column({ type: 'boolean', default: false })
-//   isCompleted: boolean;
-
-//   @Column({ type: 'timestamp', nullable: true })
-//   completedAt: Date;
-
-//   @Column({ type: 'int', nullable: true })
-//   completedByWorkerId: number;
-
-//     @OneToMany(() => TaskHistory, (taskHistory) => taskHistory.task)
-//   taskHistories: TaskHistory[];
-// } 
 
 
 
@@ -73,6 +6,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany } from 'ty
 import { Job } from './job.entity';
 import { ShiftType } from './shift.entity';
 import { TaskHistory } from '../entities/task-history.entity';
+import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 
 
 export enum TaskTiming {
@@ -161,6 +95,12 @@ export class Task {
 
   @Column({ type: 'int', nullable: true })
   completedByWorkerId: number;
+
+  @Column({ type: 'int', nullable: true })
+  workCenterId: number | null;
+
+  @ManyToOne(() => WorkCenter, { nullable: true })
+  workCenter?: WorkCenter | null;
 
   @OneToMany(() => TaskHistory, (taskHistory) => taskHistory.task)
   taskHistories: TaskHistory[];

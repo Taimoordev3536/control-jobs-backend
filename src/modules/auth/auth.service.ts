@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
 import { Partner } from '../partners/entities/partner.entity';
+import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Role } from '../users/entities/role.entity';
@@ -28,10 +29,12 @@ export class AuthService {
     @InjectRepository(Role)
     private rolesRepository: Repository<Role>,
     private readonly emailCheckerService: EmailCheckerService,
-    @InjectRepository(Partner)
-    private partnerRepository: Repository<Partner>,
-    @InjectRepository(PartnerUser)
-    private partnerUserRepository: Repository<PartnerUser>,
+  @InjectRepository(Partner)
+  private partnerRepository: Repository<Partner>,
+  @InjectRepository(PartnerUser)
+  private partnerUserRepository: Repository<PartnerUser>,
+  @InjectRepository(EmployerUser)
+  private employerUserRepository: Repository<EmployerUser>,
   ) { }
 
   /**
@@ -96,6 +99,9 @@ export class AuthService {
       // Attach entity id for each role
       let entityId = null;
       let partnerId = null;
+      // Additional employer info to return in response/token when available
+      let employerInfo: any = null;
+
       if (user.roleId === 2) { // Partner
         // Find the partner-user link for this user
         const partnerUser = await this.partnerUserRepository.findOne({ where: { userId: user.id } });
@@ -104,19 +110,44 @@ export class AuthService {
           partnerId = partnerUser.partnerId;
         }
       } else if (user.roleId === 3) { // Employer
-        entityId = user.id; // or fetch employer entity if needed
+        // Try to fetch employer record linked to this user via EmployerUser repository
+        try {
+          const eu = await this.employerUserRepository.findOne({ where: { user: { id: user.id } }, relations: ['employer'] });
+          if (eu?.employer) employerInfo = eu.employer;
+        } catch (e) {
+          // ignore lookup errors
+        }
+
+        // If we have employer info, populate entityId with employer.id
+        if (employerInfo && employerInfo.id) {
+          entityId = employerInfo.id;
+        } else {
+          // default to user id if no employer entity found
+          entityId = user.id;
+        }
       } else if (user.roleId === 1) { // Admin
         entityId = user.id;
       } // Add more roles as needed
 
-      const token = this.generateToken(user);
+      const token = this.generateToken(user, { employerId: employerInfo?.id, employerSubTypeId: employerInfo?.subTypeId });
 
       // Remove sensitive data
       const { password, ...userWithoutPassword } = user;
 
+      // Include employer subtype/type info in returned user when available
+      const returnedUser: any = { ...userWithoutPassword, partnerId };
+      if (employerInfo) {
+        returnedUser.employer = {
+          id: employerInfo.id,
+          name: employerInfo.name,
+          typeId: employerInfo.typeId,
+          subTypeId: employerInfo.subTypeId,
+        };
+      }
+
       return {
         message: 'Login successful',
-        data: { user: { ...userWithoutPassword, partnerId }, token },
+        data: { user: returnedUser, token },
         isSuccess: true,
         statusCode: 200,
         developerError: '',
@@ -177,8 +208,8 @@ export class AuthService {
    * @param user - User data
    * @returns JWT token
    */
-  private generateToken(user: any): string {
-    const payload = {
+  private generateToken(user: any, extras?: { employerId?: number; employerSubTypeId?: number }): string {
+    const payload: any = {
       sub: user.id,
       id: user.id,
       email: user.email,
@@ -187,6 +218,9 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
     };
+
+    if (extras?.employerId) payload.employerId = extras.employerId;
+    if (extras?.employerSubTypeId) payload.employerSubTypeId = extras.employerSubTypeId;
 
     return this.jwtService.sign(payload);
   }

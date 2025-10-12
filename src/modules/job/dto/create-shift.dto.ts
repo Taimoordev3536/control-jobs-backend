@@ -1,4 +1,4 @@
-import { IsString, IsEnum, IsInt } from 'class-validator';
+import { IsString, IsEnum, IsInt, IsOptional } from 'class-validator';
 import { ShiftType, ScheduleType, Season } from '../entities/shift.entity';
 
 export class CreateShiftDto {
@@ -6,7 +6,8 @@ export class CreateShiftDto {
   day: string;
 
   @IsEnum(ShiftType)
-  shiftType: ShiftType;
+  @IsOptional()
+  shiftType?: ShiftType;
 
   @IsInt()
   totalHours: number;
@@ -21,5 +22,6 @@ export class CreateShiftDto {
   scheduleType: ScheduleType;
 
   @IsEnum(Season)
-  season: Season;
+  @IsOptional()
+  season?: Season;
 } 

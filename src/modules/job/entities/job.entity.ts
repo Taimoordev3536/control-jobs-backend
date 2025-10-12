@@ -4,6 +4,7 @@ import { Client } from '../../clients/entities/client.entity';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 import { Worker } from '../../workers/entities/worker.entity';
 import { Shift } from './shift.entity';
+import { SeasonPeriod } from './season-period.entity';
 import { SigningMethod } from './signing-method.entity';
 import { Alert } from './alert.entity';
 import { Task } from './task.entity';
@@ -12,6 +13,8 @@ import { User } from '../../users/entities/user.entity';
 import { ScanLog } from './scan-log.entity';
 import { WorkSession } from './work-session.entity';
 import { JobStatus } from '../enums/job-status.enum';
+import { ScheduleType } from './shift.entity';
+import { SeasonalSchedule } from './seasonal-schedule.entity';
 import { TaskHistory } from './task-history.entity';
 
 @Entity('job')
@@ -41,9 +44,20 @@ user: User;
   @JoinColumn({ name: 'clientId' })
   client?: Client | null;
   
-  @ManyToOne(() => WorkCenter, { nullable: true })
-  @JoinColumn({ name: 'workCenterId' })
-  workCenter?: WorkCenter | null;
+  // Support multiple work centers per job
+  @ManyToMany(() => WorkCenter)
+  @JoinTable({
+    name: 'job_work_centers',
+    joinColumn: {
+      name: 'job_id',
+      referencedColumnName: 'id',
+    },
+    inverseJoinColumn: {
+      name: 'work_center_id',
+      referencedColumnName: 'id',
+    },
+  })
+  workCenters?: WorkCenter[];
 
   @Column({ type: 'varchar', length: 255 })
   jobName: string;
@@ -53,6 +67,9 @@ user: User;
 
   @Column({ type: 'date' })
   endDate: Date;
+
+  @Column({ type: 'enum', enum: ScheduleType, enumName: 'schedule_type_enum', nullable: false, default: ScheduleType.FREE })
+  scheduleType: ScheduleType;
 
   @ManyToMany(() => Worker)
   @JoinTable({ name: 'job_workers' })
@@ -68,8 +85,7 @@ user: User;
   })
   status: JobStatus;
 
-  @OneToMany(() => Shift, shift => shift.job)
-  shifts: Shift[];
+  // Shifts are now organized under SeasonalSchedule; use seasonalSchedules relation instead.
 
   @OneToMany(() => SigningMethod, signingMethod => signingMethod.job)
   signingMethods: SigningMethod[];
@@ -91,4 +107,7 @@ user: User;
 
   @OneToMany(() => TaskHistory, (taskHistory) => taskHistory.job)
   taskHistories: TaskHistory[];
+
+  @OneToMany(() => SeasonalSchedule, (ss) => ss.job, { cascade: true })
+  seasonalSchedules: SeasonalSchedule[];
 } 

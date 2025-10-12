@@ -3,15 +3,17 @@ import { DateTime } from 'luxon';
 // Mock WorkCenter data (used for every client)
 const MOCK_WORK_CENTER = { id: 1, name: 'WorkCenter 1' };
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, IsNull } from 'typeorm';
+import { Repository, DataSource, IsNull, In } from 'typeorm';
 import { Job } from './entities/job.entity';
-import { Shift } from './entities/shift.entity';
+import { Shift, Weekday, ScheduleType } from './entities/shift.entity';
 import { SigningMethod } from './entities/signing-method.entity';
 import { Alert } from './entities/alert.entity';
 import { Task } from './entities/task.entity';
 import { TaskHistory } from './entities/task-history.entity';
 import { ScanLog } from './entities/scan-log.entity';
 import { WorkSession } from './entities/work-session.entity';
+import { SeasonPeriod } from './entities/season-period.entity';
+import { SeasonalSchedule } from './entities/seasonal-schedule.entity';
 import { Worker } from '../workers/entities/worker.entity';
 import { Client } from '../clients/entities/client.entity';
 import { WorkCenter } from '../work-centers/entities/work-center.entity';
@@ -68,28 +70,49 @@ export class JobService {
       const employer = employerUserLink.employer;
 
       let client: Client | null = null;
-      if (createJobDto.clientId) {
-        client = await manager.findOne(Client, { where: { id: createJobDto.clientId } });
-        if (!client) {
-          throw new Error(`Client with id ${createJobDto.clientId} not found`);
+      // Support negative clientId as the employer sentinel (e.g. -<employerId>)
+      let isEmployerSelection = false;
+      if (createJobDto.clientId != null) {
+        const cid = Number(createJobDto.clientId);
+        if (isNaN(cid)) {
+          throw new Error(`Invalid clientId ${createJobDto.clientId}`);
+        }
+
+        if (cid > 0) {
+          client = await manager.findOne(Client, { where: { id: cid } });
+          if (!client) {
+            throw new Error(`Client with id ${cid} not found`);
+          }
+        } else if (cid < 0) {
+          // negative id indicates the employer itself was selected as the "client"
+          const selectedEmployerId = Math.abs(cid);
+          // ensure the employer matches the authenticated employer
+          if (selectedEmployerId !== employer.id) {
+            throw new Error('Invalid employer selection');
+          }
+          isEmployerSelection = true;
+          // leave client as null (job belongs to employer)
         }
       }
 
-      // Ensure a WorkCenter entity exists for this job only if a workCenterId or client is provided.
-      let workCenter: WorkCenter | null = null;
+      // Determine work centers to attach to the job. Support multiple workCenterIds from DTO.
+      let workCentersToAttach: WorkCenter[] = [];
 
-      if (createJobDto.workCenterId) {
-        workCenter = await manager.findOne(WorkCenter, { where: { id: createJobDto.workCenterId } });
-        if (!workCenter) {
-          throw new Error(`WorkCenter with id ${createJobDto.workCenterId} not found`);
+      if (createJobDto.workCenterIds && Array.isArray(createJobDto.workCenterIds) && createJobDto.workCenterIds.length) {
+        // Load provided work centers and ensure they exist
+        const wcs = await manager.findBy(WorkCenter, { id: In(createJobDto.workCenterIds as number[]) });
+        if (!wcs || wcs.length !== createJobDto.workCenterIds.length) {
+          // find which ids are missing
+          const foundIds = new Set((wcs || []).map((w) => w.id));
+          const missing = (createJobDto.workCenterIds as number[]).filter((id) => !foundIds.has(id));
+          throw new Error(`WorkCenter(s) not found: ${missing.join(', ')}`);
         }
+        workCentersToAttach = wcs;
       } else if (client) {
         // Try to find a default/mock work center by id
-        workCenter = await manager.findOne(WorkCenter, { where: { id: MOCK_WORK_CENTER.id } });
-
-        // If still not found, create a simple WorkCenter linked to the client so FK is satisfied
-        if (!workCenter) {
-          workCenter = manager.create(WorkCenter, {
+        let defaultWc = await manager.findOne(WorkCenter, { where: { id: MOCK_WORK_CENTER.id } });
+        if (!defaultWc) {
+          defaultWc = manager.create(WorkCenter, {
             name: MOCK_WORK_CENTER.name,
             address: 'Auto-created work center',
             contactName: null,
@@ -97,15 +120,50 @@ export class JobService {
             contactEmail: null,
             clientId: client.id,
           });
-          await manager.save(workCenter);
+          await manager.save(defaultWc);
         }
+        workCentersToAttach = [defaultWc];
+      } else if (isEmployerSelection) {
+        // Try to find an existing work center for this employer
+        let employerWc = await manager.findOne(WorkCenter, { where: { employer: { id: employer.id } } });
+        if (!employerWc) {
+          employerWc = manager.create(WorkCenter, {
+            name: MOCK_WORK_CENTER.name,
+            address: 'Auto-created employer work center',
+            contactName: null,
+            contactPhone: null,
+            contactEmail: null,
+            employer: employer,
+            clientId: null,
+          });
+          await manager.save(employerWc);
+        }
+        workCentersToAttach = [employerWc];
       }
 
-    /*
-    // Previous code to fetch WorkCenter from DB
-    // const workCenter = await manager.findOneOrFail(WorkCenter, { where: { id: createJobDto.workCenterId } });
-    */
-      const workers = await manager.findByIds(Worker, createJobDto.workerIds);
+      // Load workers referenced in DTO
+      const workers = (createJobDto.workerIds && createJobDto.workerIds.length)
+        ? await manager.findBy(Worker, { id: In(createJobDto.workerIds as number[]) })
+        : [];
+
+      // Normalize scheduleType coming from frontend to the backend ScheduleType enum.
+      // Frontend historically uses values like 'programming' and 'free' or 'flexible'.
+      const rawScheduleType: any = createJobDto.scheduleType;
+      let normalizedScheduleType: ScheduleType = ScheduleType.FREE;
+      if (typeof rawScheduleType !== 'undefined' && rawScheduleType !== null) {
+        const s = String(rawScheduleType).toLowerCase();
+        if (s === 'programming' || s === 'fixed') normalizedScheduleType = ScheduleType.FIXED;
+        else if (s === 'free' || s === 'flexible') normalizedScheduleType = ScheduleType.FREE;
+        else if (s === 'seasonal') normalizedScheduleType = ScheduleType.SEASONAL;
+        else {
+          // fallback: if DTO already contains a valid enum value, use it; otherwise default to FREE
+          if ((Object.values(ScheduleType) as string[]).includes(s)) {
+            normalizedScheduleType = s as ScheduleType;
+          } else {
+            normalizedScheduleType = ScheduleType.FREE;
+          }
+        }
+      }
 
       // Create job
       job = manager.create(Job, {
@@ -114,16 +172,98 @@ export class JobService {
         endDate: createJobDto.endDate,
         employer,
         client: client || null,
-        workCenter: workCenter || null,
+        workCenters: workCentersToAttach,
         workers,
         note: createJobDto.note,
         status: createJobDto.status || JobStatus.SCHEDULED, // Default to SCHEDULED if not provided
+        scheduleType: normalizedScheduleType,
       });
       await manager.save(job);
 
+      // Backwards compatibility: if the legacy job."workCenterId" column exists in the DB
+      // keep it populated with the first selected work center id so older queries/apps can still read it.
+      try {
+        if (workCentersToAttach && workCentersToAttach.length > 0) {
+          const firstWcId = workCentersToAttach[0].id;
+          await manager.query('UPDATE "job" SET "workCenterId" = $1 WHERE id = $2', [firstWcId, job.id]);
+        }
+      } catch (err) {
+        // Log but don't fail the job creation; the join table is the canonical mapping.
+        console.warn('Failed to update legacy job.workCenterId column:', err?.message || err);
+      }
+
+      // Persist season periods (if provided)
+      if (createJobDto.seasonPeriods && Array.isArray(createJobDto.seasonPeriods)) {
+        for (const periodDto of createJobDto.seasonPeriods) {
+          try {
+            // Ensure the DTO contains valid values; CreateSeasonPeriodDto enforces ISO strings.
+            const sp = manager.create(SeasonPeriod, {
+              job,
+              season: periodDto.season,
+              // TypeORM will accept a Date or a date string for a column typed as 'date'.
+              startDate: periodDto.startDate,
+              endDate: periodDto.endDate,
+            });
+            await manager.save(sp);
+          } catch (err) {
+            // If a single season period is invalid, log and continue with others;
+            // the DTO validation should normally prevent invalid values from reaching here.
+            console.warn('Failed to save season period for job', job?.id, err?.message || err);
+          }
+        }
+      }
+      // Persist seasonalSchedules (new weekly schedules) if provided
+      if (createJobDto.seasonalSchedules && Array.isArray(createJobDto.seasonalSchedules)) {
+        for (const ssDto of createJobDto.seasonalSchedules) {
+          try {
+            const ssEntity = manager.create(SeasonalSchedule, {
+              job,
+              season: ssDto.season,
+              startDate: ssDto.startDate || null,
+              endDate: ssDto.endDate || null,
+            });
+            await manager.save(ssEntity);
+
+            // persist each weekly shift
+            for (const w of ssDto.shifts || []) {
+              const shiftEnt = manager.create(Shift, {
+                seasonalSchedule: ssEntity,
+                startWeekday: w.startWeekday,
+                endWeekday: w.endWeekday,
+                baseStartTime: w.baseStartTime,
+                baseEndTime: w.baseEndTime,
+                isContinuous: !!w.isContinuous,
+                totalHours: w.totalHours || null,
+              });
+              await manager.save(shiftEnt);
+            }
+          } catch (err) {
+            console.warn('Failed to save seasonal schedule for job', job?.id, err?.message || err);
+          }
+        }
+      }
       // Shifts
       for (const shiftDto of createJobDto.shifts || []) {
-        const shift = manager.create(Shift, { ...shiftDto, job });
+        // Normalize and validate day against Weekday enum (shiftDto.day may be a string)
+        let dayValue: Weekday | undefined = undefined;
+        if (shiftDto.day) {
+          const d = String(shiftDto.day).toLowerCase();
+          if ((Object.values(Weekday) as string[]).includes(d)) {
+            dayValue = d as Weekday;
+          }
+        }
+
+        // Only set season if value is 'summer' or 'winter'.
+        const shiftPayload: any = { ...shiftDto, job };
+        if (dayValue) shiftPayload.day = dayValue;
+        if (
+          typeof shiftPayload.season !== 'undefined' &&
+          (shiftPayload.season === null || shiftPayload.season === '' ||
+            (shiftPayload.season !== 'summer' && shiftPayload.season !== 'winter'))
+        ) {
+          delete shiftPayload.season;
+        }
+        const shift = manager.create(Shift, shiftPayload);
         await manager.save(shift);
       }
 
@@ -163,15 +303,16 @@ export class JobService {
       }
     });
 
-    // Fetch with all relations
+    // Fetch with all relations (use seasonalSchedules instead of removed 'shifts' relation)
     return this.jobRepo.findOne({
       where: { id: job.id },
       relations: [
         'employer',
         'client',
-        'workCenter',
+        'workCenters',
         'workers',
-        'shifts',
+        'seasonalSchedules',
+        'seasonalSchedules.shifts',
         'signingMethods',
         'alerts',
         'tasks',
@@ -180,6 +321,10 @@ export class JobService {
       ],
     });
   }
+
+
+
+
 
   async getAllJobsRaw(): Promise<any[]> {
     return this.jobRepo.find();
@@ -199,14 +344,16 @@ async getTasksTabDataForUser(userId: number) {
     // Step 2a: EmployerUser → fetch jobs by employer
     jobs = await this.jobRepo.find({
       where: { employer: { id: employerUser.employer.id } },
-      relations: ['client', 'workCenter', 'workers', 'tasks'],
+      // include employer relation so we can surface a fallback name when client is null
+  relations: ['employer', 'client', 'workCenters', 'workers', 'tasks', 'tasks.workCenter'],
       select: {
         id: true,
         jobName: true,
+        employer: { id: true, name: true },
         client: { id: true, name: true },
-        workCenter: { id: true, name: true },
+        workCenters: { id: true, name: true },
         workers: { id: true, code: true },
-        tasks: { id: true, name: true, note: true, expectedDuration: true },
+  tasks: { id: true, name: true, note: true, expectedDuration: true, workCenterId: true },
       },
     });
   } else {
@@ -220,14 +367,14 @@ async getTasksTabDataForUser(userId: number) {
       // ClientUser → fetch jobs by client
       jobs = await this.jobRepo.find({
         where: { client: { id: clientUser.client.id } },
-        relations: ['client', 'workCenter', 'workers', 'tasks'],
+  relations: ['client', 'workCenters', 'workers', 'tasks', 'tasks.workCenter'],
         select: {
           id: true,
           jobName: true,
           client: { id: true, name: true },
-          workCenter: { id: true, name: true },
+          workCenters: { id: true, name: true },
           workers: { id: true, code: true },
-          tasks: { id: true, name: true, note: true, expectedDuration: true },
+          tasks: { id: true, name: true, note: true, expectedDuration: true, workCenterId: true },
         },
       });
     } else {
@@ -242,16 +389,17 @@ async getTasksTabDataForUser(userId: number) {
         jobs = await this.jobRepo
           .createQueryBuilder('job')
           .leftJoinAndSelect('job.client', 'client')
-          .leftJoinAndSelect('job.workCenter', 'workCenter')
+          .leftJoinAndSelect('job.workCenters', 'workCenters')
           .leftJoinAndSelect('job.workers', 'worker')
           .leftJoinAndSelect('job.tasks', 'tasks')
+          .leftJoinAndSelect('tasks.workCenter', 'taskWorkCenter')
           .where('worker.id = :workerId', { workerId: workerUser.worker.id })
           .select([
             'job.id', 'job.jobName',
             'client.id', 'client.name',
-            'workCenter.id', 'workCenter.name',
+            'workCenters.id', 'workCenters.name',
             'worker.id', 'worker.code',
-            'tasks.id', 'tasks.name', 'tasks.note', 'tasks.expectedDuration'
+            'tasks.id', 'tasks.name', 'tasks.note', 'tasks.expectedDuration', 'taskWorkCenter.id', 'taskWorkCenter.name'
           ])
           .getMany();
       } else {
@@ -288,7 +436,32 @@ async getTasksTabDataForUser(userId: number) {
     })),
   }));
 
-  return jobsWithWorkerNames;
+  // Step 5: Normalize employer-owned jobs so frontend can display a client name
+  const normalized = jobsWithWorkerNames.map(j => {
+    const isEmployerOwned = !j.client && !!j.employer;
+    // clientName fallback: client.name || employer.name
+    const clientName = j.client?.name || (j.employer ? j.employer.name : null);
+    // keep original shape but add normalized fields to help frontend when client is null
+    return {
+      ...j,
+      isEmployerOwned,
+      clientName,
+    };
+  });
+
+  // DEBUG: log normalized payload to help debug missing client/employer name
+  try {
+    // truncate large arrays for logs in case of big payload
+    console.log('getTasksTabDataForUser -> normalized count:', normalized.length);
+    if (normalized.length > 0) {
+      const sample = normalized.slice(0, 5).map(x => ({ id: x.id, client: x.client?.name || null, employer: x.employer?.name || null, clientName: x.clientName || null }));
+      console.log('getTasksTabDataForUser sample:', JSON.stringify(sample));
+    }
+  } catch (e) {
+    // ignore logging errors
+  }
+
+  return normalized;
 }
 
 
@@ -335,10 +508,23 @@ async deleteJob(jobId: number, employerUserId: number): Promise<void> {
     // 4. Delete signing methods
     await manager.delete(SigningMethod, { job: { id: jobId } });
 
-    // 5. Delete shifts
-    await manager.delete(Shift, { job: { id: jobId } });
+    // 5. Delete seasonal schedules and their shifts (new model)
+    // Find seasonal schedules for this job and delete child shifts first
+    const seasonalSchedules = await manager.find(SeasonalSchedule, { where: { job: { id: jobId } }, relations: ['shifts'] });
+    for (const ss of seasonalSchedules) {
+      if (ss.shifts && ss.shifts.length > 0) {
+        const shiftIds = ss.shifts.map(s => s.id).filter(Boolean) as number[];
+        if (shiftIds.length) {
+          await manager.delete(Shift, shiftIds);
+        }
+      }
+      await manager.delete(SeasonalSchedule, { id: ss.id });
+    }
 
-    // 6. Delete scan logs and work sessions
+    // 6. Delete season periods associated with this job
+    await manager.delete(SeasonPeriod, { job: { id: jobId } });
+
+    // 7. Delete scan logs and work sessions
     await manager.delete(ScanLog, { job: { id: jobId } });
     await manager.delete(WorkSession, { job: { id: jobId } });
 
@@ -364,7 +550,7 @@ async getAllJobsByEmployerFromToken(userId: number) {
 
     const jobs = await this.jobRepo.find({
       where: { employer: { id: employerId } },
-      relations: ['client', 'workCenter', 'tasks', 'workers', 'shifts'],
+  relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts'],
       order: { id: 'ASC' },
     });
 
@@ -389,11 +575,11 @@ async getAllJobsByEmployerFromToken(userId: number) {
       jobId: job.id,
       jobName: job.jobName,
       clientName: job.client?.name || '',
-      workCenter: job.workCenter?.name || '',
+  workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
       startDate: job.startDate, // Added
       endDate: job.endDate,     // Added
       status: job.status || JobStatus.SCHEDULED, // Added status if available
-      totalShifts: job.shifts?.length || 0,
+  totalShifts: job.seasonalSchedules?.reduce((acc, ss) => acc + (ss.shifts?.length || 0), 0) || 0,
       expectedDuration: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0),
       tasks: job.tasks?.map(task => task.name) || [],
       workers: job.workers.map(worker => ({
@@ -445,10 +631,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
       },
       relations: [
         'client', 
-        'workCenter', 
+        'workCenters', 
         'tasks', 
         'tasks.taskHistories', // Include task histories
-        'shifts', 
+        'seasonalSchedules',
+        'seasonalSchedules.shifts',
         'signingMethods', 
         'workSessions'
       ],
@@ -526,20 +713,22 @@ async getAllJobsByWorkerFromToken(userId: number) {
         jobId: job.id,
         jobName: job.jobName,
         clientName: job.client?.name || '',
-        workCenter: job.workCenter?.name || '',
+  workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
         status: job.status || JobStatus.SCHEDULED,
         startDate: job.startDate,
         endDate: job.endDate,
-        totalShifts: job.shifts?.length || 0,
+  totalShifts: job.seasonalSchedules?.reduce((acc, ss) => acc + (ss.shifts?.length || 0), 0) || 0,
         expectedDuration: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0),
         tasks: tasksForJob,
 
-        shifts: job.shifts?.map(shift => ({
-          shiftType: shift.shiftType,
-          startTime: shift.startTime,
-          endTime: shift.endTime,
+        shifts: (job.seasonalSchedules || []).flatMap(ss => (ss.shifts || []).map(shift => ({
+          startWeekday: shift.startWeekday,
+          endWeekday: shift.endWeekday,
+          baseStartTime: shift.baseStartTime,
+          baseEndTime: shift.baseEndTime,
+          isContinuous: shift.isContinuous,
           totalHours: shift.totalHours,
-        })) || [],
+        }))) ,
         signingMethods: job.signingMethods?.map(sm => ({
           methodType: sm.methodType,
           methodDetails: sm.methodDetails,
@@ -594,7 +783,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
       const jobs = await this.jobRepo.find({
         where: { client: { id: clientId } },
-        relations: ['client', 'workCenter', 'tasks', 'workers', 'shifts'],
+  relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts'],
         order: { id: 'ASC' },
       });
 
@@ -621,7 +810,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         jobNo: `JOB-${String(job.id).padStart(4, '0')}`,
         jobName: job.jobName,
         clientName: job.client?.name || '',
-        workCenter: job.workCenter?.name || '',
+  workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
         status: job.status || JobStatus.SCHEDULED, // Include job status
           startDate: job.startDate, // ✅ Added
   endDate: job.endDate,     // ✅ Added
@@ -630,14 +819,14 @@ async getAllJobsByWorkerFromToken(userId: number) {
           code: worker.code,
           name: workerIdToName.get(worker.id) || null,
         })),
-        shifts: job.shifts?.map(shift => ({
-          day: shift.day,
-          shiftType: shift.shiftType,
-          startTime: shift.startTime,
-          endTime: shift.endTime,
+        shifts: (job.seasonalSchedules || []).flatMap(ss => (ss.shifts || []).map(shift => ({
+          startWeekday: shift.startWeekday,
+          endWeekday: shift.endWeekday,
+          baseStartTime: shift.baseStartTime,
+          baseEndTime: shift.baseEndTime,
+          isContinuous: shift.isContinuous,
           totalHours: shift.totalHours,
-          scheduleType: shift.scheduleType,
-        })) || [],
+        }))) || [],
         tasks: job.tasks?.map(task => ({
           id: task.id,
           name: task.name,
@@ -696,10 +885,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
         where: whereClause,
         relations: [
           'client', 
-          'workCenter', 
+          'workCenters', 
           'tasks', 
           'workers', 
-          'shifts', 
+          'seasonalSchedules',
+          'seasonalSchedules.shifts',
           'signingMethods',
           'scanLogs',
           'workSessions',
@@ -764,7 +954,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
           jobNo: `JOB-${String(job.id).padStart(4, '0')}`,
           jobName: job.jobName,
           clientName: job.client?.name || '',
-          workCenter: job.workCenter?.name || '',
+          workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
           status: job.status || 'SCHEDULED',
           startDate: job.startDate,
           endDate: job.endDate,
@@ -773,14 +963,14 @@ async getAllJobsByWorkerFromToken(userId: number) {
             code: worker.code,
             name: workerIdToName.get(worker.id) || null,
           })),
-          shifts: job.shifts?.map(shift => ({
-            day: shift.day,
-            shiftType: shift.shiftType,
-            startTime: shift.startTime,
-            endTime: shift.endTime,
+          shifts: (job.seasonalSchedules || []).flatMap(ss => (ss.shifts || []).map(shift => ({
+            startWeekday: shift.startWeekday,
+            endWeekday: shift.endWeekday,
+            baseStartTime: shift.baseStartTime,
+            baseEndTime: shift.baseEndTime,
+            isContinuous: shift.isContinuous,
             totalHours: shift.totalHours,
-            scheduleType: shift.scheduleType,
-          })) || [],
+          }))) || [],
           // Security verification methods
           securityMethods: {
             available: job.signingMethods?.map(sm => ({
@@ -845,98 +1035,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     }
   }
 
-  /**
-   * Get detailed job analytics for client dashboard
-   */
-  // async getJobAnalyticsForClient(userId: number) {
-  //   try {
-  //     const clientUser = await this.clientUserRepo.findOne({
-  //       where: { user: { id: userId } },
-  //       relations: ['client'],
-  //     });
-
-  //     if (!clientUser?.client?.id) {
-  //       throw new Error('Client not found for this user');
-  //     }
-
-  //     const clientId = clientUser.client.id;
-
-  //     const jobs = await this.jobRepo.find({
-  //       where: { client: { id: clientId } },
-  //       relations: ['tasks', 'workSessions', 'scanLogs', 'signingMethods'],
-  //     });
-
-  //     // Calculate analytics
-  //     const totalJobs = jobs.length;
-  //     const completedJobs = jobs.filter(job => job.status === JobStatus.COMPLETED).length;
-  //     const inProgressJobs = jobs.filter(job => job.status === JobStatus.IN_PROGRESS).length;
-  //     const scheduledJobs = jobs.filter(job => job.status === JobStatus.SCHEDULED).length;
-
-  //     // Time analytics
-  //     const totalWorkMinutes = jobs.reduce((sum, job) => {
-  //       return sum + (job.workSessions?.reduce((sessSum, sess) => sessSum + (sess.totalWorkMinutes || 0), 0) || 0);
-  //     }, 0);
-
-  //     // Task analytics
-  //     const totalTasks = jobs.reduce((sum, job) => sum + (job.tasks?.length || 0), 0);
-  //     const completedTasks = jobs.reduce((sum, job) => {
-  //       return sum + (job.tasks?.filter(task => task.isCompleted).length || 0);
-  //     }, 0);
-
-  //     // Security method usage
-  //     const securityMethodUsage = new Map<string, number>();
-  //     jobs.forEach(job => {
-  //       job.signingMethods?.forEach(method => {
-  //         const count = securityMethodUsage.get(method.methodType) || 0;
-  //         securityMethodUsage.set(method.methodType, count + 1);
-  //       });
-  //     });
-
-  //     // Recent activity (last 30 days)
-  //     const thirtyDaysAgo = new Date();
-  //     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-  //     const recentJobs = jobs.filter(job => new Date(job.startDate) >= thirtyDaysAgo);
-
-  //     return {
-  //       message: 'Success',
-  //       data: {
-  //         jobStats: {
-  //           total: totalJobs,
-  //           completed: completedJobs,
-  //           inProgress: inProgressJobs,
-  //           scheduled: scheduledJobs,
-  //           completionRate: totalJobs > 0 ? Math.round((completedJobs / totalJobs) * 100) : 0,
-  //         },
-  //         timeStats: {
-  //           totalHours: Math.round((totalWorkMinutes / 60) * 100) / 100,
-  //           averageJobHours: totalJobs > 0 ? Math.round(((totalWorkMinutes / 60) / totalJobs) * 100) / 100 : 0,
-  //         },
-  //         taskStats: {
-  //           total: totalTasks,
-  //           completed: completedTasks,
-  //           completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
-  //         },
-  //         securityMethodStats: Object.fromEntries(securityMethodUsage),
-  //         recentActivity: {
-  //           last30Days: recentJobs.length,
-  //           trend: 'stable', // Could be calculated based on historical data
-  //         },
-  //       },
-  //       isSuccess: true,
-  //       statusCode: 200,
-  //       developerError: '',
-  //     };
-  //   } catch (error) {
-  //     return {
-  //       message: 'Error fetching job analytics',
-  //       data: null,
-  //       isSuccess: false,
-  //       statusCode: 500,
-  //       developerError: error.message,
-  //     };
-  //   }
-  // }
+  
 
   // ========== QR Code Generation and Scanning Methods ========== //
 
@@ -947,7 +1046,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     try {
       const job = await this.jobRepo.findOne({
         where: { id: generateQrCodeDto.jobId },
-        relations: ['client', 'workCenter', 'shifts'],
+        relations: ['client', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
       });
 
       if (!job) {
@@ -959,7 +1058,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         jobId: job.id,
         jobName: job.jobName,
         clientName: job.client?.name || '',
-        workCenter: job.workCenter?.name || '',
+  workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
         startDate: job.startDate,
         endDate: job.endDate,
         timestamp: new Date().toISOString(),
@@ -1276,7 +1375,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     // Update job status based on check-out and task completion
     const job = await this.jobRepo.findOne({
       where: { id: jobId },
-      relations: ['tasks', 'workSessions'],
+  relations: ['tasks', 'tasks.workCenter', 'workSessions'],
     });
 
     if (job) {
@@ -1733,7 +1832,7 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
     try {
       const job = await this.jobRepo.findOne({
         where: { id: jobId },
-        relations: ['employer', 'client', 'workCenter'],
+        relations: ['employer', 'client', 'workCenters'],
       });
 
       if (!job) {
@@ -1759,9 +1858,9 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
   async getJobsByStatus(status: JobStatus, userId: number): Promise<Job[]> {
     try {
       return await this.jobRepo.find({
-        where: { status },
-        relations: ['client', 'workCenter', 'workers', 'tasks', 'shifts'],
-      });
+          where: { status },
+          relations: ['client', 'workCenters', 'workers', 'tasks', 'tasks.workCenter', 'seasonalSchedules', 'seasonalSchedules.shifts'],
+        });
     } catch (error) {
       throw new Error(`Failed to fetch jobs by status: ${error.message}`);
     }
@@ -1774,7 +1873,7 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
     try {
       const job = await this.jobRepo.findOne({
         where: { id: jobId },
-        relations: ['scanLogs', 'tasks'],
+        relations: ['scanLogs', 'tasks', 'tasks.workCenter'],
       });
 
       if (!job) {
@@ -1917,7 +2016,7 @@ async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
     const todayString = new Date().toISOString().split('T')[0];
     const job = await this.jobRepo.findOne({
       where: { id: jobId },
-      relations: ['tasks', 'tasks.taskHistories', 'workers'],
+  relations: ['tasks', 'tasks.workCenter', 'tasks.taskHistories', 'workers'],
     });
     if (!job) return;
     // Only save histories for tasks that are scheduled for today according to recurrence rules.
@@ -2024,7 +2123,7 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     try {
       const job = await this.jobRepo.findOne({
         where: { id: jobId },
-        relations: ['client', 'workCenter', 'tasks', 'tasks.taskHistories', 'workers'],
+        relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'tasks.taskHistories', 'workers'],
       });
 
       if (!job) {
@@ -2116,7 +2215,7 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           jobId: job.id,
           jobName: job.jobName,
           clientName: job.client?.name || '',
-          workCenter: job.workCenter?.name || '',
+          workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
           workerName,
           tasks,
         },

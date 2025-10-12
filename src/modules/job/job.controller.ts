@@ -55,7 +55,8 @@ async deleteJob(@Param('id') jobId: number, @Req() req) {
 @Get('tasks-tab')
 async getTasksTabData(@Req() req) {
   const employerUserId = req.user.id;
-  return this.jobService.getTasksTabDataForUser(employerUserId);
+  const data = await this.jobService.getTasksTabDataForUser(employerUserId);
+  return { message: 'Success', data, isSuccess: true, statusCode: 200 };
 }
 
 
