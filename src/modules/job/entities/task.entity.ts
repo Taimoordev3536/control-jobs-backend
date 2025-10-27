@@ -1,7 +1,3 @@
-
-
-
-// src/entity/task.entity.ts
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany } from 'typeorm';
 import { Job } from './job.entity';
 import { ShiftType } from './shift.entity';
@@ -73,6 +69,14 @@ export class Task {
 
   @Column('simple-array', { nullable: true })
   monthlyWeekdays: number[]; // 0=Sunday … 6=Saturday
+
+  // Option: schedule on first occurrence of a weekday in the month (0=Sunday … 6=Saturday)
+  @Column({ type: 'int', nullable: true })
+  monthlyStartWeekday?: number | null;
+
+  // Option: schedule on last occurrence of a weekday in the month (0=Sunday … 6=Saturday)
+  @Column({ type: 'int', nullable: true })
+  monthlyEndWeekday?: number | null;
 
   // Yearly
   @Column('simple-array', { nullable: true })

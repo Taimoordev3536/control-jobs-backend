@@ -1,6 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
 import { SurveyResponse } from './survey-response.entity';
-import { SurveyQuestion } from './survey-question.entity';
 
 @Entity('survey_answer')
 export class SurveyAnswer {
@@ -10,9 +9,14 @@ export class SurveyAnswer {
   @ManyToOne(() => SurveyResponse, response => response.answers, { nullable: false })
   response: SurveyResponse;
 
-  @ManyToOne(() => SurveyQuestion, question => question.answers, { nullable: false })
-  question: SurveyQuestion;
+  // Index of the question within the survey.questions array (0-based)
+  @Column({ type: 'int', nullable: true })
+  questionIndex: number | null;
+
+  // Cached question text at the time of response for denormalization and history
+  @Column({ type: 'text', nullable: true })
+  questionText: string | null;
 
   @Column({ type: 'text', nullable: true })
   answerText: string;
-} 
+}

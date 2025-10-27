@@ -92,4 +92,15 @@ export class CreateJobDto {
   @Type(() => CreateSurveyDto)
   @IsOptional()
   survey?: CreateSurveyDto;
+
+  // New separate surveys for customer and worker
+  @ValidateNested()
+  @Type(() => CreateSurveyDto)
+  @IsOptional()
+  customerSurvey?: CreateSurveyDto;
+
+  @ValidateNested()
+  @Type(() => CreateSurveyDto)
+  @IsOptional()
+  workerSurvey?: CreateSurveyDto;
 } 

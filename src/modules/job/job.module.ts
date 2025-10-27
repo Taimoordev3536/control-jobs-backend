@@ -15,7 +15,6 @@ import { Client } from '../clients/entities/client.entity';
 import { WorkCenter } from '../work-centers/entities/work-center.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { Survey } from '../survey/entities/survey.entity';
-import { SurveyQuestion } from '../survey/entities/survey-question.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
@@ -37,7 +36,6 @@ import { AlertsModule } from '../realtime/alerts.module';
       WorkCenter,
       Employer,
       Survey,
-      SurveyQuestion,
       EmployerUser,
       WorkerUser,
       ClientUser,

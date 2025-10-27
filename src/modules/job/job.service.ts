@@ -23,7 +23,6 @@ import { ClientUser } from '../clients/entities/client-user.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { CreateJobDto } from './dto/create-job.dto';
 import { Survey } from '../survey/entities/survey.entity';
-import { SurveyQuestion } from '../survey/entities/survey-question.entity';
 import { JobTasksTabItemDto } from './dto/job-tasks-tab.dto';
 import { User } from '../users/entities/user.entity';
 import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
@@ -49,8 +48,7 @@ export class JobService {
     @InjectRepository(Employer) private employerRepo: Repository<Employer>,
     @InjectRepository(EmployerUser) private employerUserRepo: Repository<EmployerUser>,
     @InjectRepository(ClientUser) private clientUserRepo: Repository<ClientUser>,
-    @InjectRepository(Survey) private surveyRepo: Repository<Survey>,
-    @InjectRepository(SurveyQuestion) private surveyQuestionRepo: Repository<SurveyQuestion>,
+  @InjectRepository(Survey) private surveyRepo: Repository<Survey>,
     @InjectRepository(WorkerUser) private workerUserRepo: Repository<WorkerUser>,
     private dataSource: DataSource,
     private alertsService: AlertsService,
@@ -282,24 +280,116 @@ export class JobService {
       // Tasks (optional)
       if (createJobDto.tasks) {
         for (const taskDto of createJobDto.tasks) {
-          const task = manager.create(Task, { ...taskDto, job });
+          // Normalize monthly weekday inputs so backend stores canonical 0..6 values
+          const payload: any = { ...taskDto, job };
+
+          const normalizeWeekday = (v: any) => {
+            if (v === null || typeof v === 'undefined' || v === '') return null;
+            let n = Number(v);
+            if (isNaN(n)) return null;
+            // allow 1..7 (1=Mon..7=Sun) or 0..6 (0=Sun..6=Sat)
+            // convert 7 -> 0 (Sunday), and any >6 -> mod 7
+            if (n === 7) n = 0;
+            if (n > 6) n = n % 7;
+            if (n < 0) n = Math.abs(n) % 7;
+            return n;
+          }
+
+          if (typeof payload.monthlyStartWeekday !== 'undefined') {
+            payload.monthlyStartWeekday = normalizeWeekday(payload.monthlyStartWeekday);
+          }
+          if (typeof payload.monthlyEndWeekday !== 'undefined') {
+            payload.monthlyEndWeekday = normalizeWeekday(payload.monthlyEndWeekday);
+          }
+
+          const task = manager.create(Task, payload);
           await manager.save(task);
         }
       }
 
       // Survey (optional)
       if (createJobDto.survey) {
+        const sdto = createJobDto.survey as any;
+        // Prefer normalized keys (questionText, rateDigit, greetingText, sendTime) but
+        // fall back to legacy keys (title, monitoringValue, description, hour) for compatibility.
         const survey = manager.create(Survey, {
-          ...createJobDto.survey,
           job,
           employer,
+          questionText: typeof sdto.questionText !== 'undefined' && sdto.questionText !== null ? sdto.questionText : (sdto.title || null),
+          rateDigit: typeof sdto.rateDigit !== 'undefined' ? Number(sdto.rateDigit) : (typeof sdto.monitoringValue !== 'undefined' ? Number(sdto.monitoringValue) : null),
+          textAlertTracking: typeof sdto.textAlertTracking !== 'undefined' ? sdto.textAlertTracking : (sdto.textAlertTracking || null),
+          greetingText: typeof sdto.greetingText !== 'undefined' && sdto.greetingText !== null ? sdto.greetingText : (sdto.description || null),
+          periodicity: sdto.periodicity || null,
+          startDate: sdto.startDate || null,
+          endDate: sdto.endDate || null,
+          interval: typeof sdto.interval !== 'undefined' ? Number(sdto.interval) : null,
+          monthlyDays: sdto.monthlyDays ? JSON.stringify(sdto.monthlyDays) : null,
+          monthlyWeekdays: sdto.monthlyWeekdays ? JSON.stringify(sdto.monthlyWeekdays) : null,
+          // accept either new "monthlyStartWeekday/monthlyEndWeekday" or legacy "monthlyFirstWeekday/monthlyLastWeekday"
+          monthlyStartWeekday: (typeof sdto.monthlyStartWeekday !== 'undefined'
+            ? sdto.monthlyStartWeekday
+            : (typeof sdto.monthlyFirstWeekday !== 'undefined' ? sdto.monthlyFirstWeekday : null)),
+          monthlyEndWeekday: (typeof sdto.monthlyEndWeekday !== 'undefined'
+            ? sdto.monthlyEndWeekday
+            : (typeof sdto.monthlyLastWeekday !== 'undefined' ? sdto.monthlyLastWeekday : null)),
+          sendTime: typeof sdto.sendTime !== 'undefined' && sdto.sendTime !== null ? sdto.sendTime : (sdto.hour || null),
         });
-        await manager.save(survey);
-        // Survey Questions
-        for (const questionDto of createJobDto.survey.questions || []) {
-          const question = manager.create(SurveyQuestion, { ...questionDto, survey });
-          await manager.save(question);
-        }
+  await manager.save(survey);
+      }
+
+      // Customer Survey (optional)
+      if (createJobDto.customerSurvey) {
+        const cs = createJobDto.customerSurvey as any;
+        const customerSurvey = manager.create(Survey, {
+          job,
+          employer,
+          client: client || null,
+          questionText: typeof cs.questionText !== 'undefined' && cs.questionText !== null ? cs.questionText : (cs.title || null),
+          rateDigit: typeof cs.rateDigit !== 'undefined' ? Number(cs.rateDigit) : (typeof cs.monitoringValue !== 'undefined' ? Number(cs.monitoringValue) : null),
+          textAlertTracking: typeof cs.textAlertTracking !== 'undefined' ? cs.textAlertTracking : (cs.textAlertTracking || null),
+          greetingText: typeof cs.greetingText !== 'undefined' && cs.greetingText !== null ? cs.greetingText : (cs.description || null),
+          periodicity: cs.periodicity || null,
+          startDate: cs.startDate || null,
+          endDate: cs.endDate || null,
+          interval: typeof cs.interval !== 'undefined' ? Number(cs.interval) : null,
+          monthlyDays: cs.monthlyDays ? JSON.stringify(cs.monthlyDays) : null,
+          monthlyWeekdays: cs.monthlyWeekdays ? JSON.stringify(cs.monthlyWeekdays) : null,
+          monthlyStartWeekday: (typeof cs.monthlyStartWeekday !== 'undefined'
+            ? cs.monthlyStartWeekday
+            : (typeof cs.monthlyFirstWeekday !== 'undefined' ? cs.monthlyFirstWeekday : null)),
+          monthlyEndWeekday: (typeof cs.monthlyEndWeekday !== 'undefined'
+            ? cs.monthlyEndWeekday
+            : (typeof cs.monthlyLastWeekday !== 'undefined' ? cs.monthlyLastWeekday : null)),
+          sendTime: typeof cs.sendTime !== 'undefined' && cs.sendTime !== null ? cs.sendTime : (cs.hour || null),
+        });
+  await manager.save(customerSurvey);
+      }
+
+      // Worker Survey (optional)
+      if (createJobDto.workerSurvey) {
+        const ws = createJobDto.workerSurvey as any;
+        const workerSurvey = manager.create(Survey, {
+          job,
+          employer,
+          questionText: typeof ws.questionText !== 'undefined' && ws.questionText !== null ? ws.questionText : (ws.title || null),
+          rateDigit: typeof ws.rateDigit !== 'undefined' ? Number(ws.rateDigit) : (typeof ws.monitoringValue !== 'undefined' ? Number(ws.monitoringValue) : null),
+          textAlertTracking: typeof ws.textAlertTracking !== 'undefined' ? ws.textAlertTracking : (ws.textAlertTracking || null),
+          greetingText: typeof ws.greetingText !== 'undefined' && ws.greetingText !== null ? ws.greetingText : (ws.description || null),
+          periodicity: ws.periodicity || null,
+          startDate: ws.startDate || null,
+          endDate: ws.endDate || null,
+          interval: typeof ws.interval !== 'undefined' ? Number(ws.interval) : null,
+          monthlyDays: ws.monthlyDays ? JSON.stringify(ws.monthlyDays) : null,
+          monthlyWeekdays: ws.monthlyWeekdays ? JSON.stringify(ws.monthlyWeekdays) : null,
+          monthlyStartWeekday: (typeof ws.monthlyStartWeekday !== 'undefined'
+            ? ws.monthlyStartWeekday
+            : (typeof ws.monthlyFirstWeekday !== 'undefined' ? ws.monthlyFirstWeekday : null)),
+          monthlyEndWeekday: (typeof ws.monthlyEndWeekday !== 'undefined'
+            ? ws.monthlyEndWeekday
+            : (typeof ws.monthlyLastWeekday !== 'undefined' ? ws.monthlyLastWeekday : null)),
+          sendTime: typeof ws.sendTime !== 'undefined' && ws.sendTime !== null ? ws.sendTime : (ws.hour || null),
+        });
+  await manager.save(workerSurvey);
       }
     });
 
@@ -317,7 +407,6 @@ export class JobService {
         'alerts',
         'tasks',
         'surveys',
-        'surveys.questions',
       ],
     });
   }
@@ -495,7 +584,7 @@ async deleteJob(jobId: number, employerUserId: number): Promise<void> {
     // 1. Delete survey questions and surveys
     const surveys = await manager.find(Survey, { where: { job: { id: jobId } } });
     for (const survey of surveys) {
-      await manager.delete(SurveyQuestion, { survey: { id: survey.id } });
+      // questions are embedded in the survey row now, so just delete the survey
       await manager.delete(Survey, { id: survey.id });
     }
 
@@ -2382,6 +2471,39 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
             cur.setMonth(cur.getMonth() + interval)
           }
         }
+        // NEW: support selecting the first occurrence of a weekday in each month
+        const monthlyStartWeekday = (task as any).monthlyStartWeekday
+        if (typeof monthlyStartWeekday !== 'undefined' && monthlyStartWeekday !== null) {
+          const wd = Number(monthlyStartWeekday)
+          const cur = new Date(startDate.getFullYear(), startDate.getMonth(), 1)
+          while (cur <= endDate) {
+            const year = cur.getFullYear(); const month = cur.getMonth()
+            const firstDayOfMonth = new Date(year, month, 1).getDay()
+            const offset = (wd - firstDayOfMonth + 7) % 7
+            const dayOfMonth = 1 + offset
+            const candidate = new Date(year, month, dayOfMonth)
+            addIfInRange(candidate)
+            cur.setMonth(cur.getMonth() + interval)
+          }
+        }
+
+        // NEW: support selecting the last occurrence of a weekday in each month
+        const monthlyEndWeekday = (task as any).monthlyEndWeekday
+        if (typeof monthlyEndWeekday !== 'undefined' && monthlyEndWeekday !== null) {
+          const wd = Number(monthlyEndWeekday)
+          const cur = new Date(startDate.getFullYear(), startDate.getMonth(), 1)
+          while (cur <= endDate) {
+            const year = cur.getFullYear(); const month = cur.getMonth()
+            const lastDay = new Date(year, month + 1, 0).getDate()
+            const lastDate = new Date(year, month, lastDay)
+            const lastWeekday = lastDate.getDay()
+            const offset = (lastWeekday - wd + 7) % 7
+            const dayOfMonth = lastDay - offset
+            const candidate = new Date(year, month, dayOfMonth)
+            addIfInRange(candidate)
+            cur.setMonth(cur.getMonth() + interval)
+          }
+        }
       } else if (task.periodicity === 'yearly') {
         const months: number[] = (task as any).yearlyMonths || [] // 1..12
         const days: number[] = (task as any).yearlyDays || []
@@ -2414,6 +2536,8 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
       } else if (task.periodicity === 'monthly') {
         const md = (task as any).monthlyDays || []
         const mw = (task as any).monthlyWeekdays || []
+        const ms = (task as any).monthlyStartWeekday
+        const me = (task as any).monthlyEndWeekday
         if (md && md.length) {
           periodicityValue = `Every ${interval} month(s) on days ${md.join(', ')}`
         } else if (mw && mw.length) {
@@ -2429,6 +2553,16 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           const nameList = norm.map(n => names[n]).filter(Boolean)
           // match requested format and include numeric mapping note
           periodicityValue = `Every ${interval} month(s) on weekdays ${nameList.join(', ')} (0=Sunday, 1=Monday, …, 6=Saturday) starting ${startDateStr}`
+        } else if (typeof ms !== 'undefined' && ms !== null) {
+          const names = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+          const n = Number(ms)
+          const name = names[(n === 7 ? 0 : (n > 6 ? n % 7 : n))] || String(ms)
+          periodicityValue = `Every ${interval} month(s) on the first ${name} starting ${startDateStr}`
+        } else if (typeof me !== 'undefined' && me !== null) {
+          const names = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+          const n = Number(me)
+          const name = names[(n === 7 ? 0 : (n > 6 ? n % 7 : n))] || String(me)
+          periodicityValue = `Every ${interval} month(s) on the last ${name} starting ${startDateStr}`
         } else {
           periodicityValue = `Every ${interval} month(s) starting ${startDateStr}`
         }

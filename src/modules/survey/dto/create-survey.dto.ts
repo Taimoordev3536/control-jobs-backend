@@ -1,17 +1,58 @@
-import { IsString, IsOptional, IsArray, ValidateNested } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsInt } from 'class-validator';
 import { Type } from 'class-transformer';
-import { CreateSurveyQuestionDto } from './create-survey-question.dto';
 
 export class CreateSurveyDto {
   @IsString()
-  title: string;
-
-  @IsString()
   @IsOptional()
-  description?: string;
+  questionText?: string;
 
+  @IsOptional()
+  @IsInt()
+  rateDigit?: number;
+
+  @IsOptional()
+  @IsString()
+  textAlertTracking?: string;
+
+  @IsOptional()
+  @IsString()
+  greetingText?: string;
+
+  @IsOptional()
+  @IsString()
+  periodicity?: string; // daily|weekly|monthly
+
+  @IsOptional()
+  @IsInt()
+  interval?: number;
+
+  @IsOptional()
+  @IsString()
+  sendTime?: string; // HH:MM or HH:MM:SS
+
+  @IsOptional()
+  @IsString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsString()
+  endDate?: string;
+
+  @IsOptional()
   @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CreateSurveyQuestionDto)
-  questions: CreateSurveyQuestionDto[];
+  monthlyDays?: any[];
+
+  @IsOptional()
+  @IsArray()
+  monthlyWeekdays?: any[];
+
+  @IsOptional()
+  @IsInt()
+  monthlyStartWeekday?: number;
+
+  @IsOptional()
+  @IsInt()
+  monthlyEndWeekday?: number;
+
+  // questions are no longer accepted in the CreateSurvey DTO; questions are not stored on the survey row
 } 

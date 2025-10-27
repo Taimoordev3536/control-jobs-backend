@@ -21,7 +21,7 @@ async function runSingle() {
   const queryRunner = AppDataSource.createQueryRunner();
   try {
     const requested = process.argv[2];
-    const defaultMigration = '.1765760000000-MigrateJobWorkCenters.ts';
+    const defaultMigration = '20251023_normalize_survey_columns.ts';
     const migrationImportPath = requested || defaultMigration;
     const migrationModule = await import(migrationImportPath);
     const MigrationClass = Object.values(migrationModule)[0] as any;

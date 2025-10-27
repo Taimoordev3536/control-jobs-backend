@@ -120,6 +120,18 @@ export class CreateTaskDto {
   @IsInt({ each: true })
   monthlyWeekdays?: number[];
 
+  // New: pick the first occurrence of a weekday in the month (0=Sun..6=Sat)
+  @ValidateIf(o => o.periodicity === TaskPeriodicity.MONTHLY)
+  @IsOptional()
+  @IsInt()
+  monthlyStartWeekday?: number;
+
+  // New: pick the last occurrence of a weekday in the month (0=Sun..6=Sat)
+  @ValidateIf(o => o.periodicity === TaskPeriodicity.MONTHLY)
+  @IsOptional()
+  @IsInt()
+  monthlyEndWeekday?: number;
+
   // ---------- Yearly ----------
   @ValidateIf(o => o.periodicity === TaskPeriodicity.YEARLY)
   @IsArray()
