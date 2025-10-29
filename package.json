@@ -43,7 +43,7 @@
     "@nestjs/platform-socket.io": "^10.4.20",
     "@nestjs/typeorm": "^10.0.2",
     "@nestjs/websockets": "^10.4.20",
-    "@sendgrid/mail": "^8.1.5",
+  "resend": "^6.1.2",
     "@types/luxon": "^3.7.1",
     "@types/qrcode": "^1.5.5",
     "aws-sdk": "^2.1692.0",

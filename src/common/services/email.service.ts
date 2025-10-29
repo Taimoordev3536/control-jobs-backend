@@ -1,23 +1,28 @@
 import { Injectable } from '@nestjs/common';
-import * as sgMail from '@sendgrid/mail';
+import { Resend } from 'resend';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class EmailService {
+  private resendClient: any;
   constructor(private configService: ConfigService) {
-    // Initialize SendGrid with API key from environment variables
-    const sendgridApiKey = this.configService.get<string>('SENDGRID_API_KEY');
-    if (sendgridApiKey) {
-      sgMail.setApiKey(sendgridApiKey);
+    // Initialize Resend with API key from environment variables
+    const resendApiKey = this.configService.get<string>('RESEND_API_KEY');
+    if (resendApiKey) {
+      try {
+        this.resendClient = new Resend(resendApiKey);
+      } catch (err) {
+        console.warn('Failed to initialize Resend client:', err);
+      }
     } else {
-      console.warn('SENDGRID_API_KEY not found in environment variables');
+      console.warn('RESEND_API_KEY not found in environment variables');
     }
-    
-    // Log a warning if SENDGRID_FROM_EMAIL is not set
-    const fromEmail = this.configService.get<string>('SENDGRID_FROM_EMAIL');
+
+    // Log a warning if RESEND_FROM_EMAIL is not set
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
     if (!fromEmail) {
-      console.warn('SENDGRID_FROM_EMAIL not found in environment variables. You must set this to a verified sender identity.');
-      console.warn('Visit https://sendgrid.com/docs/for-developers/sending-email/sender-identity/ to learn how to verify a sender identity.');
+      console.warn('RESEND_FROM_EMAIL not found in environment variables. You must set this to a verified sender identity.');
+      console.warn('Configure a verified sender identity in Resend dashboard and set RESEND_FROM_EMAIL accordingly.');
     }
   }
 
@@ -28,7 +33,7 @@ export class EmailService {
    * @param password - Generated password
    * @param userType - Type of user (partner, employer, client, worker)
    * @param loginEmail - Email address to use for login (if different from recipient)
-   * @returns Promise resolving to SendGrid response
+  * @returns Promise resolving to email provider response
    */
   async sendUserCredentials(
     to: string,
@@ -38,9 +43,9 @@ export class EmailService {
     loginEmail?: string,
   ): Promise<any> {
     try {
-      // IMPORTANT: This email MUST be verified in SendGrid dashboard as a Sender Identity
-      // Visit https://sendgrid.com/docs/for-developers/sending-email/sender-identity/ for more information
-      const fromEmail = this.configService.get<string>('SENDGRID_FROM_EMAIL');
+  // IMPORTANT: This email MUST be verified in your email provider (Resend) as a Sender Identity
+  // Configure a verified sender identity in the provider dashboard for best deliverability
+  const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
       
       // Use loginEmail if provided, otherwise use the recipient email as the login email
       const actualLoginEmail = loginEmail || to;
@@ -63,29 +68,36 @@ export class EmailService {
       `;
       
       try {
-        // If we have a verified sender email, use SendGrid
-        if (fromEmail) {
-          const msg = {
-            to,
+        // If we have a verified sender email and a Resend client, use Resend
+        if (fromEmail && this.resendClient && this.resendClient.emails) {
+          const payload: any = {
             from: fromEmail,
+            to,
             subject: emailSubject,
             html: emailHtml,
           };
-          
-          const response = await sgMail.send(msg);
-          console.log('Email sent successfully to', to);
+
+          // Send via Resend
+          const response = await this.resendClient.emails.send(payload);
+          // Log full provider response for troubleshooting (contains data.id on success or error)
+          console.log('Resend send response for', to, ':', response);
+          if (response && (response as any).error) {
+            console.error('Resend reported an error sending email to', to, ':', (response as any).error);
+          } else {
+            console.log('Email (Resend) accepted. email id:', (response as any)?.data?.id || '(no id returned)');
+          }
           return response;
         } else {
-          // If no verified sender email is configured, log the credentials instead
-          console.log('=== CREDENTIALS (NO EMAIL SENT - SENDGRID_FROM_EMAIL NOT CONFIGURED) ===');
+          // If no verified sender email or client is configured, log the credentials instead
+          console.log('=== CREDENTIALS (NO EMAIL SENT - RESEND_FROM_EMAIL OR RESEND_API_KEY NOT CONFIGURED) ===');
           console.log(`User: ${name}`);
           console.log(`Type: ${userType}`);
           console.log(`Login Email: ${actualLoginEmail}`);
           console.log(`Password: ${password}`);
           console.log('=== END CREDENTIALS ===');
-          console.log('To enable email sending, please configure SENDGRID_FROM_EMAIL with a verified sender identity');
-          
-          // Return a mock response
+          console.log('To enable email sending, please configure RESEND_FROM_EMAIL and RESEND_API_KEY with valid values');
+
+          // Return a mock response for compatibility
           return {
             statusCode: 200,
             body: 'Email not sent - credentials logged to console',
@@ -93,8 +105,8 @@ export class EmailService {
           };
         }
       } catch (error) {
-        // If SendGrid fails, log the credentials as a fallback
-        console.error('Failed to send email. Logging credentials to console instead:');
+        // If sending fails, log the credentials as a fallback
+        console.error('Failed to send email via Resend. Logging credentials to console instead:');
         console.log('=== CREDENTIALS (EMAIL SENDING FAILED) ===');
         console.log(`User: ${name}`);
         console.log(`Type: ${userType}`);
@@ -107,8 +119,8 @@ export class EmailService {
       }
     } catch (error) {
       console.error('Error sending email:', error);
-      if (error.response) {
-        console.error('SendGrid API error:', error.response.body);
+      if (error && (error.response || error.body)) {
+        console.error('Email provider API error:', error.response?.body || error.body || error);
       }
       throw error;
     }
