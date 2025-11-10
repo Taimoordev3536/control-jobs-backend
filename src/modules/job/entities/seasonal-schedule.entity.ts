@@ -18,11 +18,17 @@ export class SeasonalSchedule {
   @Column({ type: 'enum', enum: Season, enumName: 'season_enum', nullable: false })
   season: Season;
 
-  @Column({ type: 'date', nullable: true, name: 'start_date' })
-  startDate?: Date;
+  // Store only Day-Month (DD-MM). We intentionally do not store year because
+  // seasonal schedules repeat every year.
+  @Column({ type: 'varchar', length: 5, nullable: true, name: 'start_date' })
+  startDate?: string | null;
 
-  @Column({ type: 'date', nullable: true, name: 'end_date' })
-  endDate?: Date;
+  // Store only Day-Month (DD-MM)
+  @Column({ type: 'varchar', length: 5, nullable: true, name: 'end_date' })
+  endDate?: string | null;
+
+  @Column({ type: 'integer', name: 'total_week_hours', default: 0 })
+  totalWeekHours: number;
 
   @OneToMany(() => Shift, shift => shift.seasonalSchedule, { cascade: true })
   shifts: Shift[];

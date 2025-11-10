@@ -4,16 +4,13 @@ import { Job } from './job.entity';
 export enum SigningMethodType {
   MOBILE = 'mobile',
   PC = 'pc',
-  CALL = 'call',
 }
 
 export enum SigningMethodDetail {
-  QRCODE = 'qrcode',
-  WIFI = 'wifi',
-  GPS = 'gps',
-  NFC = 'nfc',
+  WEB = 'web',
   IP = 'ip',
-  CALLERID = 'callerid',
+  GPS = 'gps',
+  QRCODE = 'qrcode',
 }
 
 @Entity('signing_method')
@@ -21,15 +18,18 @@ export class SigningMethod {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => Job, job => job.signingMethods, { nullable: false })
+  @ManyToOne(() => Job, (job) => job.signingMethods, { nullable: false, onDelete: 'CASCADE' })
   job: Job;
 
+  // "mobile" or "laptop"
   @Column({ type: 'enum', enum: SigningMethodType })
   methodType: SigningMethodType;
 
-  @Column({ type: 'simple-array' })
+  // e.g., ['web', 'gps', 'qrcode']
+  @Column({ type: 'simple-array', nullable: true })
   methodDetails: SigningMethodDetail[];
 
+  // Identity verification toggle
   @Column({ type: 'boolean', default: false })
   verifyIdentity: boolean;
-} 
+}
