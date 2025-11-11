@@ -1039,13 +1039,13 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
       const clientId = clientUser.client.id;
 
+      // Keep relations consistent with employer endpoint and include signingMethods
       const jobs = await this.jobRepo.find({
         where: { client: { id: clientId } },
-  relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts'],
+        relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts', 'signingMethods'],
         order: { id: 'ASC' },
       });
 
-      // Get worker names for all workers in all jobs
       const workerIds = jobs.flatMap(job => job.workers.map(w => w.id));
       const uniqueWorkerIds = [...new Set(workerIds)];
 
@@ -1053,7 +1053,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         where: uniqueWorkerIds.length
           ? uniqueWorkerIds.map(id => ({ worker: { id } }))
           : undefined,
-        relations: ['user', 'worker'],
+        relations: ['user'],
       });
 
       const workerIdToName = new Map<number, string>();
@@ -1063,34 +1063,101 @@ async getAllJobsByWorkerFromToken(userId: number) {
         }
       }
 
-      const formatted = jobs.map(job => ({
-        jobId: job.id,
-        jobNo: `JOB-${String(job.id).padStart(4, '0')}`,
-        jobName: job.jobName,
-        clientName: job.client?.name || '',
-  workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
-        status: job.status || JobStatus.SCHEDULED, // Include job status
-          startDate: job.startDate, // ✅ Added
-  endDate: job.endDate,     // ✅ Added
-        workers: job.workers.map(worker => ({
-          id: worker.id,
-          code: worker.code,
-          name: workerIdToName.get(worker.id) || null,
-        })),
-        shifts: (job.seasonalSchedules || []).flatMap(ss => (ss.shifts || []).map(shift => ({
-          startWeekday: shift.startWeekday,
-          endWeekday: shift.endWeekday,
-          baseStartTime: shift.baseStartTime,
-          baseEndTime: shift.baseEndTime,
-          isContinuous: shift.isContinuous,
-          totalHours: shift.totalHours,
-        }))) || [],
-        tasks: job.tasks?.map(task => ({
-          id: task.id,
-          name: task.name,
-          expectedDuration: task.expectedDuration,
-        })) || [],
-      }));
+      // NOTE: Unlike the employer version we DO NOT fetch or expose survey flags here
+      const formatted = jobs.map(job => {
+        // Schedule type computation mirrors employer version
+        let scheduleType: string = 'free';
+        let activeScheduleWeekHours: number | null = null;
+        try {
+          if (job.scheduleType === ScheduleType.FIXED) {
+            scheduleType = 'fixed';
+          } else if (job.scheduleType === ScheduleType.FREE) {
+            scheduleType = 'free';
+          } else if (job.scheduleType === ScheduleType.SEASONAL) {
+            const today = new Date();
+            const dd = String(today.getDate()).padStart(2, '0');
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const todayKey = `${dd}-${mm}`;
+
+            const parseDayMonthValue = (dm: string): number => {
+              const [dStr, mStr] = dm.split('-');
+              const d = Number(dStr); const m = Number(mStr);
+              return m * 100 + d;
+            };
+
+            const summerSchedules = (job.seasonalSchedules || []).filter(ss => !!ss.startDate && !!ss.endDate);
+            const normalSchedules = (job.seasonalSchedules || []).filter(ss => !ss.startDate && !ss.endDate);
+
+            let activeSummer: any = null;
+            const todayVal = parseDayMonthValue(todayKey);
+            for (const ss of summerSchedules) {
+              try {
+                const startVal = parseDayMonthValue(ss.startDate);
+                const endVal = parseDayMonthValue(ss.endDate);
+                if (startVal <= todayVal && todayVal <= endVal) {
+                  activeSummer = ss;
+                  break;
+                }
+              } catch { /* ignore parse errors */ }
+            }
+
+            if (activeSummer) {
+              scheduleType = 'summer';
+              activeScheduleWeekHours = typeof activeSummer.totalWeekHours === 'number'
+                ? activeSummer.totalWeekHours
+                : (activeSummer.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
+            } else if (normalSchedules.length) {
+              const normal = normalSchedules[0];
+              scheduleType = 'normal';
+              activeScheduleWeekHours = typeof normal.totalWeekHours === 'number'
+                ? normal.totalWeekHours
+                : (normal.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
+            } else {
+              scheduleType = 'seasonal';
+              activeScheduleWeekHours = (job.seasonalSchedules || []).reduce((outerAcc: number, ss: any) => {
+                const shifts = ss.shifts || [];
+                const ssTotal = shifts.reduce((sAcc: number, sh: any) => sAcc + (Number(sh.totalHours) || 0), 0);
+                return outerAcc + ssTotal;
+              }, 0);
+            }
+          }
+        } catch (e) {
+          scheduleType = 'free';
+          activeScheduleWeekHours = null;
+        }
+
+        return {
+          jobId: job.id,
+          jobName: job.jobName,
+          jobStatus: job.status || JobStatus.SCHEDULED,
+          clientName: job.client?.name || '',
+          workCenters: job.workCenters?.map(w => ({ id: w.id, name: w.name })) || [],
+          workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
+          startDate: job.startDate,
+          endDate: job.endDate,
+          scheduleType,
+          totalShifts: job.seasonalSchedules?.reduce((acc, ss) => acc + (ss.shifts?.length || 0), 0) || 0,
+          expectedDuration: ((): number => {
+            try {
+              if (job.scheduleType === ScheduleType.FREE) return 0;
+              if (job.scheduleType === ScheduleType.SEASONAL) {
+                return (job.seasonalSchedules || []).reduce((outerAcc: number, ss: any) => {
+                  const shifts = ss.shifts || [];
+                  const ssTotal = shifts.reduce((sAcc: number, sh: any) => sAcc + (Number(sh.totalHours) || 0), 0);
+                  return outerAcc + ssTotal;
+                }, 0);
+              }
+              return (job.tasks || []).reduce((sum: number, t: any) => sum + (Number(t.expectedDuration) || 0), 0);
+            } catch (e) {
+              return (job.tasks || []).reduce((sum: number, t: any) => sum + (Number(t.expectedDuration) || 0), 0);
+            }
+          })(),
+          activeScheduleWeekHours,
+          tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: task.expectedDuration })) || [],
+          signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
+          workers: job.workers.map(worker => ({ id: worker.id, code: worker.code, name: workerIdToName.get(worker.id) || null })),
+        };
+      });
 
       return {
         message: 'Success',
