@@ -865,7 +865,7 @@ async getAllJobsByEmployerFromToken(userId: number) {
   }
 }
 
-// Updated method in job.service.ts
+// worker job card
 async getAllJobsByWorkerFromToken(userId: number) {
   try {
     const workerUser = await this.workerUserRepo.findOne({
@@ -879,130 +879,133 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
     const workerId = workerUser.worker.id;
 
-    // Get today's date for TaskHistory filtering
-    const today = new Date();
-    const todayString = today.toISOString().split('T')[0]; // YYYY-MM-DD format
-
+    // Keep relations consistent with employer endpoint and include signingMethods
     const jobs = await this.jobRepo.find({
-      where: {
-        workers: { id: workerId },
-      },
-      relations: [
-        'client', 
-        'workCenters', 
-        'tasks', 
-        'tasks.taskHistories', // Include task histories
-        'seasonalSchedules',
-        'seasonalSchedules.shifts',
-        'signingMethods', 
-        'workSessions'
-      ],
+      where: { workers: { id: workerId } },
+      relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts', 'signingMethods'],
       order: { id: 'ASC' },
     });
 
-    // Get active work sessions for this worker
-    const activeWorkSessions = await this.workSessionRepo.find({
-      where: {
-        worker: { id: workerId },
-        checkOutTime: IsNull(),
-      },
-      relations: ['job'],
+    const workerIds = jobs.flatMap(job => job.workers.map(w => w.id));
+    const uniqueWorkerIds = [...new Set(workerIds)];
+
+    const workerUsers = await this.workerUserRepo.find({
+      where: uniqueWorkerIds.length
+        ? uniqueWorkerIds.map(id => ({ worker: { id } }))
+        : undefined,
+      relations: ['user'],
     });
 
-    const activeSessionsByJobId = new Map();
-    activeWorkSessions.forEach(session => {
-      activeSessionsByJobId.set(session.job.id, session);
-    });
+    const workerIdToName = new Map<number, string>();
+    for (const wu of workerUsers) {
+      if (wu.worker?.id && wu.user?.name) {
+        workerIdToName.set(wu.worker.id, wu.user.name);
+      }
+    }
 
-    const formatted: any[] = []
-    for (const job of jobs) {
-      const activeSession = activeSessionsByJobId.get(job.id);
+    // Fetch surveys for the returned jobs in a single query to determine client/worker survey flags
+    const jobIds = jobs.map(j => j.id);
+    const surveys = jobIds.length ? await this.surveyRepo.find({ where: { job: In(jobIds) }, relations: ['client', 'worker', 'job'] }) : [];
 
-      // Build tasks list by asking the recurrence generator for occurrences
-      const tasksForJob: any[] = []
-      const tasksList = job.tasks || []
+    const formatted = jobs.map(job => {
+      const hasClientSurvey = surveys.some(s => s.job?.id === job.id && !!s.client);
+      const hasWorkerSurvey = surveys.some(s => s.job?.id === job.id && !s.client);
 
-      // fetch recurrences in parallel for tasks of this job
-      const recurrencePromises = tasksList.map(t => this.generateRecurrenceForTask(t.id, false).catch(() => null))
-      const recurrenceResults = await Promise.all(recurrencePromises)
+      // scheduleType logic (same as employer)
+      let scheduleType: string = 'free';
+      let activeScheduleWeekHours: number | null = null;
+      try {
+        if (job.scheduleType === ScheduleType.FIXED) {
+          scheduleType = 'fixed';
+        } else if (job.scheduleType === ScheduleType.FREE) {
+          scheduleType = 'free';
+        } else if (job.scheduleType === ScheduleType.SEASONAL) {
+          const today = new Date();
+          const dd = String(today.getDate()).padStart(2, '0');
+          const mm = String(today.getMonth() + 1).padStart(2, '0');
+          const todayKey = `${dd}-${mm}`;
 
-      const todayKey = todayString
+          const parseDayMonthValue = (dm: string): number => {
+            const [dStr, mStr] = dm.split('-');
+            const d = Number(dStr); const m = Number(mStr);
+            return m * 100 + d;
+          };
 
-      for (let i = 0; i < tasksList.length; i++) {
-        const task = tasksList[i]
-        const recur = recurrenceResults[i]
+          const summerSchedules = (job.seasonalSchedules || []).filter(ss => !!ss.startDate && !!ss.endDate);
+          const normalSchedules = (job.seasonalSchedules || []).filter(ss => !ss.startDate && !ss.endDate);
 
-        let occursToday = false
-        if (recur && recur.data && Array.isArray(recur.data.occurrences)) {
-          const occKeys = recur.data.occurrences.map((d: any) => {
-            const dd = new Date(d)
-            return dd.toISOString().split('T')[0]
-          })
-          occursToday = occKeys.includes(todayKey)
+          let activeSummer: any = null;
+          const todayVal = parseDayMonthValue(todayKey);
+          for (const ss of summerSchedules) {
+            try {
+              const startVal = parseDayMonthValue(ss.startDate);
+              const endVal = parseDayMonthValue(ss.endDate);
+              if (startVal <= todayVal && todayVal <= endVal) {
+                activeSummer = ss;
+                break;
+              }
+            } catch { /* ignore parse errors */ }
+          }
+
+          if (activeSummer) {
+            scheduleType = 'summer';
+            activeScheduleWeekHours = typeof activeSummer.totalWeekHours === 'number'
+              ? activeSummer.totalWeekHours
+              : (activeSummer.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
+          } else if (normalSchedules.length) {
+            const normal = normalSchedules[0];
+            scheduleType = 'normal';
+            activeScheduleWeekHours = typeof normal.totalWeekHours === 'number'
+              ? normal.totalWeekHours
+              : (normal.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
+          } else {
+            scheduleType = 'seasonal';
+            activeScheduleWeekHours = (job.seasonalSchedules || []).reduce((outerAcc: number, ss: any) => {
+              const shifts = ss.shifts || [];
+              const ssTotal = shifts.reduce((sAcc: number, sh: any) => sAcc + (Number(sh.totalHours) || 0), 0);
+              return outerAcc + ssTotal;
+            }, 0);
+          }
         }
-
-        if (!occursToday) continue
-
-        const todayHistory = task.taskHistories?.find((history: any) => {
-          const historyDate = new Date(history.date).toISOString().split('T')[0]
-          return historyDate === todayKey
-        })
-
-        tasksForJob.push({
-          id: task.id,
-          name: task.name,
-          note: task.note,
-          expectedDuration: task.expectedDuration,
-          isCompleted: todayHistory ? todayHistory.isCompleted : (task.isCompleted || false),
-          completedAt: todayHistory ? todayHistory.completedAt : task.completedAt,
-          completedByWorkerId: todayHistory ? todayHistory.completedByWorkerId : task.completedByWorkerId,
-          taskHistories: task.taskHistories?.map((history: any) => ({
-            id: history.id,
-            taskId: history.taskId,
-            date: history.date,
-            isCompleted: history.isCompleted,
-            completedAt: history.completedAt,
-            completedByWorkerId: history.completedByWorkerId,
-          })) || [],
-        })
+      } catch (e) {
+        scheduleType = 'free';
+        activeScheduleWeekHours = null;
       }
 
-      formatted.push({
+      return {
         jobId: job.id,
         jobName: job.jobName,
+        jobStatus: job.status || JobStatus.SCHEDULED,
         clientName: job.client?.name || '',
-  workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
-        status: job.status || JobStatus.SCHEDULED,
+        workCenters: job.workCenters?.map(w => ({ id: w.id, name: w.name })) || [],
+        workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
         startDate: job.startDate,
         endDate: job.endDate,
-  totalShifts: job.seasonalSchedules?.reduce((acc, ss) => acc + (ss.shifts?.length || 0), 0) || 0,
-        expectedDuration: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0),
-        tasks: tasksForJob,
-
-        shifts: (job.seasonalSchedules || []).flatMap(ss => (ss.shifts || []).map(shift => ({
-          startWeekday: shift.startWeekday,
-          endWeekday: shift.endWeekday,
-          baseStartTime: shift.baseStartTime,
-          baseEndTime: shift.baseEndTime,
-          isContinuous: shift.isContinuous,
-          totalHours: shift.totalHours,
-        }))) ,
-        signingMethods: job.signingMethods?.map(sm => ({
-          methodType: sm.methodType,
-          methodDetails: sm.methodDetails,
-          verifyIdentity: sm.verifyIdentity,
-        })) || [],
-        workSession: activeSession ? {
-          id: activeSession.id,
-          checkInTime: activeSession.checkInTime,
-          isOnBreak: activeSession.isOnBreak,
-          currentBreakStart: activeSession.currentBreakStart,
-          totalWorkMinutes: activeSession.totalWorkMinutes,
-          totalBreakMinutes: activeSession.totalBreakMinutes,
-        } : null,
-      }
-      )
-    }
+        scheduleType,
+        totalShifts: job.seasonalSchedules?.reduce((acc, ss) => acc + (ss.shifts?.length || 0), 0) || 0,
+        expectedDuration: ((): number => {
+          try {
+            if (job.scheduleType === ScheduleType.FREE) return 0;
+            if (job.scheduleType === ScheduleType.SEASONAL) {
+              return (job.seasonalSchedules || []).reduce((outerAcc: number, ss: any) => {
+                const shifts = ss.shifts || [];
+                const ssTotal = shifts.reduce((sAcc: number, sh: any) => sAcc + (Number(sh.totalHours) || 0), 0);
+                return outerAcc + ssTotal;
+              }, 0);
+            }
+            return (job.tasks || []).reduce((sum: number, t: any) => sum + (Number(t.expectedDuration) || 0), 0);
+          } catch (e) {
+            return (job.tasks || []).reduce((sum: number, t: any) => sum + (Number(t.expectedDuration) || 0), 0);
+          }
+        })(),
+        activeScheduleWeekHours,
+        tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: task.expectedDuration })) || [],
+        signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
+        hasClientSurvey,
+        hasWorkerSurvey,
+        workers: job.workers.map(worker => ({ id: worker.id, code: worker.code, name: workerIdToName.get(worker.id) || null })),
+      };
+    });
 
     return {
       message: 'Success',
