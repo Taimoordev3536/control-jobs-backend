@@ -21,7 +21,20 @@ export class RecordScanDto {
   userTimezone?: string;
 }
 
+import { QrCodeType, QrCodeOwnerType } from '../entities/qr-code.entity';
+
 export class GenerateQrCodeDto {
+  @IsOptional()
   @IsNumber()
-  jobId: number;
+  jobId?: number;
+
+  @IsNumber()
+  ownerId: number;
+
+  @IsString()
+  ownerType: QrCodeOwnerType;
+
+  @IsOptional()
+  @IsString()
+  type?: QrCodeType;
 }

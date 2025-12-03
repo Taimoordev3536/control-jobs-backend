@@ -39,6 +39,17 @@ async createJob(@Body() createJobDto: CreateJobDto, @Req() req) {
   }
 }
 
+
+
+  // Get all weekly shift recurrences for a job
+  @UseGuards(JwtAuthGuard)
+  @Get(':jobId/shift-recurrence')
+  async getJobShiftRecurrences(@Param('jobId') jobId: number) {
+    return await this.jobService.getJobShiftRecurrences(jobId);
+  }
+
+
+
   //##### delete job ####
 
 @UseGuards(JwtAuthGuard)
@@ -92,12 +103,12 @@ async getAllJobsForClientFromToken(@Req() req) {
 
 
 
-@UseGuards(JwtAuthGuard)
-@Get('client/job-history')
-async getJobHistoryForClient(@Req() req, @Query('jobId') jobId?: number) {
-  const userId = req.user?.id;
-  return this.jobService.getJobHistoryForClient(userId, jobId ? parseInt(jobId.toString()) : undefined);
-}
+// @UseGuards(JwtAuthGuard)
+// @Get('client/job-history')
+// async getJobHistoryForClient(@Req() req, @Query('jobId') jobId?: number) {
+//   const userId = req.user?.id;
+//   return this.jobService.getJobHistoryForClient(userId, jobId ? parseInt(jobId.toString()) : undefined);
+// }
 
 // @UseGuards(JwtAuthGuard)
 // @Get('client/analytics')
@@ -110,7 +121,8 @@ async getJobHistoryForClient(@Req() req, @Query('jobId') jobId?: number) {
 
   @UseGuards(JwtAuthGuard)
   @Post('generate-qr')
-  async generateJobQrCode(@Body() generateQrCodeDto: GenerateQrCodeDto): Promise<{ qrData: any }> {
+  async generateJobQrCode(@Body() generateQrCodeDto: GenerateQrCodeDto) {
+    // Return the new QR code structure directly
     return await this.jobService.generateJobQrCode(generateQrCodeDto);
   }
 
@@ -150,17 +162,17 @@ async getJobHistoryForClient(@Req() req, @Query('jobId') jobId?: number) {
     return await this.jobService.getJobScanHistory(jobId, startDate, endDate);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Get('worker/:workerId/scan-history')
-  async getWorkerScanHistory(@Param('workerId') workerId: number): Promise<any[]> {
-    return await this.jobService.getWorkerScanHistory(workerId);
-  }
+  // @UseGuards(JwtAuthGuard)
+  // @Get('worker/:workerId/scan-history')
+  // async getWorkerScanHistory(@Param('workerId') workerId: number): Promise<any[]> {
+  //   return await this.jobService.getWorkerScanHistory(workerId);
+  // }
 
-  @UseGuards(JwtAuthGuard)
-  @Get(':jobId/attendance-summary')
-  async getTodayAttendanceSummary(@Param('jobId') jobId: number): Promise<any> {
-    return await this.jobService.getTodayAttendanceSummary(jobId);
-  }
+  // @UseGuards(JwtAuthGuard)
+  // @Get(':jobId/attendance-summary')
+  // async getTodayAttendanceSummary(@Param('jobId') jobId: number): Promise<any> {
+  //   return await this.jobService.getTodayAttendanceSummary(jobId);
+  // }
 
   // ========== Job Status Management Endpoints ========== //
 
@@ -216,16 +228,16 @@ async getJobHistoryForClient(@Req() req, @Query('jobId') jobId?: number) {
 
   // ========== Task Management Endpoints ========== //
 
-  @UseGuards(JwtAuthGuard)
-  @Post('tasks/:taskId/complete')
-  async completeTask(
-    @Param('taskId') taskId: number,
-    @Req() req
-  ): Promise<any> {
-    const userId = req.user?.id;
-    const workerId = await this.jobService.getWorkerIdFromUserId(userId);
-    return await this.jobService.completeTask(taskId, workerId);
-  }
+  // @UseGuards(JwtAuthGuard)
+  // @Post('tasks/:taskId/complete')
+  // async completeTask(
+  //   @Param('taskId') taskId: number,
+  //   @Req() req
+  // ): Promise<any> {
+  //   const userId = req.user?.id;
+  //   const workerId = await this.jobService.getWorkerIdFromUserId(userId);
+  //   return await this.jobService.completeTask(taskId, workerId);
+  // }
 
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/task-status')

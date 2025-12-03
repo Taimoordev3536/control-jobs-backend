@@ -19,9 +19,13 @@ import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
 import { AlertsModule } from '../realtime/alerts.module';
+import { QrCodeRefreshService } from './qr-code-refresh.service';
+import { ScheduleModule } from '@nestjs/schedule';
+import { QrCode } from './entities/qr-code.entity';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       Job,
       Shift,
@@ -39,10 +43,11 @@ import { AlertsModule } from '../realtime/alerts.module';
       EmployerUser,
       WorkerUser,
       ClientUser,
+      QrCode,
     ]),
     AlertsModule,
   ],
-  providers: [JobService],
+  providers: [JobService, QrCodeRefreshService],
   controllers: [JobController],
   exports: [TypeOrmModule],
 })

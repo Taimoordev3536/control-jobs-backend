@@ -1,3 +1,4 @@
+
 import { Injectable } from '@nestjs/common';
 import { DateTime } from 'luxon';
 // Mock WorkCenter data (used for every client)
@@ -26,6 +27,8 @@ import { Survey } from '../survey/entities/survey.entity';
 import { JobTasksTabItemDto } from './dto/job-tasks-tab.dto';
 import { User } from '../users/entities/user.entity';
 import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
+import { v4 as uuidv4 } from 'uuid';
+import { QrCode, QrCodeType, QrCodeOwnerType } from './entities/qr-code.entity';
 import { UpdateJobStatusDto } from './dto/update-job-status.dto';
 import { JobStatus } from './enums/job-status.enum';
 import * as QRCode from 'qrcode';
@@ -50,6 +53,7 @@ export class JobService {
     @InjectRepository(ClientUser) private clientUserRepo: Repository<ClientUser>,
   @InjectRepository(Survey) private surveyRepo: Repository<Survey>,
     @InjectRepository(WorkerUser) private workerUserRepo: Repository<WorkerUser>,
+    @InjectRepository(QrCode) private qrCodeRepo: Repository<QrCode>,
     private dataSource: DataSource,
     private alertsService: AlertsService,
   ) {}
@@ -468,7 +472,90 @@ export class JobService {
   }
 
 
+  /**
+   * Get all shift recurrences for a job (for weekly schedule display)
+   */
+  async getJobShiftRecurrences(jobId: number): Promise<any[]> {
+    // Get job with seasonal schedules and their shifts
+    const job = await this.jobRepo.findOne({
+      where: { id: jobId },
+      relations: [
+        'seasonalSchedules',
+        'seasonalSchedules.shifts',
+      ],
+    });
+    if (!job) throw new Error('Job not found');
 
+    // Helper: weekday order
+    const weekdayOrder = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+    // Group shifts by season and include startDate/endDate
+    const output: any = {};
+    if (job.seasonalSchedules && job.seasonalSchedules.length) {
+      for (const ss of job.seasonalSchedules) {
+        if (ss.shifts && ss.shifts.length) {
+          const shifts = ss.shifts.map(shift => {
+            const startIdx = weekdayOrder.indexOf(String(shift.startWeekday).toLowerCase());
+            const endIdx = weekdayOrder.indexOf(String(shift.endWeekday).toLowerCase());
+            if (startIdx === -1 || endIdx === -1) return null;
+
+            let days = [];
+            if (startIdx === endIdx) {
+              days.push({
+                day: weekdayOrder[startIdx],
+                startTime: shift.baseStartTime,
+                endTime: shift.baseEndTime,
+              });
+            } else {
+              days.push({
+                day: weekdayOrder[startIdx],
+                startTime: shift.baseStartTime,
+                endTime: '24:00',
+              });
+              for (let i = startIdx + 1; i < endIdx; i++) {
+                days.push({
+                  day: weekdayOrder[i % 7],
+                  startTime: '00:00',
+                  endTime: '24:00',
+                });
+              }
+              days.push({
+                day: weekdayOrder[endIdx],
+                startTime: '00:00',
+                endTime: shift.baseEndTime,
+              });
+            }
+            return {
+              shiftId: shift.id,
+              startWeekday: shift.startWeekday,
+              endWeekday: shift.endWeekday,
+              baseStartTime: shift.baseStartTime,
+              baseEndTime: shift.baseEndTime,
+              recurrence: days,
+            };
+          }).filter(Boolean);
+          if (ss.season === 'normal') {
+            output.normalSeason = {
+              seasonId: ss.id,
+              season: ss.season,
+              startDate: ss.startDate ?? null,
+              endDate: ss.endDate ?? null,
+              shifts,
+            };
+          } else if (ss.season === 'summer') {
+            output.summerSeason = {
+              seasonId: ss.id,
+              season: ss.season,
+              startDate: ss.startDate ?? null,
+              endDate: ss.endDate ?? null,
+              shifts,
+            };
+          }
+        }
+      }
+    }
+    return output;
+  }
 
 
   async getAllJobsRaw(): Promise<any[]> {
@@ -1190,178 +1277,178 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Get job history with detailed information for client dashboard
    */
-  async getJobHistoryForClient(userId: number, jobId?: number) {
-    try {
-      const clientUser = await this.clientUserRepo.findOne({
-        where: { user: { id: userId } },
-        relations: ['client'],
-      });
+  // async getJobHistoryForClient(userId: number, jobId?: number) {
+  //   try {
+  //     const clientUser = await this.clientUserRepo.findOne({
+  //       where: { user: { id: userId } },
+  //       relations: ['client'],
+  //     });
 
-      if (!clientUser?.client?.id) {
-        throw new Error('Client not found for this user');
-      }
+  //     if (!clientUser?.client?.id) {
+  //       throw new Error('Client not found for this user');
+  //     }
 
-      const clientId = clientUser.client.id;
+  //     const clientId = clientUser.client.id;
 
-      // Base query for jobs
-      let whereClause: any = { client: { id: clientId } };
-      if (jobId) {
-        whereClause.id = jobId;
-      }
+  //     // Base query for jobs
+  //     let whereClause: any = { client: { id: clientId } };
+  //     if (jobId) {
+  //       whereClause.id = jobId;
+  //     }
 
-      const jobs = await this.jobRepo.find({
-        where: whereClause,
-        relations: [
-          'client', 
-          'workCenters', 
-          'tasks', 
-          'workers', 
-          'seasonalSchedules',
-          'seasonalSchedules.shifts',
-          'signingMethods',
-          'scanLogs',
-          'workSessions',
-          'workSessions.worker'
-        ],
-        order: { id: 'DESC' },
-      });
+  //     const jobs = await this.jobRepo.find({
+  //       where: whereClause,
+  //       relations: [
+  //         'client', 
+  //         'workCenters', 
+  //         'tasks', 
+  //         'workers', 
+  //         'seasonalSchedules',
+  //         'seasonalSchedules.shifts',
+  //         'signingMethods',
+  //         'scanLogs',
+  //         'workSessions',
+  //         'workSessions.worker'
+  //       ],
+  //       order: { id: 'DESC' },
+  //     });
 
-      // Get worker names
-      const workerIds = jobs.flatMap(job => job.workers.map(w => w.id));
-      const uniqueWorkerIds = [...new Set(workerIds)];
+  //     // Get worker names
+  //     const workerIds = jobs.flatMap(job => job.workers.map(w => w.id));
+  //     const uniqueWorkerIds = [...new Set(workerIds)];
 
-      const workerUsers = await this.workerUserRepo.find({
-        where: uniqueWorkerIds.length
-          ? uniqueWorkerIds.map(id => ({ worker: { id } }))
-          : undefined,
-        relations: ['user', 'worker'],
-      });
+  //     const workerUsers = await this.workerUserRepo.find({
+  //       where: uniqueWorkerIds.length
+  //         ? uniqueWorkerIds.map(id => ({ worker: { id } }))
+  //         : undefined,
+  //       relations: ['user', 'worker'],
+  //     });
 
-      const workerIdToName = new Map<number, string>();
-      for (const wu of workerUsers) {
-        if (wu.worker?.id && wu.user?.name) {
-          workerIdToName.set(wu.worker.id, wu.user.name);
-        }
-      }
+  //     const workerIdToName = new Map<number, string>();
+  //     for (const wu of workerUsers) {
+  //       if (wu.worker?.id && wu.user?.name) {
+  //         workerIdToName.set(wu.worker.id, wu.user.name);
+  //       }
+  //     }
 
-      const enhancedJobs = jobs.map(job => {
-        // Calculate time summary
-        const workSessions = job.workSessions || [];
-        const totalWorkMinutes = workSessions.reduce((sum, session) => sum + (session.totalWorkMinutes || 0), 0);
-        const totalBreakMinutes = workSessions.reduce((sum, session) => sum + (session.totalBreakMinutes || 0), 0);
+  //     const enhancedJobs = jobs.map(job => {
+  //       // Calculate time summary
+  //       const workSessions = job.workSessions || [];
+  //       const totalWorkMinutes = workSessions.reduce((sum, session) => sum + (session.totalWorkMinutes || 0), 0);
+  //       const totalBreakMinutes = workSessions.reduce((sum, session) => sum + (session.totalBreakMinutes || 0), 0);
         
-        // Get scan logs for this job
-        const scanLogs = (job.scanLogs || []).map(scan => ({
-          id: scan.id,
-          scanType: scan.scanType,
-          scanTime: scan.scanTime,
-          location: scan.location,
-          notes: scan.notes,
-          workerId: scan.workerId,
-          workerName: workerIdToName.get(scan.workerId) || 'Unknown',
-        }));
+  //       // Get scan logs for this job
+  //       const scanLogs = (job.scanLogs || []).map(scan => ({
+  //         id: scan.id,
+  //         scanType: scan.scanType,
+  //         scanTime: scan.scanTime,
+  //         location: scan.location,
+  //         notes: scan.notes,
+  //         workerId: scan.workerId,
+  //         workerName: workerIdToName.get(scan.workerId) || 'Unknown',
+  //       }));
 
-        // Calculate check-in methods used
-        const checkInScans = scanLogs.filter(scan => scan.scanType === 'check-in');
-        const usedVerificationMethods = job.signingMethods?.map(sm => sm.methodType) || [];
+  //       // Calculate check-in methods used
+  //       const checkInScans = scanLogs.filter(scan => scan.scanType === 'check-in');
+  //       const usedVerificationMethods = job.signingMethods?.map(sm => sm.methodType) || [];
 
-        // Task checklist with completion status
-        const taskChecklist = (job.tasks || []).map(task => ({
-          id: task.id,
-          name: task.name,
-          note: task.note,
-          expectedDuration: task.expectedDuration,
-          isCompleted: task.isCompleted || false,
-          completedAt: task.completedAt,
-          completedByWorkerId: task.completedByWorkerId,
-          completedByWorkerName: task.completedByWorkerId ? workerIdToName.get(task.completedByWorkerId) || 'Unknown' : null,
-        }));
+  //       // Task checklist with completion status
+  //       const taskChecklist = (job.tasks || []).map(task => ({
+  //         id: task.id,
+  //         name: task.name,
+  //         note: task.note,
+  //         expectedDuration: task.expectedDuration,
+  //         isCompleted: task.isCompleted || false,
+  //         completedAt: task.completedAt,
+  //         completedByWorkerId: task.completedByWorkerId,
+  //         completedByWorkerName: task.completedByWorkerId ? workerIdToName.get(task.completedByWorkerId) || 'Unknown' : null,
+  //       }));
 
-        return {
-          jobId: job.id,
-          jobNo: `JOB-${String(job.id).padStart(4, '0')}`,
-          jobName: job.jobName,
-          clientName: job.client?.name || '',
-          workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
-          status: job.status || 'SCHEDULED',
-          startDate: job.startDate,
-          endDate: job.endDate,
-          workers: job.workers.map(worker => ({
-            id: worker.id,
-            code: worker.code,
-            name: workerIdToName.get(worker.id) || null,
-          })),
-          shifts: (job.seasonalSchedules || []).flatMap(ss => (ss.shifts || []).map(shift => ({
-            startWeekday: shift.startWeekday,
-            endWeekday: shift.endWeekday,
-            baseStartTime: shift.baseStartTime,
-            baseEndTime: shift.baseEndTime,
-            isContinuous: shift.isContinuous,
-            totalHours: shift.totalHours,
-          }))) || [],
-          // Security verification methods
-          securityMethods: {
-            available: job.signingMethods?.map(sm => ({
-              methodType: sm.methodType,
-              methodDetails: sm.methodDetails,
-              verifyIdentity: sm.verifyIdentity,
-            })) || [],
-            used: usedVerificationMethods,
-            checkInCount: checkInScans.length,
-          },
-          // Task checklist
-          taskChecklist,
-          taskProgress: {
-            total: taskChecklist.length,
-            completed: taskChecklist.filter(t => t.isCompleted).length,
-            percentage: taskChecklist.length > 0 ? Math.round((taskChecklist.filter(t => t.isCompleted).length / taskChecklist.length) * 100) : 0,
-          },
-          // Time summary
-          timeSummary: {
-            totalWorkHours: Math.round((totalWorkMinutes / 60) * 100) / 100,
-            totalBreakHours: Math.round((totalBreakMinutes / 60) * 100) / 100,
-            sessionsCount: workSessions.length,
-            averageSessionHours: workSessions.length > 0 ? Math.round(((totalWorkMinutes / workSessions.length) / 60) * 100) / 100 : 0,
-            workSessions: workSessions.map(session => ({
-              id: session.id,
-              workerName: workerIdToName.get(session.worker?.id) || 'Unknown',
-              checkInTime: session.checkInTime,
-              checkOutTime: session.checkOutTime,
-              totalWorkMinutes: session.totalWorkMinutes,
-              totalBreakMinutes: session.totalBreakMinutes,
-              isOnBreak: session.isOnBreak,
-            })),
-          },
-          // Activity history
-          activityHistory: scanLogs,
-          // Summary stats
-          stats: {
-            plannedHours: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0) || 0,
-            actualHours: Math.round((totalWorkMinutes / 60) * 100) / 100,
-            efficiency: job.tasks?.length > 0 && totalWorkMinutes > 0 
-              ? Math.round(((job.tasks.reduce((sum, t) => sum + (t.expectedDuration || 0), 0) * 60) / totalWorkMinutes) * 100) 
-              : 0,
-          },
-        };
-      });
+  //       return {
+  //         jobId: job.id,
+  //         jobNo: `JOB-${String(job.id).padStart(4, '0')}`,
+  //         jobName: job.jobName,
+  //         clientName: job.client?.name || '',
+  //         workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
+  //         status: job.status || 'SCHEDULED',
+  //         startDate: job.startDate,
+  //         endDate: job.endDate,
+  //         workers: job.workers.map(worker => ({
+  //           id: worker.id,
+  //           code: worker.code,
+  //           name: workerIdToName.get(worker.id) || null,
+  //         })),
+  //         shifts: (job.seasonalSchedules || []).flatMap(ss => (ss.shifts || []).map(shift => ({
+  //           startWeekday: shift.startWeekday,
+  //           endWeekday: shift.endWeekday,
+  //           baseStartTime: shift.baseStartTime,
+  //           baseEndTime: shift.baseEndTime,
+  //           isContinuous: shift.isContinuous,
+  //           totalHours: shift.totalHours,
+  //         }))) || [],
+  //         // Security verification methods
+  //         securityMethods: {
+  //           available: job.signingMethods?.map(sm => ({
+  //             methodType: sm.methodType,
+  //             methodDetails: sm.methodDetails,
+  //             verifyIdentity: sm.verifyIdentity,
+  //           })) || [],
+  //           used: usedVerificationMethods,
+  //           checkInCount: checkInScans.length,
+  //         },
+  //         // Task checklist
+  //         taskChecklist,
+  //         taskProgress: {
+  //           total: taskChecklist.length,
+  //           completed: taskChecklist.filter(t => t.isCompleted).length,
+  //           percentage: taskChecklist.length > 0 ? Math.round((taskChecklist.filter(t => t.isCompleted).length / taskChecklist.length) * 100) : 0,
+  //         },
+  //         // Time summary
+  //         timeSummary: {
+  //           totalWorkHours: Math.round((totalWorkMinutes / 60) * 100) / 100,
+  //           totalBreakHours: Math.round((totalBreakMinutes / 60) * 100) / 100,
+  //           sessionsCount: workSessions.length,
+  //           averageSessionHours: workSessions.length > 0 ? Math.round(((totalWorkMinutes / workSessions.length) / 60) * 100) / 100 : 0,
+  //           workSessions: workSessions.map(session => ({
+  //             id: session.id,
+  //             workerName: workerIdToName.get(session.worker?.id) || 'Unknown',
+  //             checkInTime: session.checkInTime,
+  //             checkOutTime: session.checkOutTime,
+  //             totalWorkMinutes: session.totalWorkMinutes,
+  //             totalBreakMinutes: session.totalBreakMinutes,
+  //             isOnBreak: session.isOnBreak,
+  //           })),
+  //         },
+  //         // Activity history
+  //         activityHistory: scanLogs,
+  //         // Summary stats
+  //         stats: {
+  //           plannedHours: job.tasks?.reduce((sum, t) => sum + (t.expectedDuration || 0), 0) || 0,
+  //           actualHours: Math.round((totalWorkMinutes / 60) * 100) / 100,
+  //           efficiency: job.tasks?.length > 0 && totalWorkMinutes > 0 
+  //             ? Math.round(((job.tasks.reduce((sum, t) => sum + (t.expectedDuration || 0), 0) * 60) / totalWorkMinutes) * 100) 
+  //             : 0,
+  //         },
+  //       };
+  //     });
 
-      return {
-        message: 'Success',
-        data: enhancedJobs,
-        isSuccess: true,
-        statusCode: 200,
-        developerError: '',
-      };
-    } catch (error) {
-      return {
-        message: 'Error fetching job history',
-        data: [],
-        isSuccess: false,
-        statusCode: 500,
-        developerError: error.message,
-      };
-    }
-  }
+  //     return {
+  //       message: 'Success',
+  //       data: enhancedJobs,
+  //       isSuccess: true,
+  //       statusCode: 200,
+  //       developerError: '',
+  //     };
+  //   } catch (error) {
+  //     return {
+  //       message: 'Error fetching job history',
+  //       data: [],
+  //       isSuccess: false,
+  //       statusCode: 500,
+  //       developerError: error.message,
+  //     };
+  //   }
+  // }
 
   
 
@@ -1370,35 +1457,77 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Generate QR Code for a job
    */
-  async generateJobQrCode(generateQrCodeDto: GenerateQrCodeDto): Promise<{ qrData: any }> {
-    try {
-      const job = await this.jobRepo.findOne({
-        where: { id: generateQrCodeDto.jobId },
-        relations: ['client', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
-      });
+  /**
+   * Generate QR Code for an owner (client/employer) using qr_codes table (STATIC or DYNAMIC)
+   * Returns QR image (base64) and token metadata
+   */
+  async generateJobQrCode(generateQrCodeDto: GenerateQrCodeDto): Promise<{ qrImage: string; token: string; type: QrCodeType; expiresAt: Date | null; lastRefreshedAt: Date | null }> {
+    const { ownerId, ownerType, type } = generateQrCodeDto;
+    if (!ownerId || !ownerType) throw new Error('ownerId and ownerType are required');
+    const qrType: QrCodeType = type || QrCodeType.STATIC;
 
-      if (!job) {
-        throw new Error('Job not found');
+    // Find or create QR code
+    let qrCode = await this.qrCodeRepo.findOne({ where: { ownerType, ownerId: String(ownerId), type: qrType, isActive: true } });
+    if (!qrCode) {
+      // Generate token
+      const token = this.generateQrToken(qrType);
+      const now = new Date();
+      let expiresAt: Date | null = null;
+      let lastRefreshedAt: Date | null = null;
+      if (qrType === QrCodeType.DYNAMIC) {
+        expiresAt = new Date(now.getTime() + 5 * 60 * 1000); // 5 min expiry
+        lastRefreshedAt = now;
       }
+      qrCode = this.qrCodeRepo.create({
+        token,
+        type: qrType,
+        ownerType,
+        ownerId: String(ownerId),
+        expiresAt,
+        lastRefreshedAt,
+        isActive: true,
+      });
+      await this.qrCodeRepo.save(qrCode);
+    }
 
-      // Create QR code data - just return the data, don't generate image
-      const qrData = {
-        jobId: job.id,
-        jobName: job.jobName,
-        clientName: job.client?.name || '',
-  workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
-        startDate: job.startDate,
-        endDate: job.endDate,
-        timestamp: new Date().toISOString(),
-        // Add a secure token for verification
-        token: `SECURE-JOB-${job.id}-${Date.now()}`,
-      };
+    // If DYNAMIC and expired, refresh
+    if (qrType === QrCodeType.DYNAMIC && qrCode.expiresAt && qrCode.expiresAt < new Date()) {
+      qrCode.token = this.generateQrToken(qrType);
+      qrCode.lastRefreshedAt = new Date();
+      qrCode.expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      await this.qrCodeRepo.save(qrCode);
+    }
 
-      return {
-        qrData,
-      };
-    } catch (error) {
-      throw new Error(`Failed to generate QR code data: ${error.message}`);
+    // Generate QR image (base64)
+    const qrPayload = {
+      token: qrCode.token,
+      type: qrCode.type,
+      ownerType: qrCode.ownerType,
+      ownerId: qrCode.ownerId,
+    };
+    const qrString = JSON.stringify(qrPayload);
+    const qrImage = await QRCode.toDataURL(qrString);
+
+    return {
+      qrImage,
+      token: qrCode.token,
+      type: qrCode.type,
+      expiresAt: qrCode.expiresAt,
+      lastRefreshedAt: qrCode.lastRefreshedAt,
+    };
+  }
+
+  /**
+   * Generate a secure QR token (44 chars, base64url for DYNAMIC, UUIDv4 for STATIC)
+   */
+  private generateQrToken(type: QrCodeType): string {
+    if (type === QrCodeType.STATIC) {
+      // UUIDv4
+      return uuidv4();
+    } else {
+      // 256-bit random, base64url
+      const bytes = require('crypto').randomBytes(32);
+      return Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
   }
 
@@ -1795,55 +1924,55 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Complete a task
    */
-  async completeTask(taskId: number, workerId: number) {
-    const task = await this.taskRepo.findOne({
-      where: { id: taskId },
-      relations: ['job'],
-    });
+  // async completeTask(taskId: number, workerId: number) {
+  //   const task = await this.taskRepo.findOne({
+  //     where: { id: taskId },
+  //     relations: ['job'],
+  //   });
 
-    if (!task) {
-      throw new Error('Task not found');
-    }
+  //   if (!task) {
+  //     throw new Error('Task not found');
+  //   }
 
-    // Check if worker is assigned to this job
-    const job = await this.jobRepo.findOne({
-      where: { id: task.job.id },
-      relations: ['workers'],
-    });
+  //   // Check if worker is assigned to this job
+  //   const job = await this.jobRepo.findOne({
+  //     where: { id: task.job.id },
+  //     relations: ['workers'],
+  //   });
 
-    if (!job) {
-      throw new Error('Job not found');
-    }
+  //   if (!job) {
+  //     throw new Error('Job not found');
+  //   }
 
-    const isWorkerAssigned = job.workers.some(w => w.id === workerId);
-    if (!isWorkerAssigned) {
-      throw new Error('Worker is not assigned to this job');
-    }
+  //   const isWorkerAssigned = job.workers.some(w => w.id === workerId);
+  //   if (!isWorkerAssigned) {
+  //     throw new Error('Worker is not assigned to this job');
+  //   }
 
-    // Update task as completed
-    task.isCompleted = true;
-    task.completedAt = new Date();
-    task.completedByWorkerId = workerId;
+  //   // Update task as completed
+  //   task.isCompleted = true;
+  //   task.completedAt = new Date();
+  //   task.completedByWorkerId = workerId;
 
-    const updatedTask = await this.taskRepo.save(task);
+  //   const updatedTask = await this.taskRepo.save(task);
 
-    // Check if all tasks for this job are completed
-    const allTasks = await this.taskRepo.find({
-      where: { job: { id: task.job.id } },
-    });
+  //   // Check if all tasks for this job are completed
+  //   const allTasks = await this.taskRepo.find({
+  //     where: { job: { id: task.job.id } },
+  //   });
 
-    const allTasksCompleted = allTasks.every(t => t.isCompleted);
-    if (allTasksCompleted) {
-      job.status = JobStatus.COMPLETED;
-      await this.jobRepo.save(job);
-    }
+  //   const allTasksCompleted = allTasks.every(t => t.isCompleted);
+  //   if (allTasksCompleted) {
+  //     job.status = JobStatus.COMPLETED;
+  //     await this.jobRepo.save(job);
+  //   }
 
-    return {
-      task: updatedTask,
-      allTasksCompleted,
-      jobStatus: job.status,
-    };
-  }
+  //   return {
+  //     task: updatedTask,
+  //     allTasksCompleted,
+  //     jobStatus: job.status,
+  //   };
+  // }
 
   /**
    * Get task completion status for a job
@@ -2074,82 +2203,82 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
   /**
    * Get scan history for a worker
    */
-  async getWorkerScanHistory(workerId: number): Promise<any[]> {
-    try {
-      const scanLogs = await this.scanLogRepo.find({
-        where: { workerId },
-        relations: ['job', 'job.client'],
-        order: { scanTime: 'DESC' },
-      });
+  // async getWorkerScanHistory(workerId: number): Promise<any[]> {
+  //   try {
+  //     const scanLogs = await this.scanLogRepo.find({
+  //       where: { workerId },
+  //       relations: ['job', 'job.client'],
+  //       order: { scanTime: 'DESC' },
+  //     });
 
-      return scanLogs.map(log => ({
-        id: log.id,
-        scanType: log.scanType,
-        scanTime: log.scanTime,
-        location: log.location,
-        notes: log.notes,
-        job: {
-          id: log.job.id,
-          jobName: log.job.jobName,
-          clientName: log.job.client?.name || '',
-        },
-      }));
-    } catch (error) {
-      throw new Error(`Failed to fetch worker scan history: ${error.message}`);
-    }
-  }
+  //     return scanLogs.map(log => ({
+  //       id: log.id,
+  //       scanType: log.scanType,
+  //       scanTime: log.scanTime,
+  //       location: log.location,
+  //       notes: log.notes,
+  //       job: {
+  //         id: log.job.id,
+  //         jobName: log.job.jobName,
+  //         clientName: log.job.client?.name || '',
+  //       },
+  //     }));
+  //   } catch (error) {
+  //     throw new Error(`Failed to fetch worker scan history: ${error.message}`);
+  //   }
+  // }
 
   /**
    * Get today's attendance summary for a job
    */
-  async getTodayAttendanceSummary(jobId: number): Promise<any> {
-    try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
+  // async getTodayAttendanceSummary(jobId: number): Promise<any> {
+  //   try {
+  //     const today = new Date();
+  //     today.setHours(0, 0, 0, 0);
+  //     const tomorrow = new Date(today);
+  //     tomorrow.setDate(tomorrow.getDate() + 1);
 
-      const todayScans = await this.scanLogRepo
-        .createQueryBuilder('scan')
-        .leftJoinAndSelect('scan.worker', 'worker')
-        .leftJoinAndSelect('worker.user', 'user')
-        .where('scan.jobId = :jobId', { jobId })
-        .andWhere('scan.scanTime >= :today', { today })
-        .andWhere('scan.scanTime < :tomorrow', { tomorrow })
-        .orderBy('scan.scanTime', 'ASC')
-        .getMany();
+  //     const todayScans = await this.scanLogRepo
+  //       .createQueryBuilder('scan')
+  //       .leftJoinAndSelect('scan.worker', 'worker')
+  //       .leftJoinAndSelect('worker.user', 'user')
+  //       .where('scan.jobId = :jobId', { jobId })
+  //       .andWhere('scan.scanTime >= :today', { today })
+  //       .andWhere('scan.scanTime < :tomorrow', { tomorrow })
+  //       .orderBy('scan.scanTime', 'ASC')
+  //       .getMany();
 
-      // Group scans by worker
-      const workerScans = new Map();
+  //     // Group scans by worker
+  //     const workerScans = new Map();
       
-      todayScans.forEach(scan => {
-        const workerId = scan.workerId;
-        if (!workerScans.has(workerId)) {
-          workerScans.set(workerId, {
-            worker: {
-              id: scan.worker.id,
-              code: scan.worker.code,
-              name: scan.worker.user?.name || null,
-            },
-            scans: [],
-          });
-        }
-        workerScans.get(workerId).scans.push({
-          scanType: scan.scanType,
-          scanTime: scan.scanTime,
-          location: scan.location,
-        });
-      });
+  //     todayScans.forEach(scan => {
+  //       const workerId = scan.workerId;
+  //       if (!workerScans.has(workerId)) {
+  //         workerScans.set(workerId, {
+  //           worker: {
+  //             id: scan.worker.id,
+  //             code: scan.worker.code,
+  //             name: scan.worker.user?.name || null,
+  //           },
+  //           scans: [],
+  //         });
+  //       }
+  //       workerScans.get(workerId).scans.push({
+  //         scanType: scan.scanType,
+  //         scanTime: scan.scanTime,
+  //         location: scan.location,
+  //       });
+  //     });
 
-      return {
-        date: today.toISOString().split('T')[0],
-        totalWorkers: workerScans.size,
-        attendanceData: Array.from(workerScans.values()),
-      };
-    } catch (error) {
-      throw new Error(`Failed to fetch attendance summary: ${error.message}`);
-    }
-  }
+  //     return {
+  //       date: today.toISOString().split('T')[0],
+  //       totalWorkers: workerScans.size,
+  //       attendanceData: Array.from(workerScans.values()),
+  //     };
+  //   } catch (error) {
+  //     throw new Error(`Failed to fetch attendance summary: ${error.message}`);
+  //   }
+  // }
 
   // ========== Job Status Management Methods ========== //
 
