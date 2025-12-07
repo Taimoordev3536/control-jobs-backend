@@ -10,7 +10,7 @@ export class Survey {
   id: number;
 
   // optional link to a job
-  @ManyToOne(() => Job, { nullable: true })
+  @ManyToOne(() => Job, { nullable: true, onDelete: 'CASCADE' })
   job: Job | null;
 
   // employer that created the survey
@@ -55,6 +55,9 @@ export class Survey {
   interval: number | null;
 
   // Arrays as JSON text
+  @Column({ type: 'text', nullable: true })
+  weeklyDays: string | null;
+
   @Column({ type: 'text', nullable: true })
   monthlyDays: string | null;
 

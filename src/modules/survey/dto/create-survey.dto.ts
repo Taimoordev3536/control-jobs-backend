@@ -40,6 +40,10 @@ export class CreateSurveyDto {
 
   @IsOptional()
   @IsArray()
+  weeklyDays?: any[];
+
+  @IsOptional()
+  @IsArray()
   monthlyDays?: any[];
 
   @IsOptional()

@@ -15,6 +15,7 @@ import { ScanLog } from './entities/scan-log.entity';
 import { WorkSession } from './entities/work-session.entity';
 import { SeasonPeriod } from './entities/season-period.entity';
 import { SeasonalSchedule } from './entities/seasonal-schedule.entity';
+import { ShiftInstance } from './entities/shift-instance.entity';
 import { Worker } from '../workers/entities/worker.entity';
 import { Client } from '../clients/entities/client.entity';
 import { WorkCenter } from '../work-centers/entities/work-center.entity';
@@ -23,7 +24,9 @@ import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { CreateJobDto } from './dto/create-job.dto';
+import { UpdateJobDto } from './dto/update-job.dto';
 import { Survey } from '../survey/entities/survey.entity';
+import { SurveyResponse } from '../survey/entities/survey-response.entity';
 import { JobTasksTabItemDto } from './dto/job-tasks-tab.dto';
 import { User } from '../users/entities/user.entity';
 import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
@@ -58,6 +61,8 @@ export class JobService {
     private alertsService: AlertsService,
   ) {}
 
+
+  // create job api
   async createJob(createJobDto: CreateJobDto, employerUserId: number): Promise<Job> {
     let job: Job;
     await this.dataSource.transaction(async manager => {
@@ -412,6 +417,7 @@ export class JobService {
           startDate: cs.startDate || null,
           endDate: cs.endDate || null,
           interval: typeof cs.interval !== 'undefined' ? Number(cs.interval) : null,
+          weeklyDays: cs.weeklyDays ? JSON.stringify(cs.weeklyDays) : null,
           monthlyDays: cs.monthlyDays ? JSON.stringify(cs.monthlyDays) : null,
           monthlyWeekdays: cs.monthlyWeekdays ? JSON.stringify(cs.monthlyWeekdays) : null,
           monthlyStartWeekday: (typeof cs.monthlyStartWeekday !== 'undefined'
@@ -428,9 +434,15 @@ export class JobService {
       // Worker Survey (optional)
       if (createJobDto.workerSurvey) {
         const ws = createJobDto.workerSurvey as any;
+        
+        // Link to first worker to identify this as a worker survey
+        // (The survey applies to all workers, but we need at least one worker relation for identification)
+        const firstWorker = job.workers && job.workers.length > 0 ? job.workers[0] : null;
+        
         const workerSurvey = manager.create(Survey, {
           job,
           employer,
+          worker: firstWorker, // Add worker relation to identify as worker survey
           questionText: typeof ws.questionText !== 'undefined' && ws.questionText !== null ? ws.questionText : (ws.title || null),
           rateDigit: typeof ws.rateDigit !== 'undefined' ? Number(ws.rateDigit) : (typeof ws.monitoringValue !== 'undefined' ? Number(ws.monitoringValue) : null),
           textAlertTracking: typeof ws.textAlertTracking !== 'undefined' ? ws.textAlertTracking : (ws.textAlertTracking || null),
@@ -439,6 +451,7 @@ export class JobService {
           startDate: ws.startDate || null,
           endDate: ws.endDate || null,
           interval: typeof ws.interval !== 'undefined' ? Number(ws.interval) : null,
+          weeklyDays: ws.weeklyDays ? JSON.stringify(ws.weeklyDays) : null,
           monthlyDays: ws.monthlyDays ? JSON.stringify(ws.monthlyDays) : null,
           monthlyWeekdays: ws.monthlyWeekdays ? JSON.stringify(ws.monthlyWeekdays) : null,
           monthlyStartWeekday: (typeof ws.monthlyStartWeekday !== 'undefined'
@@ -470,6 +483,646 @@ export class JobService {
       ],
     });
   }
+
+
+  // get job 
+  async getJobByIdForEdit(jobId: number, userId: number): Promise<any> {
+    try {
+      // Step 1: Determine user type and permissions
+      let userType: 'employer' | 'client' | 'worker' | null = null;
+      let relatedEntityId: number | null = null;
+
+      // Check if user is an employer
+      const employerUser = await this.employerUserRepo.findOne({
+        where: { user: { id: userId } },
+        relations: ['employer'],
+      });
+
+      if (employerUser?.employer) {
+        userType = 'employer';
+        relatedEntityId = employerUser.employer.id;
+      }
+
+      // Check if user is a client
+      if (!userType) {
+        const clientUser = await this.clientUserRepo.findOne({
+          where: { user: { id: userId } },
+          relations: ['client'],
+        });
+        if (clientUser?.client) {
+          userType = 'client';
+          relatedEntityId = clientUser.client.id;
+        }
+      }
+
+      // Check if user is a worker
+      if (!userType) {
+        const workerUser = await this.workerUserRepo.findOne({
+          where: { user: { id: userId } },
+          relations: ['worker'],
+        });
+        if (workerUser?.worker) {
+          userType = 'worker';
+          relatedEntityId = workerUser.worker.id;
+        }
+      }
+
+      if (!userType) {
+        throw new Error('User not found or not associated with any role');
+      }
+
+      // Step 2: Load job with all relations
+      const job = await this.jobRepo.findOne({
+        where: { id: jobId },
+        relations: [
+          'employer',
+          'client',
+          'workCenters',
+          'workers',
+          'signingMethods',
+          'alerts',
+          'tasks',
+          'seasonalSchedules',
+          'seasonalSchedules.shifts',
+          'surveys',
+          'surveys.client',
+          'surveys.worker',
+        ],
+      });
+
+      if (!job) {
+        throw new Error('Job not found');
+      }
+
+      // Step 3: Validate permissions
+      if (userType === 'employer') {
+        if (job.employer.id !== relatedEntityId) {
+          throw new Error('Permission denied: Job does not belong to your employer account');
+        }
+      } else if (userType === 'client') {
+        if (!job.client || job.client.id !== relatedEntityId) {
+          throw new Error('Permission denied: Job is not assigned to your client account');
+        }
+      } else if (userType === 'worker') {
+        const isAssigned = job.workers.some(w => w.id === relatedEntityId);
+        if (!isAssigned) {
+          throw new Error('Permission denied: You are not assigned to this job');
+        }
+      }
+
+      // Step 4: Transform job data to match CreateJobDto structure
+      const formattedJob = {
+        jobName: job.jobName,
+        startDate: job.startDate,
+        endDate: job.endDate,
+        clientId: job.client?.id || null,
+        workCenterIds: job.workCenters?.map(wc => wc.id) || [],
+        workerIds: job.workers?.map(w => w.id) || [],
+        note: job.note || '',
+        status: job.status,
+        scheduleType: job.scheduleType,
+
+        // Transform seasonal schedules with nested shifts
+        seasonalSchedules: job.seasonalSchedules?.map(ss => ({
+          season: ss.season,
+          startDate: ss.startDate || null,
+          endDate: ss.endDate || null,
+          totalWeekHours: ss.totalWeekHours || 0,
+          shifts: ss.shifts?.map(shift => ({
+            startWeekday: shift.startWeekday,
+            endWeekday: shift.endWeekday,
+            baseStartTime: shift.baseStartTime,
+            baseEndTime: shift.baseEndTime,
+            isContinuous: shift.isContinuous || false,
+            totalHours: shift.totalHours || null,
+          })) || [],
+        })) || [],
+
+        // Transform signing methods
+        signingMethods: job.signingMethods?.map(sm => ({
+          methodType: sm.methodType,
+          methodDetails: sm.methodDetails || [],
+          verifyIdentity: sm.verifyIdentity || false,
+        })) || [],
+
+        // Transform alerts
+        alerts: job.alerts?.map(alert => ({
+          alertType: alert.alertType,
+          triggerTime: alert.triggerTime || null,
+          minDuration: alert.minDuration || null,
+        })) || [],
+
+        // Transform tasks
+        tasks: job.tasks?.map(task => ({
+          id: task.id,
+          name: task.name,
+          note: task.note || '',
+          expectedDuration: task.expectedDuration || 0,
+          shift: task.shift || null,
+          timing: task.timing,
+          periodicity: task.periodicity,
+          workCenterId: task.workCenterId !== undefined && task.workCenterId !== null ? task.workCenterId : null,
+          startDate: task.startDate || null,
+          endDate: task.endDate || null,
+          interval: task.interval || 1,
+          onceDate: task.onceDate || null,
+          weeklyDays: task.weeklyDays || null,
+          monthlyDays: task.monthlyDays || null,
+          monthlyWeekdays: task.monthlyWeekdays || null,
+          monthlyStartWeekday: task.monthlyStartWeekday || null,
+          monthlyEndWeekday: task.monthlyEndWeekday || null,
+          yearlyMonths: task.yearlyMonths || null,
+          yearlyDays: task.yearlyDays || null,
+          alertTask: task.alertTask || false,
+          pendingTask: task.pendingTask || false,
+        })) || [],
+
+        // Separate surveys by type
+        survey: null,
+        customerSurvey: null,
+        workerSurvey: null,
+      };
+
+      // Parse surveys - identify by client/worker relations
+      if (job.surveys && job.surveys.length > 0) {
+        for (const survey of job.surveys) {
+          const surveyData = {
+            questionText: survey.questionText || '',
+            rateDigit: survey.rateDigit || null,
+            textAlertTracking: survey.textAlertTracking || null,
+            greetingText: survey.greetingText || '',
+            periodicity: survey.periodicity || null,
+            startDate: survey.startDate || null,
+            endDate: survey.endDate || null,
+            interval: survey.interval || null,
+            weeklyDays: survey.weeklyDays || null,
+            monthlyDays: survey.monthlyDays || null,
+            monthlyWeekdays: survey.monthlyWeekdays || null,
+            monthlyStartWeekday: survey.monthlyStartWeekday || null,
+            monthlyEndWeekday: survey.monthlyEndWeekday || null,
+            sendTime: survey.sendTime || null,
+          };
+
+          if (survey.client) {
+            // This is a customer survey
+            formattedJob.customerSurvey = surveyData;
+          } else if (survey.worker) {
+            // This is a worker survey
+            formattedJob.workerSurvey = surveyData;
+          } else {
+            // Generic survey (backward compatibility)
+            formattedJob.survey = surveyData;
+          }
+        }
+      }
+
+      return formattedJob;
+    } catch (error) {
+      console.error('Error fetching job for edit:', error);
+      throw error;
+    }
+  }
+
+
+    /**
+   * Update an existing job with all related entities
+   */
+  async updateJob(jobId: number, updateJobDto: UpdateJobDto, employerUserId: number): Promise<Job> {
+    let job: Job;
+    
+    await this.dataSource.transaction(async manager => {
+      // Verify user has access to this job
+      const employerUserLink = await manager.findOne(EmployerUser, {
+        where: { user: { id: employerUserId } },
+        relations: ['employer'],
+      });
+      if (!employerUserLink || !employerUserLink.employer) {
+        throw new Error('Employer not found for this user');
+      }
+      const employer = employerUserLink.employer;
+
+      // Load existing job with all relations
+      job = await manager.findOne(Job, {
+        where: { id: jobId },
+        relations: [
+          'employer',
+          'client',
+          'workCenters',
+          'workers',
+          'seasonalSchedules',
+          'seasonalSchedules.shifts',
+          'signingMethods',
+          'alerts',
+          'tasks',
+          'surveys',
+        ],
+      });
+
+      if (!job) {
+        throw new Error(`Job with id ${jobId} not found`);
+      }
+
+      // Verify job belongs to the employer
+      if (job.employer.id !== employer.id) {
+        throw new Error('Unauthorized to update this job');
+      }
+
+      // Update basic job fields
+      if (updateJobDto.jobName !== undefined) job.jobName = updateJobDto.jobName;
+      if (updateJobDto.startDate !== undefined) job.startDate = new Date(updateJobDto.startDate);
+      if (updateJobDto.endDate !== undefined) job.endDate = new Date(updateJobDto.endDate);
+      if (updateJobDto.note !== undefined) job.note = updateJobDto.note;
+      if (updateJobDto.status !== undefined) job.status = updateJobDto.status;
+
+      // Handle scheduleType normalization
+      if (updateJobDto.scheduleType !== undefined) {
+        const rawScheduleType: any = updateJobDto.scheduleType;
+        let normalizedScheduleType: ScheduleType = ScheduleType.FREE;
+        if (typeof rawScheduleType !== 'undefined' && rawScheduleType !== null) {
+          const s = String(rawScheduleType).toLowerCase();
+          if (s === 'programming' || s === 'fixed') normalizedScheduleType = ScheduleType.FIXED;
+          else if (s === 'free' || s === 'flexible') normalizedScheduleType = ScheduleType.FREE;
+          else if (s === 'seasonal') normalizedScheduleType = ScheduleType.SEASONAL;
+          else if ((Object.values(ScheduleType) as string[]).includes(s)) {
+            normalizedScheduleType = s as ScheduleType;
+          }
+        }
+        job.scheduleType = normalizedScheduleType;
+      }
+
+      // Update client
+      if (updateJobDto.clientId !== undefined) {
+        if (updateJobDto.clientId === null) {
+          job.client = null;
+        } else {
+          const cid = Number(updateJobDto.clientId);
+          if (cid > 0) {
+            const client = await manager.findOne(Client, { where: { id: cid } });
+            if (!client) throw new Error(`Client with id ${cid} not found`);
+            job.client = client;
+          } else if (cid < 0) {
+            // Employer selection
+            const selectedEmployerId = Math.abs(cid);
+            if (selectedEmployerId !== employer.id) {
+              throw new Error('Invalid employer selection');
+            }
+            job.client = null;
+          }
+        }
+      }
+
+      // Update work centers
+      if (updateJobDto.workCenterIds !== undefined && Array.isArray(updateJobDto.workCenterIds)) {
+        if (updateJobDto.workCenterIds.length > 0) {
+          const wcs = await manager.findBy(WorkCenter, { id: In(updateJobDto.workCenterIds as number[]) });
+          if (wcs.length !== updateJobDto.workCenterIds.length) {
+            const foundIds = new Set(wcs.map(w => w.id));
+            const missing = (updateJobDto.workCenterIds as number[]).filter(id => !foundIds.has(id));
+            throw new Error(`WorkCenter(s) not found: ${missing.join(', ')}`);
+          }
+          job.workCenters = wcs;
+        } else {
+          job.workCenters = [];
+        }
+      }
+
+      // Update workers
+      if (updateJobDto.workerIds !== undefined && Array.isArray(updateJobDto.workerIds)) {
+        if (updateJobDto.workerIds.length > 0) {
+          const workers = await manager.findBy(Worker, { id: In(updateJobDto.workerIds as number[]) });
+          job.workers = workers;
+        } else {
+          job.workers = [];
+        }
+      }
+
+      await manager.save(job);
+
+      // Delete old related entities
+      if (job.seasonalSchedules && job.seasonalSchedules.length > 0) {
+        for (const ss of job.seasonalSchedules) {
+          if (ss.shifts && ss.shifts.length > 0) {
+            await manager.remove(ss.shifts);
+          }
+          await manager.remove(ss);
+        }
+      }
+      
+      if (job.signingMethods && job.signingMethods.length > 0) {
+        await manager.remove(job.signingMethods);
+      }
+      
+      if (job.alerts && job.alerts.length > 0) {
+        await manager.remove(job.alerts);
+      }
+      
+      if (job.tasks && job.tasks.length > 0) {
+        await manager.remove(job.tasks);
+      }
+      
+      if (job.surveys && job.surveys.length > 0) {
+        await manager.remove(job.surveys);
+      }
+
+      // Create new seasonalSchedules
+      if (updateJobDto.seasonalSchedules && Array.isArray(updateJobDto.seasonalSchedules)) {
+        for (const ssDto of updateJobDto.seasonalSchedules) {
+          try {
+            const normalizeDayMonth = (v: any): string | null => {
+              if (!v) return null;
+              let s = String(v).trim();
+              if (/^\d{2}\/\d{2}$/.test(s)) s = s.replace('/', '-');
+              if (!/^\d{2}-\d{2}$/.test(s)) return null;
+              const [dd, mm] = s.split('-').map(n => Number(n));
+              if (dd < 1 || dd > 31 || mm < 1 || mm > 12) return null;
+              return `${String(dd).padStart(2,'0')}-${String(mm).padStart(2,'0')}`;
+            };
+            const startDayMonth = normalizeDayMonth(ssDto.startDate);
+            const endDayMonth = normalizeDayMonth(ssDto.endDate);
+            const ssEntity = manager.create(SeasonalSchedule, {
+              job,
+              season: ssDto.season,
+              startDate: startDayMonth,
+              endDate: endDayMonth,
+            });
+            await manager.save(ssEntity);
+
+            let totalWeekHours = 0;
+            for (const w of ssDto.shifts || []) {
+              const shiftEnt = manager.create(Shift, {
+                seasonalSchedule: ssEntity,
+                startWeekday: w.startWeekday,
+                endWeekday: w.endWeekday,
+                baseStartTime: w.baseStartTime,
+                baseEndTime: w.baseEndTime,
+                isContinuous: !!w.isContinuous,
+                totalHours: typeof w.totalHours === 'number' ? w.totalHours : null,
+              });
+              await manager.save(shiftEnt);
+              if (typeof w.totalHours === 'number' && !Number.isNaN(w.totalHours)) {
+                totalWeekHours += Math.floor(w.totalHours);
+              }
+            }
+
+            ssEntity.totalWeekHours = totalWeekHours;
+            await manager.save(ssEntity);
+          } catch (err) {
+            console.warn('Failed to save seasonal schedule for job', job?.id, err?.message || err);
+          }
+        }
+      }
+
+      // Create new shifts (legacy support)
+      if (updateJobDto.shifts && Array.isArray(updateJobDto.shifts)) {
+        for (const shiftDto of updateJobDto.shifts) {
+          let dayValue: Weekday | undefined = undefined;
+          if (shiftDto.day) {
+            const d = String(shiftDto.day).toLowerCase();
+            if ((Object.values(Weekday) as string[]).includes(d)) {
+              dayValue = d as Weekday;
+            }
+          }
+
+          const shiftPayload: any = { ...shiftDto, job };
+          if (dayValue) shiftPayload.day = dayValue;
+          if (
+            typeof shiftPayload.season !== 'undefined' &&
+            (shiftPayload.season === null || shiftPayload.season === '' ||
+              (shiftPayload.season !== 'summer' && shiftPayload.season !== 'winter'))
+          ) {
+            delete shiftPayload.season;
+          }
+          const shift = manager.create(Shift, shiftPayload);
+          await manager.save(shift);
+        }
+      }
+
+      // Create new signing methods
+      if (updateJobDto.signingMethods && Array.isArray(updateJobDto.signingMethods)) {
+        for (const signingDto of updateJobDto.signingMethods) {
+          try {
+            const rawType = String(signingDto.methodType || '').toLowerCase();
+            const methodType = rawType === 'laptop' ? SigningMethodType.PC : (rawType === 'pc' ? SigningMethodType.PC : SigningMethodType.MOBILE);
+
+            let detailsArr: string[] = [];
+            const md: any = signingDto.methodDetails;
+            if (Array.isArray(md)) {
+              detailsArr = md.map((d: any) => String(d).toLowerCase());
+            } else if (typeof md === 'string') {
+              detailsArr = md.split(',').map(s => String(s).trim().toLowerCase()).filter(Boolean);
+            } else if (md && typeof md === 'object') {
+              detailsArr = Object.entries(md).filter(([_, v]) => !!v).map(([k]) => String(k).toLowerCase());
+            }
+
+            const mappedDetails = detailsArr.map(d => {
+              if (d === 'wifi' || d === 'web') return SigningMethodDetail.WEB;
+              if (d === 'ip') return SigningMethodDetail.IP;
+              if (d === 'gps') return SigningMethodDetail.GPS;
+              if (d === 'qrcode' || d === 'qr' || d === 'qr_code') return SigningMethodDetail.QRCODE;
+              return d as SigningMethodDetail;
+            }).filter(Boolean) as SigningMethodDetail[];
+
+            const signingMethod = manager.create(SigningMethod, {
+              job,
+              methodType,
+              methodDetails: mappedDetails,
+              verifyIdentity: methodType === SigningMethodType.MOBILE ? !!signingDto.verifyIdentity : false,
+            });
+            await manager.save(signingMethod);
+          } catch (err) {
+            console.warn('Failed to save signing method for job', job?.id, err?.message || err);
+          }
+        }
+      }
+
+      // Create new alerts
+      if (updateJobDto.alerts && Array.isArray(updateJobDto.alerts)) {
+        for (const alertDto of updateJobDto.alerts) {
+          const alert = manager.create(Alert, { ...alertDto, job });
+          await manager.save(alert);
+        }
+      }
+
+      // Create new tasks
+      if (updateJobDto.tasks && Array.isArray(updateJobDto.tasks)) {
+        for (const taskDto of updateJobDto.tasks) {
+          const payload: any = { ...taskDto, job };
+
+          const normalizeWeekday = (v: any) => {
+            if (v === null || typeof v === 'undefined' || v === '') return null;
+            let n = Number(v);
+            if (isNaN(n)) return null;
+            if (n === 7) n = 0;
+            if (n > 6) n = n % 7;
+            if (n < 0) n = Math.abs(n) % 7;
+            return n;
+          }
+
+          if (typeof payload.monthlyStartWeekday !== 'undefined') {
+            payload.monthlyStartWeekday = normalizeWeekday(payload.monthlyStartWeekday);
+          }
+          if (typeof payload.monthlyEndWeekday !== 'undefined') {
+            payload.monthlyEndWeekday = normalizeWeekday(payload.monthlyEndWeekday);
+          }
+
+          const task = manager.create(Task, payload);
+          await manager.save(task);
+        }
+      }
+
+      // Create new customer survey
+      if (updateJobDto.customerSurvey) {
+        const cs = updateJobDto.customerSurvey as any;
+        const customerSurvey = manager.create(Survey, {
+          job,
+          employer,
+          client: job.client || null,
+          questionText: typeof cs.questionText !== 'undefined' && cs.questionText !== null ? cs.questionText : (cs.title || null),
+          rateDigit: typeof cs.rateDigit !== 'undefined' ? Number(cs.rateDigit) : (typeof cs.monitoringValue !== 'undefined' ? Number(cs.monitoringValue) : null),
+          textAlertTracking: typeof cs.textAlertTracking !== 'undefined' ? cs.textAlertTracking : (cs.textAlertTracking || null),
+          greetingText: typeof cs.greetingText !== 'undefined' && cs.greetingText !== null ? cs.greetingText : (cs.description || null),
+          periodicity: cs.periodicity || null,
+          startDate: cs.startDate || null,
+          endDate: cs.endDate || null,
+          interval: typeof cs.interval !== 'undefined' ? Number(cs.interval) : null,
+          weeklyDays: cs.weeklyDays ? JSON.stringify(cs.weeklyDays) : null,
+          monthlyDays: cs.monthlyDays ? JSON.stringify(cs.monthlyDays) : null,
+          monthlyWeekdays: cs.monthlyWeekdays ? JSON.stringify(cs.monthlyWeekdays) : null,
+          monthlyStartWeekday: (typeof cs.monthlyStartWeekday !== 'undefined'
+            ? cs.monthlyStartWeekday
+            : (typeof cs.monthlyFirstWeekday !== 'undefined' ? cs.monthlyFirstWeekday : null)),
+          monthlyEndWeekday: (typeof cs.monthlyEndWeekday !== 'undefined'
+            ? cs.monthlyEndWeekday
+            : (typeof cs.monthlyLastWeekday !== 'undefined' ? cs.monthlyLastWeekday : null)),
+          sendTime: typeof cs.sendTime !== 'undefined' && cs.sendTime !== null ? cs.sendTime : (cs.hour || null),
+        });
+        await manager.save(customerSurvey);
+      }
+
+      // Create new worker survey
+      if (updateJobDto.workerSurvey) {
+        const ws = updateJobDto.workerSurvey as any;
+        const firstWorker = job.workers && job.workers.length > 0 ? job.workers[0] : null;
+        
+        const workerSurvey = manager.create(Survey, {
+          job,
+          employer,
+          worker: firstWorker,
+          questionText: typeof ws.questionText !== 'undefined' && ws.questionText !== null ? ws.questionText : (ws.title || null),
+          rateDigit: typeof ws.rateDigit !== 'undefined' ? Number(ws.rateDigit) : (typeof ws.monitoringValue !== 'undefined' ? Number(ws.monitoringValue) : null),
+          textAlertTracking: typeof ws.textAlertTracking !== 'undefined' ? ws.textAlertTracking : (ws.textAlertTracking || null),
+          greetingText: typeof ws.greetingText !== 'undefined' && ws.greetingText !== null ? ws.greetingText : (ws.description || null),
+          periodicity: ws.periodicity || null,
+          startDate: ws.startDate || null,
+          endDate: ws.endDate || null,
+          interval: typeof ws.interval !== 'undefined' ? Number(ws.interval) : null,
+          weeklyDays: ws.weeklyDays ? JSON.stringify(ws.weeklyDays) : null,
+          monthlyDays: ws.monthlyDays ? JSON.stringify(ws.monthlyDays) : null,
+          monthlyWeekdays: ws.monthlyWeekdays ? JSON.stringify(ws.monthlyWeekdays) : null,
+          monthlyStartWeekday: (typeof ws.monthlyStartWeekday !== 'undefined'
+            ? ws.monthlyStartWeekday
+            : (typeof ws.monthlyFirstWeekday !== 'undefined' ? ws.monthlyFirstWeekday : null)),
+          monthlyEndWeekday: (typeof ws.monthlyEndWeekday !== 'undefined'
+            ? ws.monthlyEndWeekday
+            : (typeof ws.monthlyLastWeekday !== 'undefined' ? ws.monthlyLastWeekday : null)),
+          sendTime: typeof ws.sendTime !== 'undefined' && ws.sendTime !== null ? ws.sendTime : (ws.hour || null),
+        });
+        await manager.save(workerSurvey);
+      }
+    });
+
+    // Return updated job with all relations
+    return this.jobRepo.findOne({
+      where: { id: job.id },
+      relations: [
+        'employer',
+        'client',
+        'workCenters',
+        'workers',
+        'seasonalSchedules',
+        'seasonalSchedules.shifts',
+        'signingMethods',
+        'alerts',
+        'tasks',
+        'surveys',
+      ],
+    });
+  }
+
+//**********DELETE JOB ********
+
+async deleteJob(jobId: number, employerUserId: number): Promise<void> {
+  await this.dataSource.transaction(async manager => {
+    // Verify the user has permission to delete this job
+    const employerUserLink = await manager.findOne(EmployerUser, {
+      where: { user: { id: employerUserId } },
+      relations: ['employer'],
+    });
+    
+    if (!employerUserLink || !employerUserLink.employer) {
+      throw new Error('Employer not found for this user');
+    }
+
+    // Verify the job belongs to this employer
+    const job = await manager.findOne(Job, {
+      where: { id: jobId, employer: { id: employerUserLink.employer.id } },
+      relations: ['employer'],
+    });
+
+    if (!job) {
+      throw new Error('Job not found or you dont have permission to delete it');
+    }
+
+    // Delete dependent entities first (in reverse order of creation)
+    
+    // 1. Delete survey responses (worker/client survey submissions)
+    await manager.delete(SurveyResponse, { job: { id: jobId } });
+
+    // 2. Delete survey questions and surveys
+    const surveys = await manager.find(Survey, { where: { job: { id: jobId } } });
+    for (const survey of surveys) {
+      // questions are embedded in the survey row now, so just delete the survey
+      await manager.delete(Survey, { id: survey.id });
+    }
+
+    // 3. Delete task history (completed task records)
+    await manager.delete(TaskHistory, { job: { id: jobId } });
+
+    // 4. Delete tasks
+    await manager.delete(Task, { job: { id: jobId } });
+
+    // 5. Delete alerts
+    await manager.delete(Alert, { job: { id: jobId } });
+
+    // 6. Delete signing methods
+    await manager.delete(SigningMethod, { job: { id: jobId } });
+
+    // 7. Delete shift instances (actual shift occurrences/records)
+    await manager.delete(ShiftInstance, { job: { id: jobId } });
+
+    // 8. Delete seasonal schedules and their shifts (schedule definitions)
+    const seasonalSchedules = await manager.find(SeasonalSchedule, { where: { job: { id: jobId } }, relations: ['shifts'] });
+    for (const ss of seasonalSchedules) {
+      if (ss.shifts && ss.shifts.length > 0) {
+        const shiftIds = ss.shifts.map(s => s.id).filter(Boolean) as number[];
+        if (shiftIds.length) {
+          await manager.delete(Shift, shiftIds);
+        }
+      }
+      await manager.delete(SeasonalSchedule, { id: ss.id });
+    }
+
+    // 9. Delete season periods associated with this job
+    await manager.delete(SeasonPeriod, { job: { id: jobId } });
+
+    // 10. Delete scan logs and work sessions
+    await manager.delete(ScanLog, { job: { id: jobId } });
+    await manager.delete(WorkSession, { job: { id: jobId } });
+
+    // Finally, delete the job itself
+    await manager.delete(Job, { id: jobId });
+  });
+}
 
 
   /**
@@ -561,6 +1214,8 @@ export class JobService {
   async getAllJobsRaw(): Promise<any[]> {
     return this.jobRepo.find();
   }
+
+
 
 
 async getTasksTabDataForUser(userId: number) {
@@ -698,72 +1353,7 @@ async getTasksTabDataForUser(userId: number) {
 
 
 
-//**********DELETE JOB ********
 
-async deleteJob(jobId: number, employerUserId: number): Promise<void> {
-  await this.dataSource.transaction(async manager => {
-    // Verify the user has permission to delete this job
-    const employerUserLink = await manager.findOne(EmployerUser, {
-      where: { user: { id: employerUserId } },
-      relations: ['employer'],
-    });
-    
-    if (!employerUserLink || !employerUserLink.employer) {
-      throw new Error('Employer not found for this user');
-    }
-
-    // Verify the job belongs to this employer
-    const job = await manager.findOne(Job, {
-      where: { id: jobId, employer: { id: employerUserLink.employer.id } },
-      relations: ['employer'],
-    });
-
-    if (!job) {
-      throw new Error('Job not found or you dont have permission to delete it');
-    }
-
-    // Delete dependent entities first (in reverse order of creation)
-    
-    // 1. Delete survey questions and surveys
-    const surveys = await manager.find(Survey, { where: { job: { id: jobId } } });
-    for (const survey of surveys) {
-      // questions are embedded in the survey row now, so just delete the survey
-      await manager.delete(Survey, { id: survey.id });
-    }
-
-    // 2. Delete tasks
-    await manager.delete(Task, { job: { id: jobId } });
-
-    // 3. Delete alerts
-    await manager.delete(Alert, { job: { id: jobId } });
-
-    // 4. Delete signing methods
-    await manager.delete(SigningMethod, { job: { id: jobId } });
-
-    // 5. Delete seasonal schedules and their shifts (new model)
-    // Find seasonal schedules for this job and delete child shifts first
-    const seasonalSchedules = await manager.find(SeasonalSchedule, { where: { job: { id: jobId } }, relations: ['shifts'] });
-    for (const ss of seasonalSchedules) {
-      if (ss.shifts && ss.shifts.length > 0) {
-        const shiftIds = ss.shifts.map(s => s.id).filter(Boolean) as number[];
-        if (shiftIds.length) {
-          await manager.delete(Shift, shiftIds);
-        }
-      }
-      await manager.delete(SeasonalSchedule, { id: ss.id });
-    }
-
-    // 6. Delete season periods associated with this job
-    await manager.delete(SeasonPeriod, { job: { id: jobId } });
-
-    // 7. Delete scan logs and work sessions
-    await manager.delete(ScanLog, { job: { id: jobId } });
-    await manager.delete(WorkSession, { job: { id: jobId } });
-
-    // Finally, delete the job itself
-    await manager.delete(Job, { id: jobId });
-  });
-}
 
 
 //job card employer
@@ -2974,6 +3564,10 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
 
 
 
+
+
 } 
+
+
 
 

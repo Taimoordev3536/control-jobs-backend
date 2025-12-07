@@ -1,7 +1,8 @@
 
-import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Query,Delete,Request,HttpException, HttpStatus, } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Put, Query,Delete,Request,HttpException, HttpStatus, } from '@nestjs/common';
 import { JobService } from './job.service';
 import { CreateJobDto } from './dto/create-job.dto';
+import { UpdateJobDto } from './dto/update-job.dto';
 import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
 import { UpdateJobStatusDto } from './dto/update-job-status.dto';
 import { JobStatus } from './enums/job-status.enum';
@@ -195,6 +196,58 @@ async getAllJobsForClientFromToken(@Req() req) {
   ): Promise<any[]> {
     const userId = req.user?.id;
     return await this.jobService.getJobsByStatus(status, userId);
+  }
+
+  // Get complete job data for editing
+  @UseGuards(JwtAuthGuard)
+  @Get(':id')
+  async getJobById(@Param('id') id: number, @Req() req) {
+    try {
+      const userId = req.user?.id;
+      const job = await this.jobService.getJobByIdForEdit(id, userId);
+      return { 
+        message: 'Job fetched successfully', 
+        data: job,
+        isSuccess: true,
+        statusCode: 200
+      };
+    } catch (error) {
+      const errMsg = error?.message || String(error);
+      console.error('getJobById error:', errMsg);
+      throw new HttpException({
+        message: 'Failed to fetch job',
+        error: errMsg,
+        isSuccess: false,
+      }, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  // Update complete job
+  @UseGuards(JwtAuthGuard)
+  @Put(':id')
+  async updateJob(
+    @Param('id') id: number,
+    @Body() updateJobDto: UpdateJobDto,
+    @Req() req
+  ) {
+    try {
+      const userId = req.user?.id;
+      const job = await this.jobService.updateJob(id, updateJobDto, userId);
+      return {
+        message: 'Job updated successfully',
+        data: job,
+        isSuccess: true,
+        statusCode: 200
+      };
+    } catch (error) {
+      const errMsg = error?.message || String(error);
+      console.error('updateJob error:', errMsg);
+      throw new HttpException({
+        message: 'Failed to update job',
+        error: errMsg,
+        isSuccess: false,
+      }, HttpStatus.BAD_REQUEST);
+    }
   }
 
   @UseGuards(JwtAuthGuard)
