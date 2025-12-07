@@ -41,8 +41,16 @@
 
 // src/dto/create-task.dto.ts
 import { IsString, IsInt, IsEnum, IsArray, IsOptional, ValidateIf, IsDateString, IsBoolean, IsNotEmpty, ArrayNotEmpty, ArrayUnique, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ShiftType } from '../entities/shift.entity';
 import { TaskTiming, TaskPeriodicity } from '../entities/task.entity';
+
+// Helper function to ensure array contains integers
+const toIntArray = (value: any): number[] | undefined => {
+  if (value === null || value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  return value.map(v => typeof v === 'string' ? parseInt(v, 10) : Number(v)).filter(n => !isNaN(n));
+};
 
 export class CreateTaskDto {
   @IsString()
@@ -105,6 +113,7 @@ export class CreateTaskDto {
   @ArrayNotEmpty()
   @ArrayUnique()
   @IsInt({ each: true })
+  @Transform(({ value }) => toIntArray(value))
   weeklyDays?: number[];
 
   // ---------- Monthly ----------
@@ -112,12 +121,14 @@ export class CreateTaskDto {
   @IsArray()
   @IsOptional()
   @IsInt({ each: true })
+  @Transform(({ value }) => toIntArray(value))
   monthlyDays?: number[];
 
   @ValidateIf(o => o.periodicity === TaskPeriodicity.MONTHLY)
   @IsArray()
   @IsOptional()
   @IsInt({ each: true })
+  @Transform(({ value }) => toIntArray(value))
   monthlyWeekdays?: number[];
 
   // New: pick the first occurrence of a weekday in the month (0=Sun..6=Sat)
@@ -138,6 +149,7 @@ export class CreateTaskDto {
   @ArrayNotEmpty()
   @ArrayUnique()
   @IsInt({ each: true })
+  @Transform(({ value }) => toIntArray(value))
   yearlyMonths?: number[];
 
   @ValidateIf(o => o.periodicity === TaskPeriodicity.YEARLY)
@@ -145,5 +157,6 @@ export class CreateTaskDto {
   @ArrayNotEmpty()
   @ArrayUnique()
   @IsInt({ each: true })
+  @Transform(({ value }) => toIntArray(value))
   yearlyDays?: number[];
 }
