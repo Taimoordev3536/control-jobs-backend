@@ -1563,6 +1563,31 @@ async getAllJobsByWorkerFromToken(userId: number) {
       order: { id: 'ASC' },
     });
 
+    // Fetch active work sessions for this worker across all jobs
+    const jobIds = jobs.map(j => j.id);
+    const workSessions = jobIds.length ? await this.workSessionRepo.find({
+      where: {
+        job: { id: In(jobIds) },
+        worker: { id: workerId },
+        isActive: true,
+      },
+      relations: ['job'],
+      order: { checkInTime: 'DESC' },
+    }) : [];
+
+    console.log(`📊 Found ${workSessions.length} active work sessions for worker ${workerId}`);
+    
+    // Create a map of jobId -> workSession for quick lookup
+    const jobIdToSession = new Map<number, any>();
+    workSessions.forEach(session => {
+      if (session.job?.id) {
+        console.log(`✅ Mapping work session to job ${session.job.id}`);
+        jobIdToSession.set(session.job.id, session);
+      } else {
+        console.warn('⚠️ Work session found but no job relation:', session);
+      }
+    });
+
     const workerIds = jobs.flatMap(job => job.workers.map(w => w.id));
     const uniqueWorkerIds = [...new Set(workerIds)];
 
@@ -1581,7 +1606,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
     }
 
     // Fetch surveys for the returned jobs in a single query to determine client/worker survey flags
-    const jobIds = jobs.map(j => j.id);
     const surveys = jobIds.length ? await this.surveyRepo.find({ where: { job: In(jobIds) }, relations: ['client', 'worker', 'job'] }) : [];
 
     const formatted = jobs.map(job => {
@@ -1681,6 +1705,23 @@ async getAllJobsByWorkerFromToken(userId: number) {
         hasClientSurvey,
         hasWorkerSurvey,
         workers: job.workers.map(worker => ({ id: worker.id, code: worker.code, name: workerIdToName.get(worker.id) || null })),
+        // Include active work session if exists
+        workSession: jobIdToSession.has(job.id) ? (() => {
+          const session = jobIdToSession.get(job.id);
+          console.log(`✅ Including workSession for job ${job.id}:`, {
+            checkInTime: session.checkInTime,
+            isActive: session.isActive
+          });
+          return {
+            checkInTime: session.checkInTime,
+            checkOutTime: session.checkOutTime,
+            isActive: session.isActive,
+            isOnBreak: session.isOnBreak,
+            currentBreakStart: session.currentBreakStart,
+            totalWorkMinutes: session.totalWorkMinutes,
+            totalBreakMinutes: session.totalBreakMinutes,
+          };
+        })() : null,
       };
     });
 
@@ -2051,10 +2092,29 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * Generate QR Code for an owner (client/employer) using qr_codes table (STATIC or DYNAMIC)
    * Returns QR image (base64) and token metadata
    */
-  async generateJobQrCode(generateQrCodeDto: GenerateQrCodeDto): Promise<{ qrImage: string; token: string; type: QrCodeType; expiresAt: Date | null; lastRefreshedAt: Date | null }> {
-    const { ownerId, ownerType, type } = generateQrCodeDto;
-    if (!ownerId || !ownerType) throw new Error('ownerId and ownerType are required');
+  async generateJobQrCode(generateQrCodeDto: GenerateQrCodeDto, userId: number): Promise<{ qrImage: string; token: string; type: QrCodeType; expiresAt: Date | null; lastRefreshedAt: Date | null }> {
+    const { type } = generateQrCodeDto;
     const qrType: QrCodeType = type || QrCodeType.STATIC;
+
+    // Determine ownerId and ownerType from userId
+    let ownerId: string;
+    let ownerType: QrCodeOwnerType;
+
+    // Check if user is an employer
+    const employerUser = await this.employerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['employer'] });
+    if (employerUser) {
+      ownerId = String(employerUser.employer.id);
+      ownerType = QrCodeOwnerType.EMPLOYER;
+    } else {
+      // Check if user is a client
+      const clientUser = await this.clientUserRepo.findOne({ where: { user: { id: userId } }, relations: ['client'] });
+      if (clientUser) {
+        ownerId = String(clientUser.client.id);
+        ownerType = QrCodeOwnerType.CLIENT;
+      } else {
+        throw new Error('User is not associated with an employer or client');
+      }
+    }
 
     // Find or create QR code
     let qrCode = await this.qrCodeRepo.findOne({ where: { ownerType, ownerId: String(ownerId), type: qrType, isActive: true } });
@@ -2088,14 +2148,8 @@ async getAllJobsByWorkerFromToken(userId: number) {
       await this.qrCodeRepo.save(qrCode);
     }
 
-    // Generate QR image (base64)
-    const qrPayload = {
-      token: qrCode.token,
-      type: qrCode.type,
-      ownerType: qrCode.ownerType,
-      ownerId: qrCode.ownerId,
-    };
-    const qrString = JSON.stringify(qrPayload);
+    // Generate QR image (base64) - only token
+    const qrString = qrCode.token;
     const qrImage = await QRCode.toDataURL(qrString);
 
     return {
@@ -2119,6 +2173,57 @@ async getAllJobsByWorkerFromToken(userId: number) {
       const bytes = require('crypto').randomBytes(32);
       return Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
+  }
+
+  /**
+   * Validate QR token against employer or client QR codes (static or dynamic)
+   */
+  private async validateQRToken(scannedToken: string, employerId?: number, clientId?: number): Promise<boolean> {
+    if (!scannedToken) return false;
+
+    // Check employer's QR codes (both static and dynamic)
+    if (employerId) {
+      const employerQR = await this.qrCodeRepo.findOne({
+        where: [
+          { ownerId: String(employerId), ownerType: QrCodeOwnerType.EMPLOYER, token: scannedToken, isActive: true, type: QrCodeType.STATIC },
+          { ownerId: String(employerId), ownerType: QrCodeOwnerType.EMPLOYER, token: scannedToken, isActive: true, type: QrCodeType.DYNAMIC }
+        ]
+      });
+
+      if (employerQR) {
+        // If dynamic, check expiry
+        if (employerQR.type === QrCodeType.DYNAMIC) {
+          if (employerQR.expiresAt && employerQR.expiresAt > new Date()) {
+            return true;
+          }
+          return false; // Expired
+        }
+        return true; // Static QR, always valid
+      }
+    }
+
+    // Check client's QR codes (both static and dynamic)
+    if (clientId) {
+      const clientQR = await this.qrCodeRepo.findOne({
+        where: [
+          { ownerId: String(clientId), ownerType: QrCodeOwnerType.CLIENT, token: scannedToken, isActive: true, type: QrCodeType.STATIC },
+          { ownerId: String(clientId), ownerType: QrCodeOwnerType.CLIENT, token: scannedToken, isActive: true, type: QrCodeType.DYNAMIC }
+        ]
+      });
+
+      if (clientQR) {
+        // If dynamic, check expiry
+        if (clientQR.type === QrCodeType.DYNAMIC) {
+          if (clientQR.expiresAt && clientQR.expiresAt > new Date()) {
+            return true;
+          }
+          return false; // Expired
+        }
+        return true; // Static QR, always valid
+      }
+    }
+
+    return false; // Token not found or invalid
   }
 
   /**
@@ -2196,6 +2301,20 @@ async getAllJobsByWorkerFromToken(userId: number) {
         Intl.DateTimeFormat().resolvedOptions().timeZone || 
         'UTC';
       
+      // Validate signing method if provided
+      if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
+        // Validate QR token against employer or client QR codes
+        const isValidQR = await this.validateQRToken(
+          recordScanDto.qrToken,
+          job.employer?.id,
+          job.client?.id
+        );
+        
+        if (!isValidQR) {
+          throw new Error('Invalid or expired QR code');
+        }
+      }
+
       // Create scan log entry
       const scanLog = this.scanLogRepo.create({
         jobId: recordScanDto.jobId,
@@ -2204,6 +2323,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
         location: recordScanDto.location,
         notes: recordScanDto.notes,
         userTimezone: userTimezone,
+        signingMethod: recordScanDto.signingMethod,
+        ipAddress: recordScanDto.ipAddress,
+        latitude: recordScanDto.latitude,
+        longitude: recordScanDto.longitude,
+        qrToken: recordScanDto.qrToken,
         // scanTime will be automatically set by @CreateDateColumn in UTC
       });
 
@@ -2214,7 +2338,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       
       switch (recordScanDto.scanType) {
         case 'check-in':
-          workSession = await this.handleCheckIn(recordScanDto.jobId, workerId);
+          workSession = await this.handleCheckIn(recordScanDto.jobId, workerId, recordScanDto.signingMethod);
           // Emit alert to linked employer and client
           if (job?.employer?.id && job?.client?.id) {
             // Find employer userId and client userId via link tables
@@ -2240,7 +2364,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
           workSession = await this.handleBreakEnd(recordScanDto.jobId, workerId);
           break;
         case 'check-out':
-          workSession = await this.handleCheckOut(recordScanDto.jobId, workerId);
+          workSession = await this.handleCheckOut(recordScanDto.jobId, workerId, recordScanDto.signingMethod);
           if (job?.employer?.id && job?.client?.id) {
             const employerUser = await this.employerUserRepo.findOne({ where: { employer: { id: job.employer.id } }, relations: ['user'] });
             const clientUser = await this.clientUserRepo.findOne({ where: { client: { id: job.client.id } }, relations: ['user'] });
@@ -2272,7 +2396,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Handle check-in logic
    */
-  private async handleCheckIn(jobId: number, workerId: number) {
+  private async handleCheckIn(jobId: number, workerId: number, signingMethod?: string) {
     // Check if there's already an active work session
     const activeSession = await this.workSessionRepo.findOne({
       where: {
@@ -2304,11 +2428,15 @@ async getAllJobsByWorkerFromToken(userId: number) {
       jobId: jobId,
       workerId: workerId,
       checkInTime: utcNow,
+      checkInMethod: signingMethod,
+      isActive: true,
+      isOnBreak: false,
       totalWorkMinutes: 0,
       totalBreakMinutes: 0,
     });
 
     const savedWorkSession = await this.workSessionRepo.save(workSession);
+    console.log(`✅ Created active work session ${savedWorkSession.id} for job ${jobId}, worker ${workerId}`);
 
     // Update job status to IN_PROGRESS when worker checks in
     const job = await this.jobRepo.findOne({
@@ -2385,7 +2513,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Handle check-out logic
    */
-  private async handleCheckOut(jobId: number, workerId: number) {
+  private async handleCheckOut(jobId: number, workerId: number, signingMethod?: string) {
     const activeSession = await this.workSessionRepo.findOne({
       where: {
         job: { id: jobId },
@@ -2415,9 +2543,12 @@ async getAllJobsByWorkerFromToken(userId: number) {
     
     const totalSessionMinutes = Math.floor(utcNow.diff(checkInTime, 'minutes').minutes);
     activeSession.totalWorkMinutes = totalSessionMinutes - activeSession.totalBreakMinutes;
+    activeSession.checkOutMethod = signingMethod;
     activeSession.checkOutTime = checkOutTime;
+    activeSession.isActive = false;
 
     const updatedSession = await this.workSessionRepo.save(activeSession);
+    console.log(`✅ Closed work session ${activeSession.id} for job ${jobId}, worker ${workerId}`);
 
     // Update job status based on check-out and task completion
     const job = await this.jobRepo.findOne({
@@ -2988,19 +3119,39 @@ async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
     // Find or create TaskHistory for today
     let todayHistory = task.taskHistories?.find(history => {
       const historyDate = new Date(history.date).toISOString().split('T')[0];
-      return historyDate === todayString;
+      return historyDate === todayString && history.completedByWorkerId === workerId;
     });
 
     if (todayHistory) {
-      // Update existing TaskHistory
-      todayHistory.isCompleted = !todayHistory.isCompleted;
-      todayHistory.completedAt = todayHistory.isCompleted ? new Date() : null;
-      todayHistory.completedByWorkerId = todayHistory.isCompleted ? workerId : null;
+      // If already completed, don't allow unmarking
+      if (todayHistory.isCompleted) {
+        return {
+          message: 'Task already marked as completed',
+          isCompleted: true,
+          taskHistory: {
+            id: todayHistory.id,
+            taskId: todayHistory.taskId,
+            jobId: todayHistory.jobId,
+            date: todayHistory.date,
+            isCompleted: todayHistory.isCompleted,
+            completedAt: todayHistory.completedAt,
+            completedByWorkerId: todayHistory.completedByWorkerId,
+          },
+          isSuccess: true,
+          statusCode: 200,
+          developerError: '',
+        };
+      }
+      
+      // Mark as completed (first time)
+      todayHistory.isCompleted = true;
+      todayHistory.completedAt = new Date();
+      todayHistory.completedByWorkerId = workerId;
       
       const updatedHistory = await this.taskHistoryRepo.save(todayHistory);
       
       return {
-        message: 'Task completion toggled successfully',
+        message: 'Task marked as completed successfully',
         isCompleted: updatedHistory.isCompleted,
         taskHistory: {
           id: updatedHistory.id,
@@ -3562,9 +3713,169 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     }
   }
 
+  /**
+   * Get today's tasks for a job grouped by work center
+   */
+  async getTodayTasksByWorkCenter(jobId: number, workerId: number) {
+    try {
+      const today = DateTime.now().startOf('day');
+      const todayDate = today.toJSDate();
+      const todayISODate = today.toISODate();
 
+      // Fetch all tasks for the job with work center relation
+      const tasks = await this.taskRepo.find({
+        where: { job: { id: jobId } },
+        relations: ['workCenter', 'taskHistories'],
+        order: { workCenterId: 'ASC', id: 'ASC' },
+      });
 
+      // Filter tasks scheduled for today
+      const todayTasks = tasks.filter(task => this.isTaskScheduledForToday(task, todayDate));
 
+      // Get task completion status for today for this worker
+      console.log('🔍 Querying TaskHistories for:', {
+        taskIds: todayTasks.map(t => t.id),
+        workerId,
+        date: todayISODate,
+      });
+
+      const taskHistories = await this.taskHistoryRepo.find({
+        where: {
+          task: In(todayTasks.map(t => t.id)),
+          completedByWorkerId: workerId,
+          date: todayISODate as any,
+        },
+        relations: ['task'],
+      });
+
+      console.log('📊 Found TaskHistories:', taskHistories.length, taskHistories.map(th => ({
+        taskId: th.task.id,
+        isCompleted: th.isCompleted,
+        date: th.date,
+      })));
+
+      const taskHistoryMap = new Map<number, boolean>();
+      taskHistories.forEach(th => {
+        taskHistoryMap.set(th.task.id, th.isCompleted);
+      });
+
+      // Group tasks by work center
+      const workCenterMap = new Map<number | null, any[]>();
+      
+      todayTasks.forEach(task => {
+        const wcId = task.workCenterId;
+        const isCompleted = taskHistoryMap.get(task.id) || task.isCompleted || false;
+        
+        const taskData = {
+          id: task.id,
+          name: task.name,
+          note: task.note || '',
+          expectedDuration: task.expectedDuration,
+          timing: task.timing,
+          isCompleted: isCompleted,
+          workCenterId: task.workCenterId,
+          workCenterName: task.workCenter?.name || 'Unassigned',
+        };
+
+        if (!workCenterMap.has(wcId)) {
+          workCenterMap.set(wcId, []);
+        }
+        workCenterMap.get(wcId).push(taskData);
+      });
+
+      // Format response
+      const workCenters = Array.from(workCenterMap.entries()).map(([wcId, tasks]) => ({
+        workCenterId: wcId,
+        workCenterName: tasks[0]?.workCenterName || 'Unassigned',
+        tasks: tasks,
+        totalTasks: tasks.length,
+        completedTasks: tasks.filter(t => t.isCompleted).length,
+      }));
+
+      return {
+        message: 'Success',
+        data: {
+          date: todayISODate,
+          workCenters: workCenters,
+          totalTasks: todayTasks.length,
+          totalCompleted: todayTasks.filter(t => taskHistoryMap.get(t.id) || t.isCompleted).length,
+        },
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    } catch (error) {
+      return {
+        message: 'Error fetching today tasks',
+        data: null,
+        isSuccess: false,
+        statusCode: 500,
+        developerError: error?.message || String(error),
+      };
+    }
+  }
+
+  /**
+   * Helper: Check if a task is scheduled for today
+   */
+  private isTaskScheduledForToday(task: any, todayDate: Date): boolean {
+    const today = DateTime.fromJSDate(todayDate);
+    const todayDayOfWeek = today.weekday % 7; // Convert to 0=Sunday format
+    const todayDayOfMonth = today.day;
+    const todayMonth = today.month;
+
+    // Check start/end date boundaries
+    if (task.startDate) {
+      const start = DateTime.fromJSDate(new Date(task.startDate));
+      if (today < start.startOf('day')) return false;
+    }
+    if (task.endDate) {
+      const end = DateTime.fromJSDate(new Date(task.endDate));
+      if (today > end.startOf('day')) return false;
+    }
+
+    switch (task.periodicity) {
+      case 'once':
+        if (task.onceDate) {
+          const onceDate = DateTime.fromJSDate(new Date(task.onceDate));
+          return onceDate.hasSame(today, 'day');
+        }
+        return false;
+
+      case 'daily':
+        return true; // Daily tasks are always scheduled
+
+      case 'weekly':
+        if (task.weeklyDays && task.weeklyDays.length > 0) {
+          return task.weeklyDays.includes(todayDayOfWeek);
+        }
+        return false;
+
+      case 'monthly':
+        // Check monthly days (1-31)
+        if (task.monthlyDays && task.monthlyDays.length > 0) {
+          if (task.monthlyDays.includes(todayDayOfMonth)) return true;
+        }
+        // Check monthly weekdays
+        if (task.monthlyWeekdays && task.monthlyWeekdays.length > 0) {
+          if (task.monthlyWeekdays.includes(todayDayOfWeek)) return true;
+        }
+        return false;
+
+      case 'yearly':
+        // Check if today matches any yearly configuration
+        if (task.yearlyMonths && task.yearlyMonths.length > 0) {
+          if (!task.yearlyMonths.includes(todayMonth)) return false;
+        }
+        if (task.yearlyDays && task.yearlyDays.length > 0) {
+          return task.yearlyDays.includes(todayDayOfMonth);
+        }
+        return false;
+
+      default:
+        return false;
+    }
+  }
 
 } 
 

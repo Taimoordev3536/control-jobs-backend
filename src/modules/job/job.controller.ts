@@ -122,9 +122,10 @@ async getAllJobsForClientFromToken(@Req() req) {
 
   @UseGuards(JwtAuthGuard)
   @Post('generate-qr')
-  async generateJobQrCode(@Body() generateQrCodeDto: GenerateQrCodeDto) {
+  async generateJobQrCode(@Body() generateQrCodeDto: GenerateQrCodeDto, @Req() req) {
+    const userId = req.user?.id;
     // Return the new QR code structure directly
-    return await this.jobService.generateJobQrCode(generateQrCodeDto);
+    return await this.jobService.generateJobQrCode(generateQrCodeDto, userId);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -341,6 +342,18 @@ async getAllJobsForClientFromToken(@Req() req) {
     @Param('workerId') workerId: number,
   ): Promise<any> {
     return await this.jobService.getTasksForJobWorker(jobId, workerId);
+  }
+
+  // Get today's tasks for a job grouped by work center
+  @UseGuards(JwtAuthGuard)
+  @Get(':jobId/today-tasks')
+  async getTodayTasksByWorkCenter(
+    @Param('jobId') jobId: number,
+    @Req() req
+  ): Promise<any> {
+    const userId = req.user.id;
+    const workerId = await this.jobService.getWorkerIdFromUserId(userId);
+    return await this.jobService.getTodayTasksByWorkCenter(jobId, workerId);
   }
 
   // Get task detail by task id

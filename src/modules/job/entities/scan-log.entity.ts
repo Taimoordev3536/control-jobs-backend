@@ -28,6 +28,21 @@ export class ScanLog {
   @Column({ type: 'text', nullable: true, name: 'user_timezone' })
   userTimezone?: string;
 
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'signing_method' })
+  signingMethod?: string; // 'web', 'ip', 'gps', 'qrcode'
+
+  @Column({ type: 'varchar', length: 45, nullable: true, name: 'ip_address' })
+  ipAddress?: string;
+
+  @Column({ type: 'decimal', precision: 10, scale: 8, nullable: true })
+  latitude?: number;
+
+  @Column({ type: 'decimal', precision: 11, scale: 8, nullable: true })
+  longitude?: number;
+
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'qr_token' })
+  qrToken?: string;
+
   // Relations
   @ManyToOne(() => Job, job => job.scanLogs)
   @JoinColumn({ name: 'job_id' })

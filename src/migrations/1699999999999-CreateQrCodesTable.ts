@@ -5,13 +5,21 @@ export class CreateQrCodesTable1699999999999 implements MigrationInterface {
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TYPE "qr_codes_type_enum" AS ENUM('STATIC', 'DYNAMIC');
+      DO $$ BEGIN
+        CREATE TYPE "qr_codes_type_enum" AS ENUM('STATIC', 'DYNAMIC');
+      EXCEPTION
+        WHEN duplicate_object THEN null;
+      END $$;
     `);
     await queryRunner.query(`
-      CREATE TYPE "qr_codes_ownertype_enum" AS ENUM('CLIENT', 'EMPLOYER');
+      DO $$ BEGIN
+        CREATE TYPE "qr_codes_ownertype_enum" AS ENUM('CLIENT', 'EMPLOYER');
+      EXCEPTION
+        WHEN duplicate_object THEN null;
+      END $$;
     `);
     await queryRunner.query(`
-      CREATE TABLE "qr_codes" (
+      CREATE TABLE IF NOT EXISTS "qr_codes" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "token" character varying(44) NOT NULL,
         "type" "qr_codes_type_enum" NOT NULL,
@@ -27,7 +35,7 @@ export class CreateQrCodesTable1699999999999 implements MigrationInterface {
       );
     `);
     await queryRunner.query(`
-      CREATE INDEX "IDX_qr_codes_expiresAt" ON "qr_codes" ("expiresAt");
+      CREATE INDEX IF NOT EXISTS "IDX_qr_codes_expiresAt" ON "qr_codes" ("expiresAt");
     `);
   }
 

@@ -13,8 +13,11 @@ const AppDataSource = new DataSource({
   password: process.env.DB_PASS || process.env.DATABASE_PASSWORD || '',
   database: process.env.DB_NAME || process.env.DATABASE_NAME || 'your_db',
   synchronize: false,
-  logging: false,
+  logging: true,
   entities: [path.join(__dirname, '..', '..', 'src', '**', '*.entity.{ts,js}')],
+  ssl: {
+    rejectUnauthorized: false
+  },
 });
 
 async function runAllMigrations() {

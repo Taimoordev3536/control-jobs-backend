@@ -19,6 +19,27 @@ export class RecordScanDto {
   @IsOptional()
   @IsString()
   userTimezone?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['web', 'ip', 'gps', 'qrcode'])
+  signingMethod?: string;
+
+  @IsOptional()
+  @IsString()
+  ipAddress?: string;
+
+  @IsOptional()
+  @IsNumber()
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  longitude?: number;
+
+  @IsOptional()
+  @IsString()
+  qrToken?: string;
 }
 
 import { QrCodeType, QrCodeOwnerType } from '../entities/qr-code.entity';
@@ -28,11 +49,13 @@ export class GenerateQrCodeDto {
   @IsNumber()
   jobId?: number;
 
+  @IsOptional()
   @IsNumber()
-  ownerId: number;
+  ownerId?: number;
 
+  @IsOptional()
   @IsString()
-  ownerType: QrCodeOwnerType;
+  ownerType?: QrCodeOwnerType;
 
   @IsOptional()
   @IsString()

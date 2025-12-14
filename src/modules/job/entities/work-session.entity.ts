@@ -37,6 +37,12 @@ export class WorkSession {
   @Column({ type: 'text', nullable: true })
   notes: string;
 
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'check_in_method' })
+  checkInMethod?: string; // 'web', 'ip', 'gps', 'qrcode'
+
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'check_out_method' })
+  checkOutMethod?: string; // 'web', 'ip', 'gps', 'qrcode'
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
