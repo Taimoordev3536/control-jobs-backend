@@ -61,9 +61,9 @@ export class CreateTaskDto {
   @IsString()
   note?: string;
 
-  @IsInt()
   @IsOptional()
-  expectedDuration?: number;
+  @IsString()
+  expectedDuration?: string | number;
 
   @IsEnum(ShiftType)
   @IsOptional()

@@ -1,9 +1,11 @@
 
 import { Injectable } from '@nestjs/common';
 import { DateTime } from 'luxon';
+import { InjectRepository } from '@nestjs/typeorm';
+import { convertDurationToMinutes, convertMinutesToDuration } from './helpers/duration-converter';
+
 // Mock WorkCenter data (used for every client)
 const MOCK_WORK_CENTER = { id: 1, name: 'WorkCenter 1' };
-import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull, In } from 'typeorm';
 import { Job } from './entities/job.entity';
 import { Shift, Weekday, ScheduleType } from './entities/shift.entity';
@@ -348,6 +350,11 @@ export class JobService {
           // Normalize monthly weekday inputs so backend stores canonical 0..6 values
           const payload: any = { ...taskDto, job };
 
+          // Convert expectedDuration from HH:MM format to minutes
+          if (payload.expectedDuration !== undefined) {
+            payload.expectedDuration = convertDurationToMinutes(payload.expectedDuration);
+          }
+
           const normalizeWeekday = (v: any) => {
             if (v === null || typeof v === 'undefined' || v === '') return null;
             let n = Number(v);
@@ -617,7 +624,7 @@ export class JobService {
           id: task.id,
           name: task.name,
           note: task.note || '',
-          expectedDuration: task.expectedDuration || 0,
+          expectedDuration: convertMinutesToDuration(task.expectedDuration),
           shift: task.shift || null,
           timing: task.timing,
           periodicity: task.periodicity,
@@ -817,6 +824,8 @@ export class JobService {
       }
       
       if (job.tasks && job.tasks.length > 0) {
+        // Delete task histories first to avoid foreign key constraint violation
+        await manager.delete(TaskHistory, { task: { id: In(job.tasks.map(t => t.id)) } });
         await manager.remove(job.tasks);
       }
       
@@ -947,6 +956,11 @@ export class JobService {
       if (updateJobDto.tasks && Array.isArray(updateJobDto.tasks)) {
         for (const taskDto of updateJobDto.tasks) {
           const payload: any = { ...taskDto, job };
+
+          // Convert expectedDuration from HH:MM format to minutes
+          if (payload.expectedDuration !== undefined) {
+            payload.expectedDuration = convertDurationToMinutes(payload.expectedDuration);
+          }
 
           const normalizeWeekday = (v: any) => {
             if (v === null || typeof v === 'undefined' || v === '') return null;
@@ -1512,7 +1526,7 @@ async getAllJobsByEmployerFromToken(userId: number) {
           }
         })(),
         activeScheduleWeekHours,
-        tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: task.expectedDuration })) || [],
+        tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
         signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
         hasClientSurvey,
         hasWorkerSurvey,
@@ -1700,7 +1714,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
         })(),
         activeScheduleWeekHours,
-        tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: task.expectedDuration })) || [],
+        tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
         signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
         hasClientSurvey,
         hasWorkerSurvey,
@@ -1874,7 +1888,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
             }
           })(),
           activeScheduleWeekHours,
-          tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: task.expectedDuration })) || [],
+          tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
           signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
           workers: job.workers.map(worker => ({ id: worker.id, code: worker.code, name: workerIdToName.get(worker.id) || null })),
         };
