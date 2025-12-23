@@ -2242,169 +2242,154 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
   /**
    * Record a scan event and manage work sessions
+   * Uses database transaction to ensure atomic operations
    */
   async recordScan(recordScanDto: RecordScanDto, userId: number): Promise<{ status: string; scanData: ScanLog; workSession?: any }> {
-    try {
-      console.log('=== DEBUG: Starting recordScan ===');
-      console.log('User ID:', userId);
-      console.log('Record Scan DTO:', recordScanDto);
+    return await this.dataSource.transaction(async (txManager) => {
+      try {
+        console.log('=== Starting recordScan (transaction) ===');
+        console.log('User ID:', userId);
 
-      // Try to find if user is a worker first
-      let workerId: number | null = null;
-      const workerUser = await this.workerUserRepo.findOne({
-        where: { user: { id: userId } },
-        relations: ['worker'],
-      });
-
-      if (workerUser?.worker?.id) {
-        workerId = workerUser.worker.id;
-        console.log('Found as Worker with ID:', workerId);
-      } else {
-        // Check if user is an employer (for testing purposes)
-        const employerUser = await this.employerUserRepo.findOne({
+        // Find worker ID
+        let workerId: number | null = null;
+        const workerUser = await txManager.findOne(WorkerUser, {
           where: { user: { id: userId } },
-          relations: ['employer'],
+          relations: ['worker'],
         });
 
-        if (employerUser?.employer?.id) {
-          console.log('User is an Employer - allowing scan for testing');
-          // For testing, let's use the first worker assigned to this job
-          const job = await this.jobRepo.findOne({
-            where: { id: recordScanDto.jobId },
-            relations: ['workers'],
+        if (workerUser?.worker?.id) {
+          workerId = workerUser.worker.id;
+        } else {
+          const employerUser = await txManager.findOne(EmployerUser, {
+            where: { user: { id: userId } },
+            relations: ['employer'],
           });
 
-          if (!job) {
-            throw new Error('Job not found');
-          }
+          if (employerUser?.employer?.id) {
+            const job = await txManager.findOne(Job, {
+              where: { id: recordScanDto.jobId },
+              relations: ['workers'],
+            });
 
-          if (job.workers.length === 0) {
-            throw new Error('No workers assigned to this job');
+            if (!job) throw new Error('Job not found');
+            if (job.workers.length === 0) throw new Error('No workers assigned');
+            
+            workerId = job.workers[0].id;
+            console.log('Using first worker for testing:', workerId);
+          } else {
+            throw new Error('User is neither a worker nor an employer');
           }
-
-          workerId = job.workers[0].id; // Use first worker for testing
-          console.log('Using first assigned worker ID for testing:', workerId);
-        } else {
-          throw new Error('User is neither a worker nor an employer');
         }
-      }
 
-      if (!workerId) {
-        throw new Error('Worker not found for this user');
-      }
+        if (!workerId) throw new Error('Worker not found');
 
-      // Verify job exists
-      const job = await this.jobRepo.findOne({
-        where: { id: recordScanDto.jobId },
-        relations: ['workers','employer','client'],
-      });
+        // Verify job and worker assignment
+        const job = await txManager.findOne(Job, {
+          where: { id: recordScanDto.jobId },
+          relations: ['workers','employer','client'],
+        });
 
-      if (!job) {
-        throw new Error('Job not found');
-      }
-
-      // Check if worker is assigned to this job
-      const isWorkerAssigned = job.workers.some(w => w.id === workerId);
-      if (!isWorkerAssigned) {
-        throw new Error('Worker is not assigned to this job');
-      }
-
-      // Get user's timezone from request data (frontend should send this)
-      // If not available, default to UTC
-      const userTimezone = recordScanDto.userTimezone || 
-        Intl.DateTimeFormat().resolvedOptions().timeZone || 
-        'UTC';
-      
-      // Validate signing method if provided
-      if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
-        // Validate QR token against employer or client QR codes
-        const isValidQR = await this.validateQRToken(
-          recordScanDto.qrToken,
-          job.employer?.id,
-          job.client?.id
-        );
+        if (!job) throw new Error('Job not found');
         
-        if (!isValidQR) {
-          throw new Error('Invalid or expired QR code');
+        const isWorkerAssigned = job.workers.some(w => w.id === workerId);
+        if (!isWorkerAssigned) throw new Error('Worker is not assigned to this job');
+
+        const userTimezone = recordScanDto.userTimezone || 
+          Intl.DateTimeFormat().resolvedOptions().timeZone || 
+          'UTC';
+        
+        // Validate QR if provided
+        if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
+          const isValidQR = await this.validateQRToken(
+            recordScanDto.qrToken,
+            job.employer?.id,
+            job.client?.id
+          );
+          if (!isValidQR) throw new Error('Invalid or expired QR code');
         }
-      }
 
-      // Create scan log entry
-      const scanLog = this.scanLogRepo.create({
-        jobId: recordScanDto.jobId,
-        workerId: workerId,
-        scanType: recordScanDto.scanType,
-        location: recordScanDto.location,
-        notes: recordScanDto.notes,
-        userTimezone: userTimezone,
-        signingMethod: recordScanDto.signingMethod,
-        ipAddress: recordScanDto.ipAddress,
-        latitude: recordScanDto.latitude,
-        longitude: recordScanDto.longitude,
-        qrToken: recordScanDto.qrToken,
-        // scanTime will be automatically set by @CreateDateColumn in UTC
-      });
+        // Create scan log
+        const scanLog = txManager.create(ScanLog, {
+          jobId: recordScanDto.jobId,
+          workerId: workerId,
+          scanType: recordScanDto.scanType,
+          location: recordScanDto.location,
+          notes: recordScanDto.notes,
+          userTimezone: userTimezone,
+          signingMethod: recordScanDto.signingMethod,
+          ipAddress: recordScanDto.ipAddress,
+          latitude: recordScanDto.latitude,
+          longitude: recordScanDto.longitude,
+          qrToken: recordScanDto.qrToken,
+        });
 
-      const savedScanLog = await this.scanLogRepo.save(scanLog);
+        const savedScanLog = await txManager.save(ScanLog, scanLog);
+        console.log('✅ Scan log saved:', savedScanLog.id);
 
-      // Handle work session tracking based on scan type
-      let workSession = null;
-      
-      switch (recordScanDto.scanType) {
-        case 'check-in':
-          workSession = await this.handleCheckIn(recordScanDto.jobId, workerId, recordScanDto.signingMethod);
-          // Emit alert to linked employer and client
-          if (job?.employer?.id && job?.client?.id) {
-            // Find employer userId and client userId via link tables
-            const employerUser = await this.employerUserRepo.findOne({ where: { employer: { id: job.employer.id } }, relations: ['user'] });
-            const clientUser = await this.clientUserRepo.findOne({ where: { client: { id: job.client.id } }, relations: ['user'] });
-            if (employerUser?.user?.id && clientUser?.user?.id) {
-              await this.alertsService.createAndEmitAlert({
-                type: 'CHECK_IN',
-                jobId: job.id,
-                workerId,
-                employerUserId: employerUser.user.id,
-                clientUserId: clientUser.user.id,
-                message: `Worker checked in to ${job.jobName}`,
-                meta: { jobName: job.jobName },
-              });
+        // Handle work session
+        let workSession = null;
+        
+        switch (recordScanDto.scanType) {
+          case 'check-in':
+            workSession = await this.handleCheckInTx(txManager, recordScanDto.jobId, workerId, recordScanDto.signingMethod);
+            // Emit alert after transaction
+            if (job?.employer?.id && job?.client?.id) {
+              const employerUser = await txManager.findOne(EmployerUser, { where: { employer: { id: job.employer.id } }, relations: ['user'] });
+              const clientUser = await txManager.findOne(ClientUser, { where: { client: { id: job.client.id } }, relations: ['user'] });
+              if (employerUser?.user?.id && clientUser?.user?.id) {
+                setImmediate(() => {
+                  this.alertsService.createAndEmitAlert({
+                    type: 'CHECK_IN',
+                    jobId: job.id,
+                    workerId,
+                    employerUserId: employerUser.user.id,
+                    clientUserId: clientUser.user.id,
+                    message: `Worker checked in to ${job.jobName}`,
+                    meta: { jobName: job.jobName },
+                  });
+                });
+              }
             }
-          }
-          break;
-        case 'break-start':
-          workSession = await this.handleBreakStart(recordScanDto.jobId, workerId);
-          break;
-        case 'break-end':
-          workSession = await this.handleBreakEnd(recordScanDto.jobId, workerId);
-          break;
-        case 'check-out':
-          workSession = await this.handleCheckOut(recordScanDto.jobId, workerId, recordScanDto.signingMethod);
-          if (job?.employer?.id && job?.client?.id) {
-            const employerUser = await this.employerUserRepo.findOne({ where: { employer: { id: job.employer.id } }, relations: ['user'] });
-            const clientUser = await this.clientUserRepo.findOne({ where: { client: { id: job.client.id } }, relations: ['user'] });
-            if (employerUser?.user?.id && clientUser?.user?.id) {
-              await this.alertsService.createAndEmitAlert({
-                type: 'CHECK_OUT',
-                jobId: job.id,
-                workerId,
-                employerUserId: employerUser.user.id,
-                clientUserId: clientUser.user.id,
-                message: `Worker checked out from ${job.jobName}`,
-                meta: { jobName: job.jobName },
-              });
+            break;
+          case 'break-start':
+            workSession = await this.handleBreakStartTx(txManager, recordScanDto.jobId, workerId);
+            break;
+          case 'break-end':
+            workSession = await this.handleBreakEndTx(txManager, recordScanDto.jobId, workerId);
+            break;
+          case 'check-out':
+            workSession = await this.handleCheckOutTx(txManager, recordScanDto.jobId, workerId, recordScanDto.signingMethod);
+            if (job?.employer?.id && job?.client?.id) {
+              const employerUser = await txManager.findOne(EmployerUser, { where: { employer: { id: job.employer.id } }, relations: ['user'] });
+              const clientUser = await txManager.findOne(ClientUser, { where: { client: { id: job.client.id } }, relations: ['user'] });
+              if (employerUser?.user?.id && clientUser?.user?.id) {
+                setImmediate(() => {
+                  this.alertsService.createAndEmitAlert({
+                    type: 'CHECK_OUT',
+                    jobId: job.id,
+                    workerId,
+                    employerUserId: employerUser.user.id,
+                    clientUserId: clientUser.user.id,
+                    message: `Worker checked out from ${job.jobName}`,
+                    meta: { jobName: job.jobName },
+                  });
+                });
+              }
             }
-          }
-          break;
-      }
+            break;
+        }
 
-      return {
-        status: 'Scan recorded successfully',
-        scanData: savedScanLog,
-        workSession,
-      };
-    } catch (error) {
-      throw new Error(`Failed to record scan: ${error.message}`);
-    }
+        console.log('✅ Transaction completed');
+        return {
+          status: 'Scan recorded successfully',
+          scanData: savedScanLog,
+          workSession,
+        };
+      } catch (error) {
+        console.error('❌ Transaction failed:', error.message);
+        throw new Error(`Failed to record scan: ${error.message}`);
+      }
+    });
   }
 
   /**
@@ -2657,6 +2642,177 @@ async getAllJobsByWorkerFromToken(userId: number) {
   }
 
   /**
+   * Transaction-aware check-in handler
+   */
+  private async handleCheckInTx(txManager: any, jobId: number, workerId: number, signingMethod?: string) {
+    const activeSession = await txManager.findOne(WorkSession, {
+      where: { jobId, workerId, checkOutTime: IsNull() },
+    });
+
+    if (activeSession) {
+      throw new Error('Worker already has an active session for this job');
+    }
+
+    const utcNow = DateTime.utc().toJSDate();
+    const workSession = txManager.create(WorkSession, {
+      jobId, workerId,
+      checkInTime: utcNow,
+      checkInMethod: signingMethod,
+      isActive: true,
+      isOnBreak: false,
+      totalWorkMinutes: 0,
+      totalBreakMinutes: 0,
+    });
+
+    const saved = await txManager.save(WorkSession, workSession);
+    console.log(`✅ Created work session ${saved.id}`);
+
+    const job = await txManager.findOne(Job, { where: { id: jobId } });
+    if (job && job.status !== JobStatus.IN_PROGRESS) {
+      job.status = JobStatus.IN_PROGRESS;
+      await txManager.save(Job, job);
+    }
+
+    return saved;
+  }
+
+  /**
+   * Transaction-aware break start handler
+   */
+  private async handleBreakStartTx(txManager: any, jobId: number, workerId: number) {
+    const activeSession = await txManager.findOne(WorkSession, {
+      where: { jobId, workerId, checkOutTime: IsNull() },
+    });
+
+    if (!activeSession) {
+      throw new Error('No active session found');
+    }
+
+    if (activeSession.isOnBreak) {
+      throw new Error('Worker is already on break');
+    }
+
+    activeSession.isOnBreak = true;
+    activeSession.currentBreakStart = new Date();
+    return await txManager.save(WorkSession, activeSession);
+  }
+
+  /**
+   * Transaction-aware break end handler
+   */
+  private async handleBreakEndTx(txManager: any, jobId: number, workerId: number) {
+    const activeSession = await txManager.findOne(WorkSession, {
+      where: { jobId, workerId, checkOutTime: IsNull() },
+    });
+
+    if (!activeSession) {
+      throw new Error('No active session found');
+    }
+
+    if (!activeSession.isOnBreak || !activeSession.currentBreakStart) {
+      throw new Error('Worker is not currently on break');
+    }
+
+    const utcNow = DateTime.utc();
+    const breakStartUtc = DateTime.fromJSDate(activeSession.currentBreakStart, { zone: 'UTC' });
+    const breakDurationMinutes = Math.floor(utcNow.diff(breakStartUtc, 'minutes').minutes);
+    
+    activeSession.totalBreakMinutes += breakDurationMinutes;
+    activeSession.isOnBreak = false;
+    activeSession.currentBreakStart = null;
+    return await txManager.save(WorkSession, activeSession);
+  }
+
+  /**
+   * Transaction-aware check-out handler
+   */
+  private async handleCheckOutTx(txManager: any, jobId: number, workerId: number, signingMethod?: string) {
+    const activeSession = await txManager.findOne(WorkSession, {
+      where: { jobId, workerId, checkOutTime: IsNull() },
+    });
+
+    if (!activeSession) {
+      throw new Error('No active session found for this worker and job');
+    }
+
+    if (activeSession.isOnBreak && activeSession.currentBreakStart) {
+      const utcNow = DateTime.utc();
+      const breakStartUtc = DateTime.fromJSDate(activeSession.currentBreakStart, { zone: 'UTC' });
+      const breakDurationMinutes = Math.floor(utcNow.diff(breakStartUtc, 'minutes').minutes);
+      activeSession.totalBreakMinutes += breakDurationMinutes;
+      activeSession.isOnBreak = false;
+      activeSession.currentBreakStart = null;
+    }
+
+    const utcNow = DateTime.utc();
+    const checkOutTime = utcNow.toJSDate();
+    const checkInTime = DateTime.fromJSDate(activeSession.checkInTime, { zone: 'UTC' });
+    
+    const totalSessionMinutes = Math.floor(utcNow.diff(checkInTime, 'minutes').minutes);
+    activeSession.totalWorkMinutes = totalSessionMinutes - activeSession.totalBreakMinutes;
+    activeSession.checkOutMethod = signingMethod;
+    activeSession.checkOutTime = checkOutTime;
+    activeSession.isActive = false;
+
+    const updated = await txManager.save(WorkSession, activeSession);
+    console.log(`✅ Closed work session ${activeSession.id}`);
+
+    const job = await txManager.findOne(Job, {
+      where: { id: jobId },
+      relations: ['tasks'],
+    });
+
+    if (job) {
+      const activeWorkSessions = await txManager.find(WorkSession, {
+        where: { jobId, checkOutTime: IsNull() },
+      });
+      
+      if (activeWorkSessions.length === 0) {
+        job.status = JobStatus.COMPLETED;
+        await txManager.save(Job, job);
+        console.log(`✅ Job ${jobId} marked as COMPLETED`);
+      }
+    }
+
+    await this.saveTaskStatusesOnCheckoutTx(txManager, jobId, workerId);
+    return updated;
+  }
+
+  /**
+   * Transaction-aware task status save
+   */
+  private async saveTaskStatusesOnCheckoutTx(txManager: any, jobId: number, workerId: number) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const job = await txManager.findOne(Job, {
+      where: { id: jobId },
+      relations: ['tasks'],
+    });
+    
+    if (!job || !job.tasks || job.tasks.length === 0) {
+      return;
+    }
+    
+    for (const task of job.tasks) {
+      const existingRecord = await txManager.findOne(TaskHistory, {
+        where: { taskId: task.id, jobId, date: today },
+      });
+      
+      if (!existingRecord) {
+        const history = txManager.create(TaskHistory, {
+          taskId: task.id,
+          jobId,
+          date: today,
+          isCompleted: task.isCompleted,
+          completedByWorkerId: task.isCompleted ? workerId : null,
+        });
+        await txManager.save(TaskHistory, history);
+      }
+    }
+  }
+
+  /**
    * Complete a task
    */
   // async completeTask(taskId: number, workerId: number) {
@@ -2775,17 +2931,27 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
 
     const scanLogs = await scanQuery.orderBy('scanLog.scanTime', 'ASC').getMany();
 
-    // Query work sessions for the same job and date range
+    // Query work sessions - FIND SESSIONS THAT OVERLAP THE DATE RANGE
     const sessionQuery = this.workSessionRepo.createQueryBuilder('workSession')
       .leftJoinAndSelect('workSession.worker', 'worker')
       .leftJoinAndSelect('worker.user', 'user')
       .where('workSession.jobId = :jobId', { jobId });
 
-    if (startDate) {
-      sessionQuery.andWhere('workSession.checkInTime >= :startDate', { startDate });
-    }
-    if (endDate) {
-      sessionQuery.andWhere('workSession.checkInTime < :endDate', { endDate: new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)) });
+    if (startDate && endDate) {
+      // Session overlaps if: checkInTime <= endDate AND (checkOutTime >= startDate OR checkOutTime IS NULL)
+      const endDatePlusOne = new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1));
+      sessionQuery.andWhere(
+        '(workSession.checkInTime < :endDate AND (workSession.checkOutTime >= :startDate OR workSession.checkOutTime IS NULL))',
+        { startDate, endDate: endDatePlusOne }
+      );
+    } else if (startDate) {
+      sessionQuery.andWhere(
+        '(workSession.checkOutTime >= :startDate OR workSession.checkOutTime IS NULL)',
+        { startDate }
+      );
+    } else if (endDate) {
+      const endDatePlusOne = new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1));
+      sessionQuery.andWhere('workSession.checkInTime < :endDate', { endDate: endDatePlusOne });
     }
 
     const workSessions = await sessionQuery.getMany();
@@ -2856,13 +3022,17 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
       }
     }
 
-    // Group work sessions by date
+    // Group work sessions by date - SHOW ON ALL DATES THE SESSION SPANS
     const sessionsByDate = workSessions.reduce((acc, session) => {
-      const date = session.checkInTime.toISOString().split('T')[0]; // Extract YYYY-MM-DD
-      if (!acc[date]) {
-        acc[date] = [];
-      }
-      acc[date].push({
+      // Extract date in local timezone (not UTC) to avoid timezone conversion issues
+      const checkInDate = new Date(session.checkInTime);
+      const checkInDateStr = `${checkInDate.getFullYear()}-${String(checkInDate.getMonth() + 1).padStart(2, '0')}-${String(checkInDate.getDate()).padStart(2, '0')}`;
+      
+      const checkOutDate = session.checkOutTime ? new Date(session.checkOutTime) : new Date();
+      const checkOutDateStr = `${checkOutDate.getFullYear()}-${String(checkOutDate.getMonth() + 1).padStart(2, '0')}-${String(checkOutDate.getDate()).padStart(2, '0')}`;
+      
+      // Session data to be replicated across all dates
+      const sessionData = {
         id: session.id,
         worker: {
           id: session.worker.id,
@@ -2874,7 +3044,32 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
         totalWorkMinutes: session.totalWorkMinutes,
         totalBreakMinutes: session.totalBreakMinutes,
         isOnBreak: session.isOnBreak,
-      });
+        isActive: session.isActive,
+      };
+      
+      // Add session to EVERY date it spans using date string iteration
+      const startDate = new Date(checkInDateStr + 'T00:00:00');
+      const endDate = new Date(checkOutDateStr + 'T00:00:00');
+      const currentDate = new Date(startDate);
+      
+      while (currentDate <= endDate) {
+        const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
+        
+        if (!acc[dateStr]) {
+          acc[dateStr] = [];
+        }
+        
+        // Add flags to indicate check-in/check-out days
+        const sessionForDate = {
+          ...sessionData,
+          isCheckInDay: dateStr === checkInDateStr,
+          isCheckOutDay: session.checkOutTime && dateStr === checkOutDateStr,
+        };
+        
+        acc[dateStr].push(sessionForDate);
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+      
       return acc;
     }, {});
     
@@ -3891,8 +4086,339 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     }
   }
 
-} 
+  /**
+   * Get all work session records for employer's jobs
+   */
+  async getEmployerWorkSessionRecords(
+    employerUserId: number,
+    jobId?: number,
+    startDate?: string,
+    endDate?: string,
+  ): Promise<any> {
+    try {
+      console.log('=== getEmployerWorkSessionRecords ===');
+      console.log('employerUserId:', employerUserId);
+      console.log('jobId:', jobId);
+      console.log('startDate:', startDate);
+      console.log('endDate:', endDate);
 
+      // First, find the employer through EmployerUser junction table
+      const employerUserLink = await this.dataSource.getRepository('EmployerUser').findOne({
+        where: { user: { id: employerUserId } },
+        relations: ['employer', 'user'],
+      }) as any;
 
+      console.log('EmployerUser link found:', employerUserLink ? `Employer ID: ${employerUserLink.employer?.id}` : 'NOT FOUND');
 
+      if (!employerUserLink || !employerUserLink.employer) {
+        return {
+          message: 'Employer not found for this user',
+          data: [],
+          isSuccess: false,
+          statusCode: 404,
+          developerError: 'No employer association found for user ID ' + employerUserId
+        };
+      }
 
+      const employerId = employerUserLink.employer.id;
+      const employerName = employerUserLink.employer.name;
+
+      // Build query for work sessions
+      const query = this.workSessionRepo.createQueryBuilder('workSession')
+        .leftJoinAndSelect('workSession.job', 'job')
+        .leftJoinAndSelect('job.client', 'client')
+        .leftJoinAndSelect('job.employer', 'employer')
+        .leftJoinAndSelect('workSession.worker', 'worker')
+        .leftJoinAndSelect('worker.user', 'workerUser')
+        .where('employer.id = :employerId', { employerId });
+
+      // Filter by specific job if provided
+      if (jobId) {
+        query.andWhere('job.id = :jobId', { jobId });
+      }
+
+      // Filter by date range if provided
+      if (startDate) {
+        query.andWhere('workSession.checkInTime >= :startDate', { startDate });
+      }
+      if (endDate) {
+        const endDatePlusOne = new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1));
+        query.andWhere('workSession.checkInTime < :endDate', { endDate: endDatePlusOne });
+      }
+
+      // Order by most recent first
+      query.orderBy('workSession.checkInTime', 'DESC');
+
+      console.log('Query SQL:', query.getSql());
+
+      const workSessions = await query.getMany();
+
+      console.log('Work sessions found:', workSessions.length);
+
+      // Format the data for the frontend
+      const formattedRecords = workSessions.map(session => {
+        const checkInDate = new Date(session.checkInTime);
+        const checkOutDate = session.checkOutTime ? new Date(session.checkOutTime) : null;
+        
+        // Format dates as dd/mm/yyyy
+        const formatDate = (date: Date) => {
+          return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+        };
+        
+        // Format date range as dd/mm/yyyy - dd/mm/yyyy
+        const fecha = checkOutDate 
+          ? `${formatDate(checkInDate)} - ${formatDate(checkOutDate)}`
+          : `${formatDate(checkInDate)} - En progreso`;
+        
+        // Format times as HH:MM
+        const entrada = `${String(checkInDate.getHours()).padStart(2, '0')}:${String(checkInDate.getMinutes()).padStart(2, '0')}`;
+        const salida = checkOutDate 
+          ? `${String(checkOutDate.getHours()).padStart(2, '0')}:${String(checkOutDate.getMinutes()).padStart(2, '0')}`
+          : session.isActive ? 'En progreso' : '-';
+        
+        // Format total work time
+        const totalHours = Math.floor(session.totalWorkMinutes / 60);
+        const totalMinutes = session.totalWorkMinutes % 60;
+        const total = `${totalHours}h ${totalMinutes}m`;
+        
+        // Check for alerts (e.g., active session, long breaks, etc.)
+        const alerts = [];
+        if (session.isActive && !session.checkOutTime) {
+          alerts.push('Sesión activa');
+        }
+        if (session.totalBreakMinutes > 60) {
+          alerts.push('Descanso largo');
+        }
+
+        return {
+          id: session.id.toString(),
+          workSessionId: session.id,
+          jobId: session.job.id,
+          fecha,
+          titular: employerName || 'N/A',
+          job: session.job.jobName || 'N/A',
+          trabajador: session.worker.user?.name || session.worker.code || 'N/A',
+          workerCode: session.worker.code,
+          entrada,
+          salida,
+          total,
+          totalWorkMinutes: session.totalWorkMinutes,
+          totalBreakMinutes: session.totalBreakMinutes,
+          alerts: alerts.length > 0 ? alerts.join(', ') : 'None',
+          isActive: session.isActive,
+          isOnBreak: session.isOnBreak,
+          clientName: session.job.client?.name || 'N/A',
+          checkInTime: session.checkInTime,
+          checkOutTime: session.checkOutTime,
+        };
+      });
+
+      return {
+        message: 'Success',
+        data: formattedRecords,
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    } catch (error) {
+      return {
+        message: 'Failed to fetch work session records',
+        data: [],
+        isSuccess: false,
+        statusCode: 500,
+        developerError: error.message,
+      };
+    }
+  }
+
+  // Get detailed work session with scans and tasks grouped by date
+  async getWorkSessionDetail(employerUserId: number, workSessionId: number): Promise<any> {
+    try {
+      // First verify employer access
+      const employerUserEntry = await this.dataSource.getRepository('EmployerUser').findOne({
+        where: { user: { id: employerUserId } },
+        relations: ['employer', 'user'],
+      });
+
+      if (!employerUserEntry) {
+        return {
+          message: 'Employer not found for this user',
+          data: null,
+          isSuccess: false,
+          statusCode: 404,
+          developerError: 'No employer associated with this user',
+        };
+      }
+
+      const employerId = employerUserEntry.employer.id;
+
+      // Get work session with all relations
+      const workSession = await this.dataSource.getRepository(WorkSession).findOne({
+        where: { id: workSessionId },
+        relations: [
+          'job',
+          'job.employer',
+          'job.client',
+          'job.workCenters',
+          'worker',
+          'worker.user',
+        ],
+      });
+
+      if (!workSession) {
+        return {
+          message: 'Work session not found',
+          data: null,
+          isSuccess: false,
+          statusCode: 404,
+          developerError: 'Work session does not exist',
+        };
+      }
+
+      // Verify the work session belongs to this employer
+      if (workSession.job.employer.id !== employerId) {
+        return {
+          message: 'Access denied',
+          data: null,
+          isSuccess: false,
+          statusCode: 403,
+          developerError: 'Work session does not belong to this employer',
+        };
+      }
+
+      // Get all scan logs for this work session (filter by jobId, workerId, and time range)
+      const scanLogs = await this.dataSource.getRepository(ScanLog).find({
+        where: {
+          jobId: workSession.jobId,
+          workerId: workSession.workerId,
+        },
+        order: { scanTime: 'ASC' },
+      });
+
+      // Filter scans to those around the work session timeframe (with 5 second buffer before check-in)
+      const filteredScans = scanLogs.filter(scan => {
+        const scanTime = new Date(scan.scanTime);
+        const checkInTime = new Date(workSession.checkInTime);
+        const checkOutTime = workSession.checkOutTime ? new Date(workSession.checkOutTime) : new Date();
+        // Allow scans up to 5 seconds before check-in to account for timing differences
+        const bufferTime = new Date(checkInTime.getTime() - 5000); 
+        return scanTime >= bufferTime && scanTime <= checkOutTime;
+      });
+
+      // Get task history for this job and date
+      const taskHistory = await this.dataSource.query(
+        `SELECT th.*, t.name as task_name 
+         FROM task_history th 
+         LEFT JOIN task t ON th."taskId" = t.id 
+         WHERE th."jobId" = $1 AND th.date = $2`,
+        [workSession.job.id, new Date(workSession.checkInTime).toISOString().split('T')[0]]
+      );
+
+      const filteredTaskCompletions = taskHistory.filter(th => th.isCompleted && (th.completedAt || th.completedat || th.completed_at));
+
+      // Group scans by date
+      const scansByDate = {};
+      filteredScans.forEach(scan => {
+        const scanDate = new Date(scan.scanTime);
+        const dateKey = `${scanDate.getFullYear()}-${String(scanDate.getMonth() + 1).padStart(2, '0')}-${String(scanDate.getDate()).padStart(2, '0')}`;
+        
+        if (!scansByDate[dateKey]) {
+          scansByDate[dateKey] = [];
+        }
+        
+        scansByDate[dateKey].push({
+          id: scan.id,
+          scanType: scan.scanType,
+          scanTime: scan.scanTime,
+          location: scan.location,
+          notes: scan.notes,
+        });
+      });
+
+      // Group tasks by date
+      const tasksByDate = {};
+      filteredTaskCompletions.forEach(tc => {
+        // Convert date to YYYY-MM-DD format (tc.date may be Date or string)
+        const taskDate = tc.date ? new Date(tc.date) : null;
+        const dateKey = taskDate
+          ? `${taskDate.getFullYear()}-${String(taskDate.getMonth() + 1).padStart(2, '0')}-${String(taskDate.getDate()).padStart(2, '0')}`
+          : 'unknown';
+
+        if (!tasksByDate[dateKey]) {
+          tasksByDate[dateKey] = [];
+        }
+
+        // Pick the completedAt value from possible column names and normalize to ISO string
+        const rawCompletedAt = tc.completedAt || tc.completedat || tc.completed_at || null;
+        const completedAtIso = rawCompletedAt ? (new Date(rawCompletedAt)).toISOString() : null;
+
+        tasksByDate[dateKey].push({
+          id: tc.id,
+          taskName: tc.task_name || 'Unknown Task',
+          completed: true,
+          completedAt: completedAtIso,
+        });
+      });
+
+      // Calculate estimated time from work session duration (check-in to check-out)
+      let estimatedMinutes = 0;
+      if (workSession.checkInTime && workSession.checkOutTime) {
+        const checkIn = new Date(workSession.checkInTime);
+        const checkOut = new Date(workSession.checkOutTime);
+        estimatedMinutes = Math.floor((checkOut.getTime() - checkIn.getTime()) / (1000 * 60));
+      }
+
+      // Calculate difference
+      const difference = workSession.totalWorkMinutes - estimatedMinutes;
+
+      // Format response
+      const response = {
+        workSessionId: workSession.id,
+        checkInTime: workSession.checkInTime,
+        checkOutTime: workSession.checkOutTime,
+        isActive: workSession.isActive,
+        client: {
+          id: workSession.job.client?.id,
+          name: workSession.job.client?.name || 'Unknown Client',
+        },
+        workCenter: {
+          id: workSession.job.workCenters?.[0]?.id,
+          name: workSession.job.workCenters?.[0]?.name || 'Unknown Work Center',
+        },
+        job: {
+          id: workSession.job.id,
+          name: workSession.job.jobName,
+        },
+        worker: {
+          id: workSession.worker.id,
+          code: workSession.worker.code,
+          name: workSession.worker.user?.firstName || 'Unknown',
+          lastName: workSession.worker.user?.lastName || '',
+        },
+        estimatedMinutes: estimatedMinutes,
+        totalWorkMinutes: workSession.totalWorkMinutes || 0,
+        totalBreakMinutes: workSession.totalBreakMinutes || 0,
+        difference: difference,
+        scansByDate: scansByDate,
+        tasksByDate: tasksByDate,
+      };
+
+      return {
+        message: 'Work session details fetched successfully',
+        data: response,
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    } catch (error) {
+      return {
+        message: 'Failed to fetch work session details',
+        data: null,
+        isSuccess: false,
+        statusCode: 500,
+        developerError: error.message,
+      };
+    }
+  }
+
+}

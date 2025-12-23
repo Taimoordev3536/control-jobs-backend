@@ -378,5 +378,29 @@ async getAllJobsForClientFromToken(@Req() req) {
     return await this.jobService.generateRecurrenceForTask(taskId, false)
   }
 
+  // ========== Employer Records Endpoints ========== //
+
+  @UseGuards(JwtAuthGuard)
+  @Get('employer/work-session-records')
+  async getEmployerWorkSessionRecords(
+    @Req() req,
+    @Query('jobId') jobId?: number,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ): Promise<any> {
+    const userId = req.user?.id;
+    return await this.jobService.getEmployerWorkSessionRecords(userId, jobId, startDate, endDate);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('employer/work-session/:workSessionId')
+  async getWorkSessionDetail(
+    @Req() req,
+    @Param('workSessionId') workSessionId: number,
+  ): Promise<any> {
+    const userId = req.user?.id;
+    return await this.jobService.getWorkSessionDetail(userId, workSessionId);
+  }
+
 
 }
