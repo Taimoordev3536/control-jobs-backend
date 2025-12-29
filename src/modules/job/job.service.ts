@@ -4033,55 +4033,124 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     const todayDayOfMonth = today.day;
     const todayMonth = today.month;
 
+    console.log('🔍 isTaskScheduledForToday:', {
+      taskId: task.id,
+      taskName: task.name,
+      periodicity: task.periodicity,
+      todayDayOfWeek,
+      todayDayOfMonth,
+      todayMonth,
+      weeklyDays: task.weeklyDays,
+      monthlyDays: task.monthlyDays,
+      monthlyWeekdays: task.monthlyWeekdays,
+    });
+
     // Check start/end date boundaries
     if (task.startDate) {
       const start = DateTime.fromJSDate(new Date(task.startDate));
-      if (today < start.startOf('day')) return false;
+      if (today < start.startOf('day')) {
+        console.log('❌ Task not started yet');
+        return false;
+      }
     }
     if (task.endDate) {
       const end = DateTime.fromJSDate(new Date(task.endDate));
-      if (today > end.startOf('day')) return false;
+      if (today > end.startOf('day')) {
+        console.log('❌ Task already ended');
+        return false;
+      }
     }
 
     switch (task.periodicity) {
       case 'once':
         if (task.onceDate) {
           const onceDate = DateTime.fromJSDate(new Date(task.onceDate));
-          return onceDate.hasSame(today, 'day');
+          const matches = onceDate.hasSame(today, 'day');
+          console.log('✅ Once task:', matches);
+          return matches;
         }
+        console.log('❌ Once task without onceDate');
         return false;
 
       case 'daily':
+        console.log('✅ Daily task');
         return true; // Daily tasks are always scheduled
 
       case 'weekly':
-        if (task.weeklyDays && task.weeklyDays.length > 0) {
-          return task.weeklyDays.includes(todayDayOfWeek);
+        // Ensure weeklyDays is an array of numbers
+        const weeklyDays = Array.isArray(task.weeklyDays) 
+          ? task.weeklyDays.map(d => Number(d))
+          : [];
+        
+        console.log('📅 Weekly check:', { weeklyDays, todayDayOfWeek, includes: weeklyDays.includes(todayDayOfWeek) });
+        
+        if (weeklyDays.length > 0) {
+          return weeklyDays.includes(todayDayOfWeek);
         }
+        console.log('❌ Weekly task with no days configured');
         return false;
 
       case 'monthly':
+        // Ensure arrays are properly formatted
+        const monthlyDays = Array.isArray(task.monthlyDays)
+          ? task.monthlyDays.map(d => Number(d))
+          : [];
+        const monthlyWeekdays = Array.isArray(task.monthlyWeekdays)
+          ? task.monthlyWeekdays.map(d => Number(d))
+          : [];
+
+        console.log('📅 Monthly check:', { 
+          monthlyDays, 
+          monthlyWeekdays, 
+          todayDayOfMonth, 
+          todayDayOfWeek 
+        });
+
         // Check monthly days (1-31)
-        if (task.monthlyDays && task.monthlyDays.length > 0) {
-          if (task.monthlyDays.includes(todayDayOfMonth)) return true;
+        if (monthlyDays.length > 0) {
+          if (monthlyDays.includes(todayDayOfMonth)) {
+            console.log('✅ Monthly day match');
+            return true;
+          }
         }
         // Check monthly weekdays
-        if (task.monthlyWeekdays && task.monthlyWeekdays.length > 0) {
-          if (task.monthlyWeekdays.includes(todayDayOfWeek)) return true;
+        if (monthlyWeekdays.length > 0) {
+          if (monthlyWeekdays.includes(todayDayOfWeek)) {
+            console.log('✅ Monthly weekday match');
+            return true;
+          }
         }
+        console.log('❌ No monthly match');
         return false;
 
       case 'yearly':
+        // Ensure arrays are properly formatted
+        const yearlyMonths = Array.isArray(task.yearlyMonths)
+          ? task.yearlyMonths.map(m => Number(m))
+          : [];
+        const yearlyDays = Array.isArray(task.yearlyDays)
+          ? task.yearlyDays.map(d => Number(d))
+          : [];
+
+        console.log('📅 Yearly check:', { yearlyMonths, yearlyDays, todayMonth, todayDayOfMonth });
+
         // Check if today matches any yearly configuration
-        if (task.yearlyMonths && task.yearlyMonths.length > 0) {
-          if (!task.yearlyMonths.includes(todayMonth)) return false;
+        if (yearlyMonths.length > 0) {
+          if (!yearlyMonths.includes(todayMonth)) {
+            console.log('❌ Not in yearly months');
+            return false;
+          }
         }
-        if (task.yearlyDays && task.yearlyDays.length > 0) {
-          return task.yearlyDays.includes(todayDayOfMonth);
+        if (yearlyDays.length > 0) {
+          const matches = yearlyDays.includes(todayDayOfMonth);
+          console.log(matches ? '✅ Yearly day match' : '❌ No yearly day match');
+          return matches;
         }
+        console.log('❌ No yearly configuration');
         return false;
 
       default:
+        console.log('❌ Unknown periodicity:', task.periodicity);
         return false;
     }
   }
