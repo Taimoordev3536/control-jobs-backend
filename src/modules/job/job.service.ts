@@ -4374,13 +4374,19 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         return scanTime >= bufferTime && scanTime <= checkOutTime;
       });
 
-      // Get task history for this job and date
+      // Get task history for this job and date range (for multi-day jobs)
+      const checkInDate = new Date(workSession.checkInTime).toISOString().split('T')[0];
+      const checkOutDate = workSession.checkOutTime 
+        ? new Date(workSession.checkOutTime).toISOString().split('T')[0]
+        : new Date().toISOString().split('T')[0]; // Use current date if not checked out
+      
       const taskHistory = await this.dataSource.query(
-        `SELECT th.*, t.name as task_name 
+        `SELECT th.*, t.name as task_name, t."workCenterId" as work_center_id, wc.name as work_center_name
          FROM task_history th 
          LEFT JOIN task t ON th."taskId" = t.id 
-         WHERE th."jobId" = $1 AND th.date = $2`,
-        [workSession.job.id, new Date(workSession.checkInTime).toISOString().split('T')[0]]
+         LEFT JOIN work_center wc ON t."workCenterId" = wc.id
+         WHERE th."jobId" = $1 AND th.date >= $2 AND th.date <= $3`,
+        [workSession.job.id, checkInDate, checkOutDate]
       );
 
       const filteredTaskCompletions = taskHistory.filter(th => th.isCompleted && (th.completedAt || th.completedat || th.completed_at));
@@ -4426,6 +4432,10 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           taskName: tc.task_name || 'Unknown Task',
           completed: true,
           completedAt: completedAtIso,
+          workCenter: {
+            id: tc.work_center_id,
+            name: tc.work_center_name || 'N/A',
+          },
         });
       });
 
