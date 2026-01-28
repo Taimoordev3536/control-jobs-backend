@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { QrCode, QrCodeType } from './entities/qr-code.entity';
+import { QrCode, QrCodeType } from '../qr-code/entities/qr-code.entity';
 
 @Injectable()
 export class QrCodeRefreshService {

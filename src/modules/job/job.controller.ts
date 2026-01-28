@@ -3,7 +3,7 @@ import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Put, Query,D
 import { JobService } from './job.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
-import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
+import { RecordScanDto } from './dto/scan.dto';
 import { UpdateJobStatusDto } from './dto/update-job-status.dto';
 import { JobStatus } from './enums/job-status.enum';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -119,14 +119,8 @@ async getAllJobsForClientFromToken(@Req() req) {
 // }
 
   // ========== QR Code and Scanning Endpoints ========== //
-
-  @UseGuards(JwtAuthGuard)
-  @Post('generate-qr')
-  async generateJobQrCode(@Body() generateQrCodeDto: GenerateQrCodeDto, @Req() req) {
-    const userId = req.user?.id;
-    // Return the new QR code structure directly
-    return await this.jobService.generateJobQrCode(generateQrCodeDto, userId);
-  }
+  // Note: QR code generation is now handled by QrCodeModule
+  // Use PUT /work-centers/:id/signing-methods/qr instead
 
   @UseGuards(JwtAuthGuard)
   @Post('scan')

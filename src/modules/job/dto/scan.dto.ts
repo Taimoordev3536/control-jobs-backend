@@ -42,22 +42,4 @@ export class RecordScanDto {
   qrToken?: string;
 }
 
-import { QrCodeType, QrCodeOwnerType } from '../entities/qr-code.entity';
 
-export class GenerateQrCodeDto {
-  @IsOptional()
-  @IsNumber()
-  jobId?: number;
-
-  @IsOptional()
-  @IsNumber()
-  ownerId?: number;
-
-  @IsOptional()
-  @IsString()
-  ownerType?: QrCodeOwnerType;
-
-  @IsOptional()
-  @IsString()
-  type?: QrCodeType;
-}

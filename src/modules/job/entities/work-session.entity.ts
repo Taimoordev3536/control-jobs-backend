@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
 import { Job } from './job.entity';
 import { Worker } from '../../workers/entities/worker.entity';
+import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 
 @Entity('work_sessions')
 export class WorkSession {
@@ -12,6 +13,9 @@ export class WorkSession {
 
   @Column({ name: 'worker_id' })
   workerId: number;
+
+  @Column({ name: 'work_center_id', nullable: true })
+  workCenterId?: number;
 
   @Column({ type: 'timestamptz', name: 'check_in_time'})
   checkInTime: Date;
@@ -57,4 +61,8 @@ export class WorkSession {
   @ManyToOne(() => Worker, worker => worker.workSessions)
   @JoinColumn({ name: 'worker_id' })
   worker: Worker;
+
+  @ManyToOne(() => WorkCenter, { nullable: true })
+  @JoinColumn({ name: 'work_center_id' })
+  workCenter?: WorkCenter;
 }

@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
 import { Job } from './job.entity';
 import { Worker } from '../../workers/entities/worker.entity';
+import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 
 @Entity('scan_logs')
 export class ScanLog {
@@ -12,6 +13,9 @@ export class ScanLog {
 
   @Column({ name: 'worker_id' })
   workerId: number;
+
+  @Column({ name: 'work_center_id', nullable: true })
+  workCenterId?: number;
 
   @Column({ type: 'varchar', length: 50, default: 'check-in' })
   scanType: string; // 'check-in', 'check-out', 'break-start', 'break-end'
@@ -51,4 +55,8 @@ export class ScanLog {
   @ManyToOne(() => Worker, worker => worker.scanLogs)
   @JoinColumn({ name: 'worker_id' })
   worker: Worker;
+
+  @ManyToOne(() => WorkCenter, { nullable: true })
+  @JoinColumn({ name: 'work_center_id' })
+  workCenter?: WorkCenter;
 }

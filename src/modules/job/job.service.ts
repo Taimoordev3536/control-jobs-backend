@@ -31,13 +31,13 @@ import { Survey } from '../survey/entities/survey.entity';
 import { SurveyResponse } from '../survey/entities/survey-response.entity';
 import { JobTasksTabItemDto } from './dto/job-tasks-tab.dto';
 import { User } from '../users/entities/user.entity';
-import { RecordScanDto, GenerateQrCodeDto } from './dto/scan.dto';
+import { RecordScanDto } from './dto/scan.dto';
 import { v4 as uuidv4 } from 'uuid';
-import { QrCode, QrCodeType, QrCodeOwnerType } from './entities/qr-code.entity';
 import { UpdateJobStatusDto } from './dto/update-job-status.dto';
 import { JobStatus } from './enums/job-status.enum';
 import * as QRCode from 'qrcode';
 import { AlertsService } from '../realtime/alerts.service';
+import { QrValidationService } from '../qr-code/services/qr-validation.service';
 
 @Injectable()
 export class JobService {
@@ -58,9 +58,9 @@ export class JobService {
     @InjectRepository(ClientUser) private clientUserRepo: Repository<ClientUser>,
   @InjectRepository(Survey) private surveyRepo: Repository<Survey>,
     @InjectRepository(WorkerUser) private workerUserRepo: Repository<WorkerUser>,
-    @InjectRepository(QrCode) private qrCodeRepo: Repository<QrCode>,
     private dataSource: DataSource,
     private alertsService: AlertsService,
+    private qrValidationService: QrValidationService,
   ) {}
 
 
@@ -2106,140 +2106,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * Generate QR Code for an owner (client/employer) using qr_codes table (STATIC or DYNAMIC)
    * Returns QR image (base64) and token metadata
    */
-  async generateJobQrCode(generateQrCodeDto: GenerateQrCodeDto, userId: number): Promise<{ qrImage: string; token: string; type: QrCodeType; expiresAt: Date | null; lastRefreshedAt: Date | null }> {
-    const { type } = generateQrCodeDto;
-    const qrType: QrCodeType = type || QrCodeType.STATIC;
-
-    // Determine ownerId and ownerType from userId
-    let ownerId: string;
-    let ownerType: QrCodeOwnerType;
-
-    // Check if user is an employer
-    const employerUser = await this.employerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['employer'] });
-    if (employerUser) {
-      ownerId = String(employerUser.employer.id);
-      ownerType = QrCodeOwnerType.EMPLOYER;
-    } else {
-      // Check if user is a client
-      const clientUser = await this.clientUserRepo.findOne({ where: { user: { id: userId } }, relations: ['client'] });
-      if (clientUser) {
-        ownerId = String(clientUser.client.id);
-        ownerType = QrCodeOwnerType.CLIENT;
-      } else {
-        throw new Error('User is not associated with an employer or client');
-      }
-    }
-
-    // Find or create QR code
-    let qrCode = await this.qrCodeRepo.findOne({ where: { ownerType, ownerId: String(ownerId), type: qrType, isActive: true } });
-    if (!qrCode) {
-      // Generate token
-      const token = this.generateQrToken(qrType);
-      const now = new Date();
-      let expiresAt: Date | null = null;
-      let lastRefreshedAt: Date | null = null;
-      if (qrType === QrCodeType.DYNAMIC) {
-        expiresAt = new Date(now.getTime() + 5 * 60 * 1000); // 5 min expiry
-        lastRefreshedAt = now;
-      }
-      qrCode = this.qrCodeRepo.create({
-        token,
-        type: qrType,
-        ownerType,
-        ownerId: String(ownerId),
-        expiresAt,
-        lastRefreshedAt,
-        isActive: true,
-      });
-      await this.qrCodeRepo.save(qrCode);
-    }
-
-    // If DYNAMIC and expired, refresh
-    if (qrType === QrCodeType.DYNAMIC && qrCode.expiresAt && qrCode.expiresAt < new Date()) {
-      qrCode.token = this.generateQrToken(qrType);
-      qrCode.lastRefreshedAt = new Date();
-      qrCode.expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-      await this.qrCodeRepo.save(qrCode);
-    }
-
-    // Generate QR image (base64) - only token
-    const qrString = qrCode.token;
-    const qrImage = await QRCode.toDataURL(qrString);
-
-    return {
-      qrImage,
-      token: qrCode.token,
-      type: qrCode.type,
-      expiresAt: qrCode.expiresAt,
-      lastRefreshedAt: qrCode.lastRefreshedAt,
-    };
-  }
-
-  /**
-   * Generate a secure QR token (44 chars, base64url for DYNAMIC, UUIDv4 for STATIC)
-   */
-  private generateQrToken(type: QrCodeType): string {
-    if (type === QrCodeType.STATIC) {
-      // UUIDv4
-      return uuidv4();
-    } else {
-      // 256-bit random, base64url
-      const bytes = require('crypto').randomBytes(32);
-      return Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
-  }
-
-  /**
-   * Validate QR token against employer or client QR codes (static or dynamic)
-   */
-  private async validateQRToken(scannedToken: string, employerId?: number, clientId?: number): Promise<boolean> {
-    if (!scannedToken) return false;
-
-    // Check employer's QR codes (both static and dynamic)
-    if (employerId) {
-      const employerQR = await this.qrCodeRepo.findOne({
-        where: [
-          { ownerId: String(employerId), ownerType: QrCodeOwnerType.EMPLOYER, token: scannedToken, isActive: true, type: QrCodeType.STATIC },
-          { ownerId: String(employerId), ownerType: QrCodeOwnerType.EMPLOYER, token: scannedToken, isActive: true, type: QrCodeType.DYNAMIC }
-        ]
-      });
-
-      if (employerQR) {
-        // If dynamic, check expiry
-        if (employerQR.type === QrCodeType.DYNAMIC) {
-          if (employerQR.expiresAt && employerQR.expiresAt > new Date()) {
-            return true;
-          }
-          return false; // Expired
-        }
-        return true; // Static QR, always valid
-      }
-    }
-
-    // Check client's QR codes (both static and dynamic)
-    if (clientId) {
-      const clientQR = await this.qrCodeRepo.findOne({
-        where: [
-          { ownerId: String(clientId), ownerType: QrCodeOwnerType.CLIENT, token: scannedToken, isActive: true, type: QrCodeType.STATIC },
-          { ownerId: String(clientId), ownerType: QrCodeOwnerType.CLIENT, token: scannedToken, isActive: true, type: QrCodeType.DYNAMIC }
-        ]
-      });
-
-      if (clientQR) {
-        // If dynamic, check expiry
-        if (clientQR.type === QrCodeType.DYNAMIC) {
-          if (clientQR.expiresAt && clientQR.expiresAt > new Date()) {
-            return true;
-          }
-          return false; // Expired
-        }
-        return true; // Static QR, always valid
-      }
-    }
-
-    return false; // Token not found or invalid
-  }
-
   /**
    * Record a scan event and manage work sessions
    * Uses database transaction to ensure atomic operations
@@ -2299,19 +2165,23 @@ async getAllJobsByWorkerFromToken(userId: number) {
           'UTC';
         
         // Validate QR if provided
+        let validatedWorkCenterId: number | undefined;
         if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
-          const isValidQR = await this.validateQRToken(
+          const validationResult = await this.qrValidationService.validateQrToken(
             recordScanDto.qrToken,
-            job.employer?.id,
-            job.client?.id
+            recordScanDto.jobId
           );
-          if (!isValidQR) throw new Error('Invalid or expired QR code');
+          if (!validationResult.valid) {
+            throw new Error(validationResult.message || 'Invalid or expired QR code');
+          }
+          validatedWorkCenterId = validationResult.workCenterId;
         }
 
         // Create scan log
         const scanLog = txManager.create(ScanLog, {
           jobId: recordScanDto.jobId,
           workerId: workerId,
+          workCenterId: validatedWorkCenterId,
           scanType: recordScanDto.scanType,
           location: recordScanDto.location,
           notes: recordScanDto.notes,
@@ -2331,7 +2201,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         
         switch (recordScanDto.scanType) {
           case 'check-in':
-            workSession = await this.handleCheckInTx(txManager, recordScanDto.jobId, workerId, recordScanDto.signingMethod);
+            workSession = await this.handleCheckInTx(txManager, recordScanDto.jobId, workerId, recordScanDto.signingMethod, validatedWorkCenterId);
             // Emit alert after transaction
             if (job?.employer?.id && job?.client?.id) {
               const employerUser = await txManager.findOne(EmployerUser, { where: { employer: { id: job.employer.id } }, relations: ['user'] });
@@ -2358,7 +2228,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
             workSession = await this.handleBreakEndTx(txManager, recordScanDto.jobId, workerId);
             break;
           case 'check-out':
-            workSession = await this.handleCheckOutTx(txManager, recordScanDto.jobId, workerId, recordScanDto.signingMethod);
+            workSession = await this.handleCheckOutTx(txManager, recordScanDto.jobId, workerId, recordScanDto.signingMethod, validatedWorkCenterId);
             if (job?.employer?.id && job?.client?.id) {
               const employerUser = await txManager.findOne(EmployerUser, { where: { employer: { id: job.employer.id } }, relations: ['user'] });
               const clientUser = await txManager.findOne(ClientUser, { where: { client: { id: job.client.id } }, relations: ['user'] });
@@ -2395,7 +2265,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Handle check-in logic
    */
-  private async handleCheckIn(jobId: number, workerId: number, signingMethod?: string) {
+  private async handleCheckIn(jobId: number, workerId: number, signingMethod?: string, workCenterId?: number) {
     // Check if there's already an active work session
     const activeSession = await this.workSessionRepo.findOne({
       where: {
@@ -2428,6 +2298,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       workerId: workerId,
       checkInTime: utcNow,
       checkInMethod: signingMethod,
+      workCenterId: workCenterId,
       isActive: true,
       isOnBreak: false,
       totalWorkMinutes: 0,
@@ -2512,7 +2383,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Handle check-out logic
    */
-  private async handleCheckOut(jobId: number, workerId: number, signingMethod?: string) {
+  private async handleCheckOut(jobId: number, workerId: number, signingMethod?: string, workCenterId?: number) {
     const activeSession = await this.workSessionRepo.findOne({
       where: {
         job: { id: jobId },
@@ -2644,7 +2515,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Transaction-aware check-in handler
    */
-  private async handleCheckInTx(txManager: any, jobId: number, workerId: number, signingMethod?: string) {
+  private async handleCheckInTx(txManager: any, jobId: number, workerId: number, signingMethod?: string, workCenterId?: number) {
     const activeSession = await txManager.findOne(WorkSession, {
       where: { jobId, workerId, checkOutTime: IsNull() },
     });
@@ -2658,6 +2529,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       jobId, workerId,
       checkInTime: utcNow,
       checkInMethod: signingMethod,
+      workCenterId: workCenterId,
       isActive: true,
       isOnBreak: false,
       totalWorkMinutes: 0,
@@ -2726,7 +2598,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
   /**
    * Transaction-aware check-out handler
    */
-  private async handleCheckOutTx(txManager: any, jobId: number, workerId: number, signingMethod?: string) {
+  private async handleCheckOutTx(txManager: any, jobId: number, workerId: number, signingMethod?: string, workCenterId?: number) {
     const activeSession = await txManager.findOne(WorkSession, {
       where: { jobId, workerId, checkOutTime: IsNull() },
     });

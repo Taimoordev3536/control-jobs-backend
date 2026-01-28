@@ -1,6 +1,12 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
-import { QrCodeType, QrCodeOwnerType } from '../modules/job/entities/qr-code.entity';
+import { QrCodeType } from '../modules/qr-code/entities/qr-code.entity';
+
+// Legacy QrCodeOwnerType for old migration
+enum QrCodeOwnerType {
+  CLIENT = 'CLIENT',
+  EMPLOYER = 'EMPLOYER',
+}
 
 export class AutoGenerateQrCodesForExistingUsers1700000000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {

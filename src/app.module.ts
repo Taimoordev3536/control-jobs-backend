@@ -9,6 +9,7 @@ import { UsersModule } from './modules/users/users.module';
 import {ClientsModule } from './modules/clients/clients.module';
 import { WorkersModule } from './modules/workers/workers.module';
 import { JobModule } from './modules/job/job.module';
+import { QrCodeModule } from './modules/qr-code/qr-code.module';
 import { config } from 'dotenv';
 import { AlertsModule } from './modules/realtime/alerts.module';
 
@@ -46,6 +47,7 @@ config();
     ClientsModule,
     WorkersModule,
     JobModule,
+    QrCodeModule,
     AlertsModule,
   ],
 })

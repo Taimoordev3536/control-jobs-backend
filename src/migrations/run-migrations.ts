@@ -15,9 +15,9 @@ const AppDataSource = new DataSource({
   synchronize: false,
   logging: true,
   entities: [path.join(__dirname, '..', '..', 'src', '**', '*.entity.{ts,js}')],
-  ssl: {
+  ssl: process.env.NODE_ENV === 'production' ? {
     rejectUnauthorized: false
-  },
+  } : false,
 });
 
 async function runAllMigrations() {
