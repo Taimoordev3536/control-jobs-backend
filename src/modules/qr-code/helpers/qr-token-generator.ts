@@ -36,10 +36,10 @@ export class QrTokenGenerator {
   }
 
   /**
-   * Calculate expiry time for dynamic QR (3 minutes from now)
+   * Calculate expiry time for dynamic QR (30 seconds from now)
    */
   static calculateDynamicExpiry(): Date {
     const now = new Date();
-    return new Date(now.getTime() + 3 * 60 * 1000); // 3 minutes
+    return new Date(now.getTime() + 30 * 1000); // 30 seconds
   }
 }

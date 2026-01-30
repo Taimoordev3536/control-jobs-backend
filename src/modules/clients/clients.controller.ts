@@ -13,7 +13,6 @@ import {
 import { ClientsService } from './clients.service';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AssignClientUserDto } from './dto/assign-client-user.dto';
-import { CreateWorkCenterDto } from './dto/create-work-center.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -87,39 +86,5 @@ export class ClientsController {
     return this.clientsService.remove(id);
   }
 
-  // Authenticated employer can list their own work centers without providing an id
-  @Get('employer/work-centers')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Employer)
-  async getWorkCentersForEmployer(@Req() req) {
-    return this.clientsService.getWorkCentersForAuthenticatedEmployer(req.user);
-  }
-
-  // Accept numeric ids including negative values (e.g. -1) but do not match the literal 'employer'
-  @Get(':id(-?\\d+)/work-centers')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Employer)
-  async getWorkCenters(@Param('id', ParseIntPipe) id: number) {
-    return this.clientsService.getWorkCentersByClient(id);
-  }
-
-  // Create a work center for the authenticated employer (employer-owned)
-  @Post('employer/work-centers')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Employer)
-  async createWorkCenterForEmployer(@Body() dto: CreateWorkCenterDto, @Req() req) {
-    return this.clientsService.createWorkCenterForAuthenticatedEmployer(req.user, dto);
-  }
-
-  @Post(':id/work-centers')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Employer)
-  async createWorkCenter(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: CreateWorkCenterDto,
-    @Req() req,
-  ) {
-    // req.user is available from JwtAuthGuard
-    return this.clientsService.createWorkCenter(id, dto, req.user);
-  }
+  // Work center endpoints moved to /work-centers module
 }

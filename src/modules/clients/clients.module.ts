@@ -8,11 +8,10 @@ import { User } from '../users/entities/user.entity';
 import { Role } from '../users/entities/role.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { EmployerClient } from '../employers/entities/employer-client.entity';
-import { WorkCenter } from '../work-centers/entities/work-center.entity';
 import { CommonModule } from '../../common/common.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Client, ClientUser, User, Role, Employer, EmployerClient, WorkCenter]), CommonModule],
+  imports: [TypeOrmModule.forFeature([Client, ClientUser, User, Role, Employer, EmployerClient]), CommonModule],
   controllers: [ClientsController],
   providers: [ClientsService],
 })

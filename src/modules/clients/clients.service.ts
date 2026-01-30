@@ -10,7 +10,6 @@ import { Employer } from '../employers/entities/employer.entity';
 import { EmployerClient } from '../employers/entities/employer-client.entity';
 import { Role } from '../users/entities/role.entity';
 import * as bcrypt from 'bcryptjs';
-import { WorkCenter } from '../work-centers/entities/work-center.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
@@ -31,8 +30,6 @@ export class ClientsService {
     private employerRepo: Repository<Employer>,
     @InjectRepository(EmployerClient)
     private employerClientRepo: Repository<EmployerClient>,
-    @InjectRepository(WorkCenter)
-    private workCenterRepo: Repository<WorkCenter>,
     private dataSource: DataSource,
   private readonly emailService: EmailService,
   ) {}
@@ -58,8 +55,7 @@ export class ClientsService {
     await this.clientUserRepo.delete({ clientId: id });
     // Remove all employer-client links
     await this.employerClientRepo.delete({ client: { id } });
-    // Remove all work centers for this client
-    await this.workCenterRepo.delete({ clientId: id });
+    // Work centers cascade delete is handled by database constraints
     // (Add more deletes here for other related tables if needed)
     // Remove the client itself
     const client = await this.findOne(id);
@@ -355,7 +351,7 @@ export class ClientsService {
 
   
   /**
-   * Get all work centers for a given client
+   * Get all work centers for a given client.
    * @param clientId - The client ID
    */
   
@@ -368,139 +364,7 @@ export class ClientsService {
   // return workCenters;
   // }
 
-  async getWorkCentersByClient(clientId: number) {
-    // Support pseudo-client negative ids representing employer entries.
-    if (clientId == null) {
-      throw new NotFoundException('Client not found');
-    }
-
-    if (clientId <= 0) {
-      const employerId = Math.abs(clientId);
-      const employer = await this.employerRepo.findOne({ where: { id: employerId } });
-      if (!employer) throw new NotFoundException('Employer not found');
-
-      // Return work centers owned by the employer
-      const workCenters = await this.workCenterRepo.find({ where: { employerId } });
-      return workCenters;
-    }
-
-    const client = await this.clientRepo.findOne({ where: { id: clientId } });
-    if (!client) throw new NotFoundException('Client not found');
-
-    // Return actual work centers for this client
-    const workCenters = await this.workCenterRepo.find({ where: { clientId } });
-    return workCenters;
-  }
-
-  /**
-   * Get work centers for the authenticated employer user (derived from req.user)
-   */
-  async getWorkCentersForAuthenticatedEmployer(user: any) {
-    // Find employer for this user
-    const employerUserLink = await this.dataSource.getRepository(EmployerUser).findOne({
-      where: { user: { id: user.id } },
-      relations: ['employer'],
-    });
-    if (!employerUserLink || !employerUserLink.employer) {
-      throw new NotFoundException('Employer not found for this user');
-    }
-    const employerId = employerUserLink.employer.id;
-    const workCenters = await this.workCenterRepo.find({ where: { employerId } });
-    return workCenters;
-  }
-
-  
-  /**
-   * Create a work center for a given client
-   * @param clientId - The client the work center belongs to
-   * @param dto - Data for the new work center
-   * @param actor - (optional) the user performing the action - can be used for authorization/audit
-   */
-
-  
-  async createWorkCenter(clientId: number, dto: any, actor?: User) {
-    const client = await this.clientRepo.findOne({ where: { id: clientId } });
-    if (!client) throw new NotFoundException('Client not found');
-
-    // Ensure actor is provided and is an employer linked to the client
-    if (!actor) throw new ForbiddenException('Unauthorized')
-
-    const employerUserLink = await this.dataSource.getRepository(EmployerUser).findOne({
-      where: { user: { id: actor.id } },
-      relations: ['employer'],
-    });
-
-    if (!employerUserLink || !employerUserLink.employer) {
-      throw new ForbiddenException('Only employer users can create work centers');
-    }
-
-    const employerId = employerUserLink.employer.id;
-
-    // Check employer is associated with this client
-    const association = await this.employerClientRepo.findOne({
-      where: { employer: { id: employerId }, client: { id: clientId }, isActive: true },
-    });
-
-    if (!association) {
-      throw new ForbiddenException('Employer is not associated with this client');
-    }
-
-    // If the caller specifies employerId and it matches the acting employer,
-    // create an employer-owned work center (clientId will be NULL).
-    let workCenterData: any = {
-      name: dto.name,
-      address: dto.address,
-      contactName: dto.contactName,
-      contactPhone: dto.contactPhone,
-      contactEmail: dto.contactEmail,
-      landline: dto.landline,
-      postalCode: dto.postalCode,
-    };
-
-    if (dto.employerId && Number(dto.employerId) === employerId) {
-      workCenterData.employerId = employerId;
-      workCenterData.clientId = null;
-    } else {
-      workCenterData.clientId = clientId;
-      workCenterData.employerId = null;
-    }
-
-    const workCenter = this.workCenterRepo.create(workCenterData);
-
-    const saved = await this.workCenterRepo.save(workCenter);
-    return saved;
-  }
-
-  /**
-   * Create an employer-owned work center for the authenticated employer user.
-   */
-  async createWorkCenterForAuthenticatedEmployer(user: any, dto: any) {
-    // Find employer for this user
-    const employerUserLink = await this.dataSource.getRepository(EmployerUser).findOne({
-      where: { user: { id: user.id } },
-      relations: ['employer'],
-    });
-    if (!employerUserLink || !employerUserLink.employer) {
-      throw new NotFoundException('Employer not found for this user');
-    }
-    const employerId = employerUserLink.employer.id;
-
-    const workCenterData: any = {
-      name: dto.name,
-      address: dto.address,
-      contactName: dto.contactName,
-      contactPhone: dto.contactPhone,
-      contactEmail: dto.contactEmail,
-      landline: dto.landline,
-      postalCode: dto.postalCode,
-      employerId,
-      clientId: null,
-    };
-
-    const workCenter = this.workCenterRepo.create(workCenterData);
-    const saved = await this.workCenterRepo.save(workCenter);
-    return saved;
-  }
+  // Work center methods moved to WorkCentersService
 
 
 

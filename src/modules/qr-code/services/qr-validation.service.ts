@@ -105,34 +105,33 @@ export class QrValidationService {
     // Check each QR code
     for (const qrCode of qrCodes) {
       if (qrCode.token === token) {
+        // Only validate if this QR is selected (not just active)
+        if (!qrCode.isSelected) {
+          continue;
+        }
+
         // Check if it's a static QR
         if (qrCode.type === QrCodeType.STATIC) {
-          // Static QR can be selected or be a fallback
-          if (qrCode.isSelected || qrCode.isActive) {
-            return {
-              valid: true,
-              workCenterId: qrCode.workCenterId,
-              workCenterName: qrCode.workCenter.name,
-              qrType: 'static',
-              message: 'Static QR code validated',
-            };
-          }
+          return {
+            valid: true,
+            workCenterId: qrCode.workCenterId,
+            workCenterName: qrCode.workCenter.name,
+            qrType: 'static',
+            message: 'Static QR code validated',
+          };
         }
 
         // Check if it's a dynamic QR
         if (qrCode.type === QrCodeType.DYNAMIC) {
           // Check expiry
           if (qrCode.expiresAt && qrCode.expiresAt > now) {
-            // Dynamic QR can be selected or be a fallback (when static is selected)
-            if (qrCode.isSelected || qrCode.isActive) {
-              return {
-                valid: true,
-                workCenterId: qrCode.workCenterId,
-                workCenterName: qrCode.workCenter.name,
-                qrType: 'dynamic',
-                message: 'Dynamic QR code validated',
-              };
-            }
+            return {
+              valid: true,
+              workCenterId: qrCode.workCenterId,
+              workCenterName: qrCode.workCenter.name,
+              qrType: 'dynamic',
+              message: 'Dynamic QR code validated',
+            };
           } else {
             return {
               valid: false,

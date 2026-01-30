@@ -15,9 +15,9 @@ export class QrRefreshService {
   ) {}
 
   /**
-   * Refresh all active dynamic QR codes every 3 minutes
+   * Refresh all active dynamic QR codes every 30 seconds
    */
-  @Cron('*/3 * * * *') // Every 3 minutes
+  @Cron('*/30 * * * * *') // Every 30 seconds
   async refreshDynamicQRCodes() {
     this.logger.log('🔄 Starting dynamic QR code refresh...');
 
@@ -65,32 +65,11 @@ export class QrRefreshService {
 
   /**
    * Determine if a dynamic QR should be refreshed
-   * Refresh if:
-   * 1. It's selected (primary choice), OR
-   * 2. Static QR is selected (dynamic is fallback)
+   * Refresh only if it's selected (no fallback logic)
    */
   private async shouldRefreshDynamicQr(dynamicQr: QrCode): Promise<boolean> {
-    // If dynamic is selected, always refresh
-    if (dynamicQr.isSelected) {
-      return true;
-    }
-
-    // Check if static sibling exists and is selected
-    const staticSibling = await this.qrCodeRepo.findOne({
-      where: {
-        workCenterId: dynamicQr.workCenterId,
-        type: QrCodeType.STATIC,
-        isActive: true,
-      },
-    });
-
-    // If static is selected, dynamic acts as fallback and should be refreshed
-    if (staticSibling?.isSelected) {
-      return true;
-    }
-
-    // Otherwise, don't refresh
-    return false;
+    // Only refresh if dynamic is selected
+    return dynamicQr.isSelected === true;
   }
 
   /**

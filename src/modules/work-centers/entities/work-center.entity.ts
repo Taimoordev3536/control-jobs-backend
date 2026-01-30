@@ -3,6 +3,7 @@ import { Client } from '../../clients/entities/client.entity';
 import { Employer } from '../../employers/entities/employer.entity';
 import { EmployerWorkCenter } from '../../employers/entities/employer-work-center.entity';
 
+// Fixed column name mappings for address components
 @Entity('work_center')
 export class WorkCenter {
     @PrimaryGeneratedColumn()
@@ -13,6 +14,24 @@ export class WorkCenter {
 
     @Column({ length: 255 })
     address: string;
+
+    @Column({ name: 'street', length: 100, nullable: true })
+    street: string;
+
+    @Column({ name: 'street_number', length: 20, nullable: true })
+    streetNumber: string;
+
+    @Column({ name: 'floor', length: 50, nullable: true })
+    floor: string;
+
+    @Column({ name: 'locality', length: 100, nullable: true })
+    locality: string;
+
+    @Column({ name: 'province', length: 100, nullable: true })
+    province: string;
+
+    @Column({ name: 'country', length: 100, nullable: true })
+    country: string;
 
     @Column({ length: 100, nullable: true })
     contactName: string;
@@ -43,6 +62,9 @@ export class WorkCenter {
 
     @Column({ name: 'postal_code', length: 20, nullable: true })
     postalCode: string;
+
+    @Column({ type: 'text', nullable: true })
+    observations: string;
 
     @OneToMany(() => EmployerWorkCenter, employerWorkCenter => employerWorkCenter.workCenter)
     employerWorkCenters: EmployerWorkCenter[];

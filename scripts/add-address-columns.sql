@@ -1,0 +1,8 @@
+-- Add address component columns to work_center table
+ALTER TABLE work_center 
+ADD COLUMN IF NOT EXISTS street VARCHAR(100),
+ADD COLUMN IF NOT EXISTS street_number VARCHAR(20),
+ADD COLUMN IF NOT EXISTS floor VARCHAR(50),
+ADD COLUMN IF NOT EXISTS locality VARCHAR(100),
+ADD COLUMN IF NOT EXISTS province VARCHAR(100),
+ADD COLUMN IF NOT EXISTS country VARCHAR(100);

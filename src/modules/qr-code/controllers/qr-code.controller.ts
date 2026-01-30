@@ -108,6 +108,21 @@ export class QrCodeController {
   }
 
   /**
+   * Regenerate static QR code (expires old token)
+   * POST /work-centers/:id/regenerate-static-qr
+   */
+  @Post(':id/regenerate-static-qr')
+  async regenerateStaticQr(@Param('id', ParseIntPipe) workCenterId: number) {
+    const result = await this.qrCodeService.regenerateStaticQr(workCenterId);
+
+    return {
+      message: 'Static QR code regenerated successfully. Previous QR code has been expired.',
+      data: result,
+      statusCode: 200,
+    };
+  }
+
+  /**
    * Preview email content (for testing)
    * GET /work-centers/:id/preview-qr-email
    */

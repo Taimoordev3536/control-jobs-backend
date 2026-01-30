@@ -92,41 +92,19 @@ export class QrCodeService {
 
     await this.qrCodeRepo.save(staticQr);
 
-    // Auto-generate dynamic QR as fallback
-    let dynamicQr = await this.qrCodeRepo.findOne({
-      where: { workCenterId, type: QrCodeType.DYNAMIC },
-    });
+    // Deactivate dynamic QR (only ONE type can be active at a time)
+    await this.qrCodeRepo.update(
+      { workCenterId, type: QrCodeType.DYNAMIC },
+      { isActive: false, isSelected: false },
+    );
 
-    if (!dynamicQr) {
-      dynamicQr = this.qrCodeRepo.create({
-        workCenterId,
-        type: QrCodeType.DYNAMIC,
-        token: QrTokenGenerator.generateDynamicToken(),
-        isActive: true,
-        isSelected: false, // Not selected, but active as fallback
-        expiresAt: QrTokenGenerator.calculateDynamicExpiry(),
-        lastRefreshedAt: now,
-      });
-    } else {
-      dynamicQr.isActive = true;
-      dynamicQr.isSelected = false;
-      dynamicQr.token = QrTokenGenerator.generateDynamicToken();
-      dynamicQr.expiresAt = QrTokenGenerator.calculateDynamicExpiry();
-      dynamicQr.lastRefreshedAt = now;
-    }
-
-    await this.qrCodeRepo.save(dynamicQr);
-
-    console.log('✅ QR codes activated:', { 
+    console.log('✅ Static QR activated:', { 
       staticQrId: staticQr.id, 
-      dynamicQrId: dynamicQr.id,
-      staticToken: staticQr.token,
-      dynamicToken: dynamicQr.token
+      staticToken: staticQr.token
     });
 
-    // Generate QR images
+    // Generate QR image
     const staticQrImage = await QrImageGenerator.generateQrImage(staticQr.token);
-    const dynamicQrImage = await QrImageGenerator.generateQrImage(dynamicQr.token);
 
     return {
       staticQr: {
@@ -138,16 +116,7 @@ export class QrCodeService {
         isActive: staticQr.isActive,
         expiresAt: null,
       },
-      dynamicQr: {
-        id: dynamicQr.id,
-        token: dynamicQr.token,
-        qrImage: dynamicQrImage,
-        type: dynamicQr.type,
-        isSelected: dynamicQr.isSelected,
-        isActive: dynamicQr.isActive,
-        expiresAt: dynamicQr.expiresAt,
-        lastRefreshedAt: dynamicQr.lastRefreshedAt,
-      },
+      dynamicQr: null,
     };
   }
 
@@ -313,10 +282,9 @@ export class QrCodeService {
       const staticQr = data.qrCodes.find(qr => qr.type === QrCodeType.STATIC);
       const dynamicQr = data.qrCodes.find(qr => qr.type === QrCodeType.DYNAMIC);
 
-      // Include tokens based on selection
+      // Include only the selected type's token (no fallback)
       if (staticQr?.isSelected) {
         tokens.push(staticQr.token);
-        if (dynamicQr) tokens.push(dynamicQr.token); // Fallback
       } else if (dynamicQr?.isSelected) {
         tokens.push(dynamicQr.token);
         if (dynamicQr.expiresAt && (!earliestExpiry || dynamicQr.expiresAt < earliestExpiry)) {
@@ -359,8 +327,76 @@ export class QrCodeService {
       mergedToken,
       workCenters: workCentersResult,
       expiresAt: earliestExpiry,
-      refreshInterval: 180000, // 3 minutes in milliseconds
+      refreshInterval: 30000, // 30 seconds in milliseconds
       generatedAt: new Date(),
+    };
+  }
+
+  /**
+   * Regenerate static QR code (expires old token)
+   */
+  async regenerateStaticQr(workCenterId: number): Promise<WorkCenterQrResponseDto> {
+    const workCenter = await this.workCenterRepo.findOne({
+      where: { id: workCenterId },
+    });
+
+    if (!workCenter) {
+      throw new NotFoundException(`Work center with ID ${workCenterId} not found`);
+    }
+
+    // Find existing ACTIVE static QR (not old deactivated ones)
+    const existingStaticQr = await this.qrCodeRepo.findOne({
+      where: { 
+        workCenterId, 
+        type: QrCodeType.STATIC,
+        isActive: true,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!existingStaticQr) {
+      throw new NotFoundException('No active static QR code found for this work center');
+    }
+
+    // Deactivate old token (mark as expired)
+    const wasSelected = existingStaticQr.isSelected || existingStaticQr.isActive;
+    existingStaticQr.isActive = false;
+    existingStaticQr.isSelected = false;
+    await this.qrCodeRepo.save(existingStaticQr);
+
+    // Create new static QR with new token (preserve selected state)
+    const newStaticQr = this.qrCodeRepo.create({
+      workCenterId,
+      type: QrCodeType.STATIC,
+      token: QrTokenGenerator.generateStaticToken(),
+      isActive: wasSelected,
+      isSelected: wasSelected,
+      expiresAt: null,
+      lastRefreshedAt: null,
+    });
+
+    await this.qrCodeRepo.save(newStaticQr);
+
+    console.log('✅ Static QR regenerated:', {
+      oldToken: existingStaticQr.token,
+      newToken: newStaticQr.token,
+      workCenterId,
+    });
+
+    // Generate QR image
+    const qrImage = await QrImageGenerator.generateQrImage(newStaticQr.token);
+
+    return {
+      staticQr: {
+        id: newStaticQr.id,
+        token: newStaticQr.token,
+        qrImage,
+        type: newStaticQr.type,
+        isSelected: newStaticQr.isSelected,
+        isActive: newStaticQr.isActive,
+        expiresAt: null,
+      },
+      dynamicQr: null,
     };
   }
 }
