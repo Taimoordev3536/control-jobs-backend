@@ -233,7 +233,7 @@ export class WorkCentersService {
   async remove(id: number, user: User): Promise<{ message: string }> {
     const workCenter = await this.findOne(id, user);
 
-    // Check if work center is being used by jobs
+    // Check if work center is being used by jobs in the many-to-many relationship
     const jobCount = await this.workCenterRepo.manager
       .createQueryBuilder()
       .select('COUNT(*)', 'count')
@@ -243,6 +243,24 @@ export class WorkCentersService {
 
     if (jobCount && parseInt(jobCount.count) > 0) {
       throw new BadRequestException('Cannot delete work center that is assigned to jobs');
+    }
+
+    // Also check for old workCenterId column (legacy constraint)
+    const legacyJobCount = await this.workCenterRepo.manager
+      .createQueryBuilder()
+      .select('COUNT(*)', 'count')
+      .from('job', 'j')
+      .where('j."workCenterId" = :id', { id })
+      .getRawOne();
+
+    if (legacyJobCount && parseInt(legacyJobCount.count) > 0) {
+      // Clear the legacy workCenterId references before deletion
+      await this.workCenterRepo.manager
+        .createQueryBuilder()
+        .update('job')
+        .set({ workCenterId: null })
+        .where('"workCenterId" = :id', { id })
+        .execute();
     }
 
     await this.workCenterRepo.remove(workCenter);
