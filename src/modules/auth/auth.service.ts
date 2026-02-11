@@ -78,7 +78,6 @@ export class AuthService {
         developerError: '',
       };
     } catch (error) {
-      console.error('Registration error:', error);
       throw error;
     }
   }
@@ -92,7 +91,13 @@ export class AuthService {
     try {
       const user = await this.usersService.findByEmail(loginDto.email);
 
-      if (!user || !(await this.usersService.validatePassword(loginDto.password, user.password))) {
+      if (!user) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      const passwordValid = await this.usersService.validatePassword(loginDto.password, user.password);
+
+      if (!passwordValid) {
         throw new UnauthorizedException('Invalid credentials');
       }
 
@@ -153,7 +158,10 @@ export class AuthService {
         developerError: '',
       };
     } catch (error) {
-      throw error;
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new Error(`Login failed: ${error.message}`);
     }
   }
 
@@ -169,10 +177,6 @@ export class AuthService {
     }
 
     if (!user.role) {
-      console.error('User has no role during validation:', {
-        userId: user.id,
-        email: user.email,
-      });
       return null;
     }
 

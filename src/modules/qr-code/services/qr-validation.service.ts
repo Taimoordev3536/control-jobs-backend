@@ -5,6 +5,7 @@ import { QrCode, QrCodeType } from '../entities/qr-code.entity';
 import { Job } from '../../job/entities/job.entity';
 import { QrMerger } from '../helpers/qr-merger';
 import { QrValidationResult } from '../interfaces/qr-interfaces';
+import { JobScheduleService } from '../../job/services/job-schedule.service';
 
 @Injectable()
 export class QrValidationService {
@@ -13,19 +14,27 @@ export class QrValidationService {
     private qrCodeRepo: Repository<QrCode>,
     @InjectRepository(Job)
     private jobRepo: Repository<Job>,
+    private jobScheduleService: JobScheduleService,
   ) {}
 
   /**
    * Validate a QR token against a job's work centers
+   * @param scannedToken - The QR token scanned by worker
+   * @param jobId - The job ID for validation
+   * @param enforceTodaySchedule - Whether to enforce that job must be scheduled today (default: false for backward compatibility)
    */
-  async validateQrToken(scannedToken: string, jobId: number): Promise<QrValidationResult> {
+  async validateQrToken(
+    scannedToken: string,
+    jobId: number,
+    enforceTodaySchedule: boolean = false,
+  ): Promise<QrValidationResult> {
     // Check if it's a merged token
     if (QrMerger.isMergedToken(scannedToken)) {
-      return await this.validateMergedToken(scannedToken, jobId);
+      return await this.validateMergedToken(scannedToken, jobId, enforceTodaySchedule);
     }
 
     // Single token validation
-    return await this.validateSingleToken(scannedToken, jobId);
+    return await this.validateSingleToken(scannedToken, jobId, enforceTodaySchedule);
   }
 
   /**
@@ -34,6 +43,7 @@ export class QrValidationService {
   private async validateMergedToken(
     mergedToken: string,
     jobId: number,
+    enforceTodaySchedule: boolean = false,
   ): Promise<QrValidationResult> {
     const mergedData = QrMerger.parseMergedToken(mergedToken);
 
@@ -47,7 +57,7 @@ export class QrValidationService {
     // Validate each work center's tokens
     for (const wc of mergedData.workCenters) {
       for (const token of wc.tokens) {
-        const result = await this.validateSingleToken(token, jobId);
+        const result = await this.validateSingleToken(token, jobId, enforceTodaySchedule);
         if (result.valid) {
           return {
             valid: true,
@@ -72,11 +82,12 @@ export class QrValidationService {
   private async validateSingleToken(
     token: string,
     jobId: number,
+    enforceTodaySchedule: boolean = false,
   ): Promise<QrValidationResult> {
-    // Get job with work centers
+    // Get job with work centers and seasonal schedules (for schedule validation)
     const job = await this.jobRepo.findOne({
       where: { id: jobId },
-      relations: ['workCenters'],
+      relations: ['workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
     });
 
     if (!job) {
@@ -84,6 +95,19 @@ export class QrValidationService {
         valid: false,
         message: 'Job not found',
       };
+    }
+
+    // SCHEDULE ENFORCEMENT: Check if job is scheduled for today
+    if (enforceTodaySchedule) {
+      const today = new Date();
+      const isScheduledToday = this.jobScheduleService.isJobScheduledForDate(job, today);
+
+      if (!isScheduledToday) {
+        return {
+          valid: false,
+          message: 'This job is not scheduled for today. QR code scan rejected.',
+        };
+      }
     }
 
     if (!job.workCenters || job.workCenters.length === 0) {

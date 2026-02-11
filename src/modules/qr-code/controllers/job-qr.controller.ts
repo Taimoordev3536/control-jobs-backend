@@ -1,4 +1,4 @@
-import { Controller, Get, Param, UseGuards, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Param, UseGuards, ParseIntPipe, Req } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { QrCodeService } from '../services/qr-code.service';
 
@@ -17,6 +17,37 @@ export class JobQrController {
 
     return {
       message: 'Merged QR code generated successfully',
+      data: result,
+      statusCode: 200,
+    };
+  }
+
+  /**
+   * Get merged dynamic QR for all jobs scheduled TODAY for a client
+   * GET /jobs/clients/:clientId/today-merged-qr
+   */
+  @Get('clients/:clientId/today-merged-qr')
+  async getTodayMergedQrForClient(@Param('clientId', ParseIntPipe) clientId: number) {
+    const result = await this.qrCodeService.getMergedDynamicQrForClient(clientId);
+
+    return {
+      message: 'Today\'s merged QR code generated successfully',
+      data: result,
+      statusCode: 200,
+    };
+  }
+
+  /**
+   * Get merged dynamic QR for all jobs scheduled TODAY for the authenticated client user
+   * GET /jobs/client/today-merged-qr
+   */
+  @Get('client/today-merged-qr')
+  async getTodayMergedQrForAuthenticatedClient(@Req() req) {
+    const userId = req.user?.id;
+    const result = await this.qrCodeService.getMergedDynamicQrForClientUser(userId);
+
+    return {
+      message: 'Today\'s merged QR code generated successfully',
       data: result,
       statusCode: 200,
     };

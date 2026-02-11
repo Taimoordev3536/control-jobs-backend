@@ -1,14 +1,16 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { QrCode, QrCodeType } from '../entities/qr-code.entity';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 import { Job } from '../../job/entities/job.entity';
+import { ClientUser } from '../../clients/entities/client-user.entity';
 import { QrTokenGenerator } from '../helpers/qr-token-generator';
 import { QrImageGenerator } from '../helpers/qr-image-generator';
 import { QrMerger } from '../helpers/qr-merger';
 import { UpdateWorkCenterQrDto, WorkCenterQrResponseDto } from '../dto/update-work-center-qr.dto';
 import { MergedQrResponse, MergedQrData } from '../interfaces/qr-interfaces';
+import { JobScheduleService } from '../../job/services/job-schedule.service';
 
 @Injectable()
 export class QrCodeService {
@@ -19,6 +21,9 @@ export class QrCodeService {
     private workCenterRepo: Repository<WorkCenter>,
     @InjectRepository(Job)
     private jobRepo: Repository<Job>,
+    @InjectRepository(ClientUser)
+    private clientUserRepo: Repository<ClientUser>,
+    private jobScheduleService: JobScheduleService,
   ) {}
 
   /**
@@ -398,5 +403,228 @@ export class QrCodeService {
       },
       dynamicQr: null,
     };
+  }
+
+  /**
+   * Get merged dynamic QR for all jobs scheduled TODAY for a client
+   * This implements the Schedule-Based Job Filtering and Activation Rules:
+   * 1. Filter jobs scheduled for today only
+   * 2. Collect work centers from all today's jobs
+   * 3. Only include work centers with explicitly activated QR codes (isSelected = true)
+   * 4. Generate merged QR code
+   */
+  async getMergedDynamicQrForClient(clientId: number): Promise<MergedQrResponse> {
+    const today = new Date();
+
+    console.log('🔍 Fetching today\'s merged QR for client:', { clientId, today: today.toISOString() });
+
+    // 1. Get all jobs for this client
+    const allJobs = await this.jobRepo.find({
+      where: { client: { id: clientId } },
+      relations: ['workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts', 'client'],
+    });
+
+    console.log('📋 Found total jobs for client:', allJobs.length);
+
+    if (allJobs.length === 0) {
+      throw new NotFoundException('No jobs found for this client');
+    }
+
+    // Get client name from the first job
+    const clientName = allJobs[0]?.client?.name || 'Cliente';
+
+    // 2. Filter jobs scheduled for today using JobScheduleService
+    const todayJobs = this.jobScheduleService.filterJobsScheduledForDate(allJobs, today);
+
+    console.log('📅 Jobs scheduled for today:', {
+      total: todayJobs.length,
+      jobIds: todayJobs.map(j => j.id),
+      jobNames: todayJobs.map(j => j.jobName),
+    });
+
+    if (todayJobs.length === 0) {
+      throw new NotFoundException({
+        message: 'No jobs scheduled for today',
+        statusCode: 404,
+        error: 'NO_JOBS_TODAY',
+        details: {
+          clientId,
+          date: today.toISOString().split('T')[0],
+          totalJobs: allJobs.length,
+        },
+      });
+    }
+
+    // 3. Collect all work centers from today's jobs (remove duplicates)
+    const workCenterIds = new Set<number>();
+    const jobWorkCenterMap = new Map<string, number[]>(); // Track which job has which WCs
+    
+    todayJobs.forEach(job => {
+      const wcIds = job.workCenters?.map(wc => wc.id) || [];
+      jobWorkCenterMap.set(job.jobName, wcIds);
+      
+      console.log(`   ✓ Job "${job.jobName}" (ID: ${job.id}) has ${wcIds.length} work centers:`, 
+        job.workCenters?.map(wc => `${wc.name} (ID: ${wc.id})`) || 'NONE');
+      
+      job.workCenters?.forEach(wc => workCenterIds.add(wc.id));
+    });
+
+    console.log('🏢 Summary - Unique work centers from today\'s jobs:', {
+      totalUniqueWorkCenters: workCenterIds.size,
+      workCenterIds: Array.from(workCenterIds),
+      jobBreakdown: Object.fromEntries(jobWorkCenterMap),
+    });
+
+    if (workCenterIds.size === 0) {
+      throw new BadRequestException('Today\'s jobs have no associated work centers');
+    }
+
+    // 4. Get QR codes for these work centers
+    // CRITICAL: Only include if isSelected = true AND isActive = true
+    const qrCodes = await this.qrCodeRepo.find({
+      where: {
+        workCenterId: In(Array.from(workCenterIds)),
+        isActive: true,
+        isSelected: true, // CRITICAL: Must be explicitly selected by employer
+      },
+      relations: ['workCenter'],
+    });
+
+    console.log('🔐 Query results - QR codes with isActive=true AND isSelected=true:', {
+      totalQRsFound: qrCodes.length,
+      details: qrCodes.map(qr => ({
+        workCenterId: qr.workCenterId,
+        workCenterName: qr.workCenter.name,
+        qrType: qr.type,
+        isActive: qr.isActive,
+        isSelected: qr.isSelected,
+        token: qr.token.substring(0, 20) + '...',
+      })),
+    });
+
+    console.log('🔍 Verification - Checking if QR work centers match job work centers:');
+    qrCodes.forEach(qr => {
+      const belongsToTodayJob = workCenterIds.has(qr.workCenterId);
+      console.log(`   ${belongsToTodayJob ? '✓' : '✗'} WorkCenter "${qr.workCenter.name}" (ID: ${qr.workCenterId}) - ${belongsToTodayJob ? 'MATCHES today\'s jobs' : 'ERROR: NOT in today\'s jobs!'}`);
+    });
+
+    if (qrCodes.length === 0) {
+      throw new NotFoundException({
+        message: 'No active QR codes found for today\'s scheduled jobs',
+        statusCode: 404,
+        error: 'NO_ACTIVE_QR',
+        details: {
+          scheduledJobs: todayJobs.map(j => ({ id: j.id, name: j.jobName })),
+          workCenterIds: Array.from(workCenterIds),
+          suggestion: 'Employer must activate QR codes for work centers',
+        },
+      });
+    }
+
+    // 5. Group QR codes by work center (same logic as getMergedDynamicQrForJob)
+    const workCenterMap = new Map<number, { name: string; address: string; qrCodes: QrCode[] }>();
+    
+    for (const qrCode of qrCodes) {
+      const wcId = qrCode.workCenter.id;
+      if (!workCenterMap.has(wcId)) {
+        workCenterMap.set(wcId, {
+          name: qrCode.workCenter.name,
+          address: qrCode.workCenter.address || '',
+          qrCodes: [],
+        });
+      }
+      workCenterMap.get(wcId).qrCodes.push(qrCode);
+    }
+
+    // 6. Build merged token data for all work centers
+    const workCentersData: Array<{ id: number; name: string; tokens: string[]; type: 'static' | 'dynamic' }> = [];
+    const workCentersResult: Array<{ id: number; name: string; qrType: 'static' | 'dynamic'; address: string }> = [];
+    let earliestExpiry: Date | null = null;
+
+    for (const [wcId, data] of workCenterMap.entries()) {
+      const tokens: string[] = [];
+      const staticQr = data.qrCodes.find(qr => qr.type === QrCodeType.STATIC && qr.isSelected);
+      const dynamicQr = data.qrCodes.find(qr => qr.type === QrCodeType.DYNAMIC && qr.isSelected);
+
+      // Include only the selected type's token (no fallback)
+      if (staticQr) {
+        tokens.push(staticQr.token);
+      } else if (dynamicQr) {
+        tokens.push(dynamicQr.token);
+        if (dynamicQr.expiresAt && (!earliestExpiry || dynamicQr.expiresAt < earliestExpiry)) {
+          earliestExpiry = dynamicQr.expiresAt;
+        }
+      }
+
+      if (tokens.length > 0) {
+        workCentersData.push({
+          id: wcId,
+          name: data.name,
+          tokens,
+          type: staticQr ? 'static' : 'dynamic',
+        });
+
+        workCentersResult.push({
+          id: wcId,
+          name: data.name,
+          qrType: staticQr ? 'static' : 'dynamic',
+          address: data.address,
+        });
+      }
+    }
+
+    if (workCentersData.length === 0) {
+      throw new NotFoundException('No selected QR codes found for today\'s jobs');
+    }
+
+    // 7. Generate merged QR token and image
+    const mergedData: MergedQrData = {
+      workCenters: workCentersData,
+      jobId: todayJobs[0].id, // Reference first job for compatibility
+      generatedAt: new Date().toISOString(),
+    };
+
+    const mergedToken = QrMerger.createMergedToken(mergedData);
+    const qrImage = await QrMerger.generateMergedQrImage(mergedToken);
+
+    console.log('✅ Successfully generated today\'s merged QR:', {
+      workCentersIncluded: workCentersResult.length,
+      earliestExpiry: earliestExpiry?.toISOString(),
+    });
+
+    return {
+      qrImage,
+      mergedToken,
+      workCenters: workCentersResult,
+      expiresAt: earliestExpiry,
+      refreshInterval: 30000, // 30 seconds in milliseconds
+      generatedAt: new Date(),
+      scheduledJobs: todayJobs.map(j => ({ id: j.id, jobName: j.jobName })),
+      clientName,
+    };
+  }
+
+  /**
+   * Get today's merged QR for an authenticated client user
+   * Looks up the client ID from the user ID, then calls getMergedDynamicQrForClient
+   */
+  async getMergedDynamicQrForClientUser(userId: number): Promise<MergedQrResponse> {
+    console.log('🔍 Looking up client for user:', userId);
+
+    // Find the client associated with this user
+    const clientUser = await this.clientUserRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['client'],
+    });
+
+    if (!clientUser?.client?.id) {
+      throw new NotFoundException('Client not found for this user');
+    }
+
+    const clientId = clientUser.client.id;
+    console.log('✅ Found client:', clientId, 'for user:', userId);
+
+    // Delegate to existing method
+    return this.getMergedDynamicQrForClient(clientId);
   }
 }

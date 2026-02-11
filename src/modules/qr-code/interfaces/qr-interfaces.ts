@@ -29,4 +29,9 @@ export interface MergedQrResponse {
   expiresAt: Date | null;
   refreshInterval: number;
   generatedAt: Date;
+  scheduledJobs?: {
+    id: number;
+    jobName: string;
+  }[];
+  clientName?: string;
 }

@@ -23,21 +23,21 @@ config();
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get('DATABASE_HOST') || 'localhost',
-        port: +configService.get<number>('DATABASE_PORT') || 5432,
-        username: configService.get('DATABASE_USERNAME') || 'jobs_control',
-        password: configService.get('DATABASE_PASSWORD') || 'jobscontrol123',
-        database: configService.get('DATABASE_NAME') || 'jobscontrol',
-        // entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        // synchronize: true,
-        entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: configService.get('DB_SYNC') === 'true',
-        ssl: configService.get('NODE_ENV') === 'production' ? {
-          rejectUnauthorized: false
-        } : false,
-      }),
+      useFactory: (configService: ConfigService) => {
+        return {
+          type: 'postgres' as const,
+          host: configService.get<string>('DATABASE_HOST') || 'localhost',
+          port: +configService.get<number>('DATABASE_PORT') || 5432,
+          username: configService.get<string>('DATABASE_USERNAME') || 'jobs_control',
+          password: configService.get<string>('DATABASE_PASSWORD') || 'jobscontrol123',
+          database: configService.get<string>('DATABASE_NAME') || 'jobscontrol',
+          entities: [__dirname + '/**/*.entity{.ts,.js}'],
+          synchronize: configService.get('DB_SYNC') === 'true',
+          ssl: configService.get('NODE_ENV') === 'production' ? {
+            rejectUnauthorized: false
+          } : false,
+        };
+      },
       inject: [ConfigService],
     }),
     CommonModule,

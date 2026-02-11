@@ -29,27 +29,12 @@ export class UsersService {
     email: string,
     relations: string[] = [],
   ): Promise<User | null> {
-    console.log('Finding user by email:', { email, relations });
-
     const user = await this.usersRepository.findOne({
       where: { email },
       relations: [...relations, 'role'], // Always include role relation
     });
 
-    console.log('Found user by email:', {
-      id: user?.id,
-      email: user?.email,
-      role: user?.role
-        ? {
-          id: user.role.id,
-          name: user.role.name,
-          value: user.role.value,
-        }
-        : null,
-    });
-
     if (user && !user.role) {
-      console.error('User has no role, attempting to assign default role');
       // Try to assign default worker role
       const workerRole = await this.rolesRepository.findOne({
         where: { value: 5 },
@@ -57,9 +42,6 @@ export class UsersService {
       if (workerRole) {
         user.role = workerRole;
         await this.usersRepository.save(user);
-        console.log('Assigned default worker role to user');
-      } else {
-        console.error('Default worker role not found');
       }
     }
 
@@ -67,23 +49,9 @@ export class UsersService {
   }
 
   async findById(id: number, relations: string[] = []): Promise<User> {
-    console.log('Finding user by ID:', { id, relations });
-
     const user = await this.usersRepository.findOne({
       where: { id },
       relations: [...relations, 'role'], // Always include role relation
-    });
-
-    console.log('Found user:', {
-      id: user?.id,
-      email: user?.email,
-      role: user?.role
-        ? {
-          id: user.role.id,
-          name: user.role.name,
-          value: user.role.value,
-        }
-        : null,
     });
 
     if (!user) {
@@ -91,7 +59,6 @@ export class UsersService {
     }
 
     if (!user.role) {
-      console.error('User has no role, attempting to assign default role');
       // Try to assign default worker role
       const workerRole = await this.rolesRepository.findOne({
         where: { value: 5 },
@@ -99,9 +66,6 @@ export class UsersService {
       if (workerRole) {
         user.role = workerRole;
         await this.usersRepository.save(user);
-        console.log('Assigned default worker role to user');
-      } else {
-        console.error('Default worker role not found');
       }
     }
 
@@ -154,7 +118,11 @@ export class UsersService {
    * @returns True if password is valid
    */
   async validatePassword(plainPassword: string, hashedPassword: string): Promise<boolean> {
-    return bcrypt.compare(plainPassword, hashedPassword);
+    try {
+      return await bcrypt.compare(plainPassword, hashedPassword);
+    } catch (error) {
+      return false;
+    }
   }
 
   /**
