@@ -2244,6 +2244,37 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
         }
 
+        // ── GPS proximity enforcement (check-in only) ──────────────────────────
+        // If the resolved work center has GPS coordinates AND the worker sent their
+        // coordinates, enforce that the worker is within the allowed radius.
+        if (
+          recordScanDto.scanType === 'check-in' &&
+          validatedWorkCenterId &&
+          recordScanDto.latitude != null &&
+          recordScanDto.longitude != null
+        ) {
+          const resolvedWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
+          if (resolvedWc && resolvedWc.latitude != null && resolvedWc.longitude != null) {
+            const toRad = (deg: number) => (deg * Math.PI) / 180;
+            const R = 6_371_000;
+            const lat1 = toRad(recordScanDto.latitude);
+            const lat2 = toRad(Number(resolvedWc.latitude));
+            const dLat = toRad(Number(resolvedWc.latitude) - recordScanDto.latitude);
+            const dLon = toRad(Number(resolvedWc.longitude) - recordScanDto.longitude);
+            const a =
+              Math.sin(dLat / 2) ** 2 +
+              Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+            const distanceMeters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const allowedRadius = resolvedWc.gpsRadius ?? 100;
+            if (distanceMeters > allowedRadius) {
+              throw new Error(
+                `You are ${Math.round(distanceMeters)}m away from "${resolvedWc.name}". ` +
+                `Check-in is only allowed within ${allowedRadius}m of the work center.`
+              );
+            }
+          }
+        }
+
         // Create scan log
         const scanLog = txManager.create(ScanLog, {
           jobId: recordScanDto.jobId,
