@@ -2135,8 +2135,10 @@ async getAllJobsByWorkerFromToken(userId: number) {
       const endMins = eh * 60 + em;
       const windowStart = startMins - 30;       // 30 min early allowed
       const windowEnd = endMins + 120;           // 2 h late grace period
-      // Handle overnight shifts
-      if (endMins < startMins) {
+      // Use isContinuous flag (set when shift spans midnight) instead of time-only comparison
+      const isOvernight = (shift as any).isContinuous || endMins < startMins;
+      if (isOvernight) {
+        // Overnight: allow from windowStart → midnight OR midnight → windowEnd
         if (nowMins >= windowStart || nowMins <= windowEnd) return { allowed: true };
       } else {
         if (nowMins >= windowStart && nowMins <= windowEnd) return { allowed: true };
@@ -2195,20 +2197,24 @@ async getAllJobsByWorkerFromToken(userId: number) {
         const isWorkerAssigned = job.workers.some(w => w.id === workerId);
         if (!isWorkerAssigned) throw new Error('Worker is not assigned to this job');
 
-        // Schedule validations
-        const now = new Date();
-        const isScheduledToday = this.jobScheduleService.isJobScheduledForDate(job, now);
-        if (!isScheduledToday) {
-          throw new Error('This job is not scheduled for today. Check-in rejected.');
-        }
-        const timeCheck = this.isWithinShiftWindow(job, now);
-        if (!timeCheck.allowed) {
-          throw new Error(timeCheck.reason || 'Check-in time is outside the allowed shift window.');
-        }
+        // Schedule validations only needed at check-in
+        if (recordScanDto.scanType === 'check-in') {
+          // Use worker's LOCAL time so shift windows match their clock
+          const userTimezone = recordScanDto.userTimezone ||
+            Intl.DateTimeFormat().resolvedOptions().timeZone ||
+            'UTC';
+          const nowUtc = new Date();
+          const localNow = new Date(nowUtc.toLocaleString('en-US', { timeZone: userTimezone }));
 
-        const userTimezone = recordScanDto.userTimezone || 
-          Intl.DateTimeFormat().resolvedOptions().timeZone || 
-          'UTC';
+          const isScheduledToday = this.jobScheduleService.isJobScheduledForDate(job, localNow);
+          if (!isScheduledToday) {
+            throw new Error('This job is not scheduled for today. Check-in rejected.');
+          }
+          const timeCheck = this.isWithinShiftWindow(job, localNow);
+          if (!timeCheck.allowed) {
+            throw new Error(timeCheck.reason || 'Check-in time is outside the allowed shift window.');
+          }
+        }
         
         // Determine validated work center ID
         let validatedWorkCenterId: number | undefined;
