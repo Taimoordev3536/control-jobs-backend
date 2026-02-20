@@ -97,17 +97,24 @@ export class JobScheduleService {
       return true;
     }
 
-    // Format target date as DD-MM
-    const targetDayMonth = this.formatDayMonth(date);
-    const startDayMonth = season.startDate; // Already in DD-MM format
-    const endDayMonth = season.endDate; // Already in DD-MM format
+    // Convert DD-MM strings to numeric MMDD for correct lexicographic comparison
+    // e.g. "15-06" (Jun 15) → 615, "01-09" (Sep 1) → 901
+    // This ensures Aug 31 (831) < Sep 1 (901) which "DD-MM" string comparison gets wrong
+    const toMMDD = (ddmm: string): number => {
+      const [dd, mm] = ddmm.split('-').map(Number);
+      return mm * 100 + dd;
+    };
 
-    if (startDayMonth <= endDayMonth) {
-      // Same year range (e.g., summer: 01-06 to 31-08)
-      return targetDayMonth >= startDayMonth && targetDayMonth <= endDayMonth;
+    const target = toMMDD(this.formatDayMonth(date));
+    const start  = toMMDD(season.startDate);
+    const end    = toMMDD(season.endDate);
+
+    if (start <= end) {
+      // Same-year range (e.g., summer: Jun 1 → Aug 31)
+      return target >= start && target <= end;
     } else {
-      // Year-wrapping range (e.g., winter: 15-11 to 15-03)
-      return targetDayMonth >= startDayMonth || targetDayMonth <= endDayMonth;
+      // Year-wrapping range (e.g., winter: Nov 15 → Mar 15)
+      return target >= start || target <= end;
     }
   }
 
