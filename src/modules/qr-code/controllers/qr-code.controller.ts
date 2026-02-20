@@ -176,6 +176,7 @@ export class QrCodeController {
       dto.qrToken,
       dto.latitude,
       dto.longitude,
+      dto.jobId,
     );
 
     return {

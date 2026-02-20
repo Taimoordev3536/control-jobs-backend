@@ -203,6 +203,7 @@ export class QrValidationService {
     mergedToken: string,
     workerLat: number,
     workerLng: number,
+    jobId?: number,
   ): Promise<GpsSelectionResult> {
     const mergedData = QrMerger.parseMergedToken(mergedToken);
 
@@ -210,7 +211,25 @@ export class QrValidationService {
       return { selectionType: 'manual', message: 'Invalid merged QR token — manual selection required' };
     }
 
-    const workCenterIds = mergedData.workCenters.map(wc => wc.id);
+    let workCenterIds = mergedData.workCenters.map(wc => wc.id);
+
+    // When a jobId is provided, restrict to only work centers that belong to this job
+    // AND are present in the merged QR token (i.e. have a merged/dynamic QR code)
+    if (jobId) {
+      const job = await this.jobRepo.findOne({
+        where: { id: jobId },
+        relations: ['workCenters'],
+      });
+      if (job?.workCenters?.length) {
+        const jobWcIds = new Set(job.workCenters.map(wc => wc.id));
+        workCenterIds = workCenterIds.filter(id => jobWcIds.has(id));
+      }
+    }
+
+    if (workCenterIds.length === 0) {
+      return { selectionType: 'manual', workCenters: [], message: 'No work centers in this job match the scanned QR code.' };
+    }
+
     const workCenters = await this.workCenterRepo.find({
       where: { id: In(workCenterIds) },
     });

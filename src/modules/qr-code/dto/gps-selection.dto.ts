@@ -1,4 +1,4 @@
-import { IsNumber, IsString, Max, Min } from 'class-validator';
+import { IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class GpsSelectionDto {
   @IsString()
@@ -13,4 +13,9 @@ export class GpsSelectionDto {
   @Min(-180)
   @Max(180)
   longitude: number;
+
+  /** When provided, only return work centers that belong to this job */
+  @IsOptional()
+  @IsNumber()
+  jobId?: number;
 }
