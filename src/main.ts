@@ -46,7 +46,5 @@ async function bootstrap() {
 
   // CRITICAL: Listen on 0.0.0.0 for Render (not just localhost)
   await app.listen(port, '0.0.0.0');
-  console.log(`✅ HTTP Server running on port ${port}`);
-  console.log(`✅ Server is accessible at http://0.0.0.0:${port}`);
 }
 bootstrap();

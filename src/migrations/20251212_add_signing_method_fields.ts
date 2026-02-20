@@ -9,7 +9,7 @@ export class AddSigningMethodFields20251212 implements MigrationInterface {
       ADD COLUMN IF NOT EXISTS "ip_address" VARCHAR(45),
       ADD COLUMN IF NOT EXISTS "latitude" DECIMAL(10, 8),
       ADD COLUMN IF NOT EXISTS "longitude" DECIMAL(11, 8),
-      ADD COLUMN IF NOT EXISTS "qr_token" VARCHAR(50);
+      ADD COLUMN IF NOT EXISTS "qr_token" TEXT;
     `);
 
     // Add check-in/out method tracking to work_sessions

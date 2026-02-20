@@ -44,7 +44,7 @@ export class ScanLog {
   @Column({ type: 'decimal', precision: 11, scale: 8, nullable: true })
   longitude?: number;
 
-  @Column({ type: 'varchar', length: 50, nullable: true, name: 'qr_token' })
+  @Column({ type: 'text', nullable: true, name: 'qr_token' })
   qrToken?: string;
 
   // Relations

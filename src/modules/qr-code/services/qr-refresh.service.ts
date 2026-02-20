@@ -19,8 +19,6 @@ export class QrRefreshService {
    */
   @Cron('*/30 * * * * *') // Every 30 seconds
   async refreshDynamicQRCodes() {
-    this.logger.log('🔄 Starting dynamic QR code refresh...');
-
     try {
       const now = new Date();
       
@@ -31,8 +29,6 @@ export class QrRefreshService {
           isActive: true,
         },
       });
-
-      this.logger.log(`Found ${dynamicQrCodes.length} active dynamic QR codes`);
 
       let refreshedCount = 0;
 
@@ -48,16 +44,8 @@ export class QrRefreshService {
 
           await this.qrCodeRepo.save(qrCode);
           refreshedCount++;
-
-          this.logger.debug(
-            `✅ Refreshed dynamic QR for work center ${qrCode.workCenterId}`,
-          );
         }
       }
-
-      this.logger.log(
-        `✅ Dynamic QR refresh completed: ${refreshedCount}/${dynamicQrCodes.length} refreshed`,
-      );
     } catch (error) {
       this.logger.error('❌ Error refreshing dynamic QR codes:', error);
     }
@@ -76,8 +64,6 @@ export class QrRefreshService {
    * Manually refresh a specific work center's dynamic QR
    */
   async refreshWorkCenterDynamicQr(workCenterId: number): Promise<void> {
-    this.logger.log(`Manually refreshing dynamic QR for work center ${workCenterId}`);
-
     const dynamicQr = await this.qrCodeRepo.findOne({
       where: {
         workCenterId,
@@ -87,7 +73,6 @@ export class QrRefreshService {
     });
 
     if (!dynamicQr) {
-      this.logger.warn(`No active dynamic QR found for work center ${workCenterId}`);
       return;
     }
 
@@ -97,7 +82,6 @@ export class QrRefreshService {
     dynamicQr.lastRefreshedAt = now;
 
     await this.qrCodeRepo.save(dynamicQr);
-    this.logger.log(`✅ Manually refreshed dynamic QR for work center ${workCenterId}`);
   }
 
   /**

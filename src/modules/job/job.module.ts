@@ -21,6 +21,7 @@ import { ClientUser } from '../clients/entities/client-user.entity';
 import { AlertsModule } from '../realtime/alerts.module';
 import { QrCodeModule } from '../qr-code/qr-code.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { JobScheduleService } from './services/job-schedule.service';
 
 @Module({
   imports: [
@@ -46,7 +47,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     AlertsModule,
     QrCodeModule,
   ],
-  providers: [JobService],
+  providers: [JobService, JobScheduleService],
   controllers: [JobController],
   exports: [TypeOrmModule],
 })

@@ -33,9 +33,10 @@ config();
           database: configService.get<string>('DATABASE_NAME') || 'jobscontrol',
           entities: [__dirname + '/**/*.entity{.ts,.js}'],
           synchronize: configService.get('DB_SYNC') === 'true',
-          ssl: configService.get('NODE_ENV') === 'production' ? {
-            rejectUnauthorized: false
-          } : false,
+          ssl: configService.get<string>('DATABASE_HOST')?.includes('supabase') ||
+               configService.get<string>('DATABASE_HOST')?.includes('amazonaws')
+            ? { rejectUnauthorized: false }
+            : false,
         };
       },
       inject: [ConfigService],

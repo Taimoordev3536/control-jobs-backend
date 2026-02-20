@@ -40,6 +40,10 @@ export class RecordScanDto {
   @IsOptional()
   @IsString()
   qrToken?: string;
+
+  @IsOptional()
+  @IsNumber()
+  workCenterId?: number;
 }
 
 

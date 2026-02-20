@@ -1,11 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { QrCode, QrCodeType } from '../entities/qr-code.entity';
 import { Job } from '../../job/entities/job.entity';
+import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 import { QrMerger } from '../helpers/qr-merger';
 import { QrValidationResult } from '../interfaces/qr-interfaces';
 import { JobScheduleService } from '../../job/services/job-schedule.service';
+
+export interface GpsSelectionResult {
+  selectionType: 'auto' | 'manual';
+  workCenterId?: number;
+  workCenters?: Array<{
+    id: number;
+    name: string;
+    address: string;
+    distance: number;
+  }>;
+  message: string;
+}
 
 @Injectable()
 export class QrValidationService {
@@ -14,6 +27,8 @@ export class QrValidationService {
     private qrCodeRepo: Repository<QrCode>,
     @InjectRepository(Job)
     private jobRepo: Repository<Job>,
+    @InjectRepository(WorkCenter)
+    private workCenterRepo: Repository<WorkCenter>,
     private jobScheduleService: JobScheduleService,
   ) {}
 
@@ -47,22 +62,29 @@ export class QrValidationService {
   ): Promise<QrValidationResult> {
     const mergedData = QrMerger.parseMergedToken(mergedToken);
 
-    if (!mergedData || mergedData.jobId !== jobId) {
+    if (!mergedData) {
       return {
         valid: false,
-        message: 'Invalid merged QR code or job mismatch',
+        message: 'Invalid merged QR code — could not parse token',
       };
     }
 
-    // Validate each work center's tokens
+    // NOTE: We intentionally do NOT enforce mergedData.jobId === jobId here.
+    // The "today merged QR" embeds only the first job's ID for legacy reasons but
+    // contains work-center tokens from ALL of today's jobs.
+    // Worker-to-job assignment is already enforced in recordScan before this call.
+    // We instead check whether any token in this merged QR belongs to a work center
+    // of the worker's actual job (via validateSingleToken).
+
+    // Validate each work center's tokens against the worker's job
     for (const wc of mergedData.workCenters) {
       for (const token of wc.tokens) {
         const result = await this.validateSingleToken(token, jobId, enforceTodaySchedule);
         if (result.valid) {
           return {
             valid: true,
-            workCenterId: wc.id,
-            workCenterName: wc.name,
+            workCenterId: result.workCenterId ?? wc.id,
+            workCenterName: result.workCenterName ?? wc.name,
             qrType: result.qrType,
             message: 'Merged QR code validated successfully',
           };
@@ -72,7 +94,7 @@ export class QrValidationService {
 
     return {
       valid: false,
-      message: 'No valid tokens found in merged QR code',
+      message: 'No valid tokens found in merged QR code for this job',
     };
   }
 
@@ -170,6 +192,89 @@ export class QrValidationService {
       valid: false,
       message: 'QR code not found or not active for this job',
     };
+  }
+
+  /**
+   * GPS-based work center auto-selection for dynamic/merged QR codes.
+   * Returns auto-selected work center if exactly one is within radius,
+   * otherwise returns all eligible work centers for manual selection.
+   */
+  async selectWorkCenterByGps(
+    mergedToken: string,
+    workerLat: number,
+    workerLng: number,
+  ): Promise<GpsSelectionResult> {
+    const mergedData = QrMerger.parseMergedToken(mergedToken);
+
+    if (!mergedData) {
+      return { selectionType: 'manual', message: 'Invalid merged QR token — manual selection required' };
+    }
+
+    const workCenterIds = mergedData.workCenters.map(wc => wc.id);
+    const workCenters = await this.workCenterRepo.find({
+      where: { id: In(workCenterIds) },
+    });
+
+    // Filter work centers that have GPS configured and are within their radius
+    const nearby = workCenters
+      .filter(wc => wc.latitude != null && wc.longitude != null)
+      .map(wc => ({
+        id: wc.id,
+        name: wc.name,
+        address: wc.address,
+        distance: this.calculateDistance(
+          workerLat, workerLng,
+          Number(wc.latitude), Number(wc.longitude),
+        ),
+        radius: wc.gpsRadius ?? 100,
+      }))
+      .filter(wc => wc.distance <= wc.radius)
+      .sort((a, b) => a.distance - b.distance);
+
+    if (nearby.length === 1) {
+      return {
+        selectionType: 'auto',
+        workCenterId: nearby[0].id,
+        message: `Auto-selected "${nearby[0].name}" (${Math.round(nearby[0].distance)}m away)`,
+      };
+    }
+
+    // Zero or multiple nearby — fall back to manual.
+    // Include ALL work centers from the token (not just GPS-configured ones) so the
+    // worker is never stuck even if GPS coordinates are missing.
+    const allForManual = workCenters.map(wc => ({
+      id: wc.id,
+      name: wc.name,
+      address: wc.address,
+      distance:
+        wc.latitude != null && wc.longitude != null
+          ? this.calculateDistance(workerLat, workerLng, Number(wc.latitude), Number(wc.longitude))
+          : -1,
+    }));
+
+    return {
+      selectionType: 'manual',
+      workCenters: allForManual,
+      message:
+        nearby.length === 0
+          ? 'No work centers found within GPS radius — manual selection required'
+          : 'Multiple work centers within GPS radius — manual selection required',
+    };
+  }
+
+  /** Haversine distance in metres between two GPS coordinates */
+  private calculateDistance(
+    lat1: number, lon1: number,
+    lat2: number, lon2: number,
+  ): number {
+    const R = 6_371_000; // Earth radius in metres
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
   /**

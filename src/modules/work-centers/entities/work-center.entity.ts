@@ -66,6 +66,15 @@ export class WorkCenter {
     @Column({ type: 'text', nullable: true })
     observations: string;
 
+    @Column({ name: 'latitude', type: 'decimal', precision: 10, scale: 8, nullable: true })
+    latitude: number | null;
+
+    @Column({ name: 'longitude', type: 'decimal', precision: 11, scale: 8, nullable: true })
+    longitude: number | null;
+
+    @Column({ name: 'gps_radius', type: 'integer', default: 100 })
+    gpsRadius: number;
+
     @OneToMany(() => EmployerWorkCenter, employerWorkCenter => employerWorkCenter.workCenter)
     employerWorkCenters: EmployerWorkCenter[];
 

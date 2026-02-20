@@ -38,6 +38,7 @@ import { JobStatus } from './enums/job-status.enum';
 import * as QRCode from 'qrcode';
 import { AlertsService } from '../realtime/alerts.service';
 import { QrValidationService } from '../qr-code/services/qr-validation.service';
+import { JobScheduleService } from './services/job-schedule.service';
 
 @Injectable()
 export class JobService {
@@ -61,6 +62,7 @@ export class JobService {
     private dataSource: DataSource,
     private alertsService: AlertsService,
     private qrValidationService: QrValidationService,
+    private jobScheduleService: JobScheduleService,
   ) {}
 
 
@@ -2110,6 +2112,36 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * Record a scan event and manage work sessions
    * Uses database transaction to ensure atomic operations
    */
+  /**
+   * Returns whether the current time falls within the allowed check-in window
+   * for any of today's shifts: [baseStartTime - 30 min, baseEndTime].
+   * FREE schedule type has no time restriction.
+   */
+  private isWithinShiftWindow(job: Job, now: Date): { allowed: boolean; reason?: string } {
+    if (job.scheduleType === ScheduleType.FREE) {
+      return { allowed: true };
+    }
+    const activeSchedule = this.jobScheduleService.getActiveSeasonalSchedule(job, now);
+    if (!activeSchedule || !activeSchedule.shifts?.length) {
+      return { allowed: false, reason: 'No active schedule or shifts found for today' };
+    }
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    for (const shift of activeSchedule.shifts) {
+      const [sh, sm] = shift.baseStartTime.split(':').map(Number);
+      const [eh, em] = shift.baseEndTime.split(':').map(Number);
+      const startMins = sh * 60 + sm;
+      const endMins = eh * 60 + em;
+      const windowStart = startMins - 30;
+      // Handle overnight shifts
+      if (endMins < startMins) {
+        if (nowMins >= windowStart || nowMins <= endMins) return { allowed: true };
+      } else {
+        if (nowMins >= windowStart && nowMins <= endMins) return { allowed: true };
+      }
+    }
+    return { allowed: false, reason: 'Current time is outside the allowed check-in window for any shift today' };
+  }
+
   async recordScan(recordScanDto: RecordScanDto, userId: number): Promise<{ status: string; scanData: ScanLog; workSession?: any }> {
     return await this.dataSource.transaction(async (txManager) => {
       try {
@@ -2152,7 +2184,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         // Verify job and worker assignment
         const job = await txManager.findOne(Job, {
           where: { id: recordScanDto.jobId },
-          relations: ['workers','employer','client'],
+          relations: ['workers', 'employer', 'client', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
         });
 
         if (!job) throw new Error('Job not found');
@@ -2160,13 +2192,29 @@ async getAllJobsByWorkerFromToken(userId: number) {
         const isWorkerAssigned = job.workers.some(w => w.id === workerId);
         if (!isWorkerAssigned) throw new Error('Worker is not assigned to this job');
 
+        // Schedule validations
+        const now = new Date();
+        const isScheduledToday = this.jobScheduleService.isJobScheduledForDate(job, now);
+        if (!isScheduledToday) {
+          throw new Error('This job is not scheduled for today. Check-in rejected.');
+        }
+        const timeCheck = this.isWithinShiftWindow(job, now);
+        if (!timeCheck.allowed) {
+          throw new Error(timeCheck.reason || 'Check-in time is outside the allowed shift window.');
+        }
+
         const userTimezone = recordScanDto.userTimezone || 
           Intl.DateTimeFormat().resolvedOptions().timeZone || 
           'UTC';
         
-        // Validate QR if provided
+        // Determine validated work center ID
         let validatedWorkCenterId: number | undefined;
-        if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
+
+        if (recordScanDto.workCenterId) {
+          // Manual selection provided by the worker (GPS fallback flow)
+          validatedWorkCenterId = recordScanDto.workCenterId;
+        } else if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
+          // QR token validation — derives work center automatically
           const validationResult = await this.qrValidationService.validateQrToken(
             recordScanDto.qrToken,
             recordScanDto.jobId
@@ -2175,6 +2223,14 @@ async getAllJobsByWorkerFromToken(userId: number) {
             throw new Error(validationResult.message || 'Invalid or expired QR code');
           }
           validatedWorkCenterId = validationResult.workCenterId;
+        }
+
+        // WorkCenter membership check
+        if (validatedWorkCenterId && job.workCenters?.length) {
+          const jobWcIds = job.workCenters.map(wc => wc.id);
+          if (!jobWcIds.includes(validatedWorkCenterId)) {
+            throw new Error('Selected work center does not belong to this job.');
+          }
         }
 
         // Create scan log

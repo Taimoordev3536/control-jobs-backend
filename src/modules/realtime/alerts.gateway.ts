@@ -39,7 +39,6 @@ export class AlertsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (role === 'EMPLOYER') socket.join(`employer:${userId}`);
       if (role === 'CLIENT') socket.join(`client:${userId}`);
       if (role === 'WORKER') socket.join(`worker:${userId}`);
-      console.log(`[WS] Connected user ${userId} role ${role}`);
     } catch (e) {
       console.error('[WS] Handshake error', e?.message || e);
       socket.disconnect(true);

@@ -103,11 +103,6 @@ export class QrCodeService {
       { isActive: false, isSelected: false },
     );
 
-    console.log('✅ Static QR activated:', { 
-      staticQrId: staticQr.id, 
-      staticToken: staticQr.token
-    });
-
     // Generate QR image
     const staticQrImage = await QrImageGenerator.generateQrImage(staticQr.token);
 
@@ -195,8 +190,6 @@ export class QrCodeService {
     const qrCodes = await this.qrCodeRepo.find({
       where: { workCenterId, isActive: true },
     });
-
-    console.log('🔍 Found QR codes for work center:', { workCenterId, count: qrCodes.length, qrCodes });
 
     const staticQr = qrCodes.find(qr => qr.type === QrCodeType.STATIC);
     const dynamicQr = qrCodes.find(qr => qr.type === QrCodeType.DYNAMIC);
@@ -382,12 +375,6 @@ export class QrCodeService {
 
     await this.qrCodeRepo.save(newStaticQr);
 
-    console.log('✅ Static QR regenerated:', {
-      oldToken: existingStaticQr.token,
-      newToken: newStaticQr.token,
-      workCenterId,
-    });
-
     // Generate QR image
     const qrImage = await QrImageGenerator.generateQrImage(newStaticQr.token);
 
@@ -416,15 +403,11 @@ export class QrCodeService {
   async getMergedDynamicQrForClient(clientId: number): Promise<MergedQrResponse> {
     const today = new Date();
 
-    console.log('🔍 Fetching today\'s merged QR for client:', { clientId, today: today.toISOString() });
-
     // 1. Get all jobs for this client
     const allJobs = await this.jobRepo.find({
       where: { client: { id: clientId } },
       relations: ['workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts', 'client'],
     });
-
-    console.log('📋 Found total jobs for client:', allJobs.length);
 
     if (allJobs.length === 0) {
       throw new NotFoundException('No jobs found for this client');
@@ -435,12 +418,6 @@ export class QrCodeService {
 
     // 2. Filter jobs scheduled for today using JobScheduleService
     const todayJobs = this.jobScheduleService.filterJobsScheduledForDate(allJobs, today);
-
-    console.log('📅 Jobs scheduled for today:', {
-      total: todayJobs.length,
-      jobIds: todayJobs.map(j => j.id),
-      jobNames: todayJobs.map(j => j.jobName),
-    });
 
     if (todayJobs.length === 0) {
       throw new NotFoundException({
@@ -463,16 +440,7 @@ export class QrCodeService {
       const wcIds = job.workCenters?.map(wc => wc.id) || [];
       jobWorkCenterMap.set(job.jobName, wcIds);
       
-      console.log(`   ✓ Job "${job.jobName}" (ID: ${job.id}) has ${wcIds.length} work centers:`, 
-        job.workCenters?.map(wc => `${wc.name} (ID: ${wc.id})`) || 'NONE');
-      
       job.workCenters?.forEach(wc => workCenterIds.add(wc.id));
-    });
-
-    console.log('🏢 Summary - Unique work centers from today\'s jobs:', {
-      totalUniqueWorkCenters: workCenterIds.size,
-      workCenterIds: Array.from(workCenterIds),
-      jobBreakdown: Object.fromEntries(jobWorkCenterMap),
     });
 
     if (workCenterIds.size === 0) {
@@ -488,24 +456,6 @@ export class QrCodeService {
         isSelected: true, // CRITICAL: Must be explicitly selected by employer
       },
       relations: ['workCenter'],
-    });
-
-    console.log('🔐 Query results - QR codes with isActive=true AND isSelected=true:', {
-      totalQRsFound: qrCodes.length,
-      details: qrCodes.map(qr => ({
-        workCenterId: qr.workCenterId,
-        workCenterName: qr.workCenter.name,
-        qrType: qr.type,
-        isActive: qr.isActive,
-        isSelected: qr.isSelected,
-        token: qr.token.substring(0, 20) + '...',
-      })),
-    });
-
-    console.log('🔍 Verification - Checking if QR work centers match job work centers:');
-    qrCodes.forEach(qr => {
-      const belongsToTodayJob = workCenterIds.has(qr.workCenterId);
-      console.log(`   ${belongsToTodayJob ? '✓' : '✗'} WorkCenter "${qr.workCenter.name}" (ID: ${qr.workCenterId}) - ${belongsToTodayJob ? 'MATCHES today\'s jobs' : 'ERROR: NOT in today\'s jobs!'}`);
     });
 
     if (qrCodes.length === 0) {
@@ -587,11 +537,6 @@ export class QrCodeService {
     const mergedToken = QrMerger.createMergedToken(mergedData);
     const qrImage = await QrMerger.generateMergedQrImage(mergedToken);
 
-    console.log('✅ Successfully generated today\'s merged QR:', {
-      workCentersIncluded: workCentersResult.length,
-      earliestExpiry: earliestExpiry?.toISOString(),
-    });
-
     return {
       qrImage,
       mergedToken,
@@ -609,8 +554,6 @@ export class QrCodeService {
    * Looks up the client ID from the user ID, then calls getMergedDynamicQrForClient
    */
   async getMergedDynamicQrForClientUser(userId: number): Promise<MergedQrResponse> {
-    console.log('🔍 Looking up client for user:', userId);
-
     // Find the client associated with this user
     const clientUser = await this.clientUserRepo.findOne({
       where: { user: { id: userId } },
@@ -622,7 +565,6 @@ export class QrCodeService {
     }
 
     const clientId = clientUser.client.id;
-    console.log('✅ Found client:', clientId, 'for user:', userId);
 
     // Delegate to existing method
     return this.getMergedDynamicQrForClient(clientId);
