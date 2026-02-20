@@ -2114,16 +2114,18 @@ async getAllJobsByWorkerFromToken(userId: number) {
    */
   /**
    * Returns whether the current time falls within the allowed check-in window
-   * for any of today's shifts: [baseStartTime - 30 min, baseEndTime].
+   * for any of today's shifts: [baseStartTime - 30 min, baseEndTime + 2h].
    * FREE schedule type has no time restriction.
+   * If no shifts are configured, check-in is allowed (shifts not mandatory).
    */
   private isWithinShiftWindow(job: Job, now: Date): { allowed: boolean; reason?: string } {
     if (job.scheduleType === ScheduleType.FREE) {
       return { allowed: true };
     }
     const activeSchedule = this.jobScheduleService.getActiveSeasonalSchedule(job, now);
+    // No schedule or no shifts configured — allow check-in (not enforced)
     if (!activeSchedule || !activeSchedule.shifts?.length) {
-      return { allowed: false, reason: 'No active schedule or shifts found for today' };
+      return { allowed: true };
     }
     const nowMins = now.getHours() * 60 + now.getMinutes();
     for (const shift of activeSchedule.shifts) {
@@ -2131,12 +2133,13 @@ async getAllJobsByWorkerFromToken(userId: number) {
       const [eh, em] = shift.baseEndTime.split(':').map(Number);
       const startMins = sh * 60 + sm;
       const endMins = eh * 60 + em;
-      const windowStart = startMins - 30;
+      const windowStart = startMins - 30;       // 30 min early allowed
+      const windowEnd = endMins + 120;           // 2 h late grace period
       // Handle overnight shifts
       if (endMins < startMins) {
-        if (nowMins >= windowStart || nowMins <= endMins) return { allowed: true };
+        if (nowMins >= windowStart || nowMins <= windowEnd) return { allowed: true };
       } else {
-        if (nowMins >= windowStart && nowMins <= endMins) return { allowed: true };
+        if (nowMins >= windowStart && nowMins <= windowEnd) return { allowed: true };
       }
     }
     return { allowed: false, reason: 'Current time is outside the allowed check-in window for any shift today' };
