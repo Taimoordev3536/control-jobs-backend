@@ -2198,11 +2198,13 @@ async getAllJobsByWorkerFromToken(userId: number) {
         if (!isWorkerAssigned) throw new Error('Worker is not assigned to this job');
 
         // Schedule validations only needed at check-in
+        // Resolve timezone once here so it's available for the scan log record too
+        const userTimezone = recordScanDto.userTimezone ||
+          Intl.DateTimeFormat().resolvedOptions().timeZone ||
+          'UTC';
+
         if (recordScanDto.scanType === 'check-in') {
           // Use worker's LOCAL time so shift windows match their clock
-          const userTimezone = recordScanDto.userTimezone ||
-            Intl.DateTimeFormat().resolvedOptions().timeZone ||
-            'UTC';
           const nowUtc = new Date();
           const localNow = new Date(nowUtc.toLocaleString('en-US', { timeZone: userTimezone }));
 
