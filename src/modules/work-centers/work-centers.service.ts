@@ -79,6 +79,10 @@ export class WorkCentersService {
       contactEmail: dto.contactEmail,
       landline: dto.landline,
       postalCode: dto.postalCode,
+      // GPS proximity enforcement fields (auto-populated from Google Places on the frontend)
+      latitude: dto.latitude ?? null,
+      longitude: dto.longitude ?? null,
+      gpsRadius: dto.gpsRadius ?? 100,
     };
 
     // If dto.employerId is provided and matches the acting employer, create employer-owned

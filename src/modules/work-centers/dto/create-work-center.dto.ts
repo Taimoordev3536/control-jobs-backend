@@ -62,4 +62,16 @@ export class CreateWorkCenterDto {
   @IsNumber()
   @IsOptional()
   employerId?: number;
+
+  @IsNumber()
+  @IsOptional()
+  latitude?: number;
+
+  @IsNumber()
+  @IsOptional()
+  longitude?: number;
+
+  @IsNumber()
+  @IsOptional()
+  gpsRadius?: number;
 }
