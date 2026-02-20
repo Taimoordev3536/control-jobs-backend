@@ -38,6 +38,7 @@ import { JobStatus } from './enums/job-status.enum';
 import * as QRCode from 'qrcode';
 import { AlertsService } from '../realtime/alerts.service';
 import { QrValidationService } from '../qr-code/services/qr-validation.service';
+import { QrMerger } from '../qr-code/helpers/qr-merger';
 import { JobScheduleService } from './services/job-schedule.service';
 
 @Injectable()
@@ -2225,7 +2226,18 @@ async getAllJobsByWorkerFromToken(userId: number) {
           // Manual selection provided by the worker (GPS fallback flow)
           validatedWorkCenterId = recordScanDto.workCenterId;
         } else if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
-          // QR token validation — derives work center automatically
+          // ── Merged QR: REQUIRE explicit workCenterId ──────────────────
+          // Merged tokens contain multiple work centers. The frontend must
+          // use GPS or manual selector to pick ONE before calling recordScan.
+          // We NEVER auto-pick from a merged token — that bypasses GPS.
+          if (QrMerger.isMergedToken(recordScanDto.qrToken)) {
+            throw new Error(
+              'Merged QR code detected but no work center selected. ' +
+              'Please select a work center before checking in.'
+            );
+          }
+
+          // ── Static/single QR: work center is embedded in the token ────
           const validationResult = await this.qrValidationService.validateQrToken(
             recordScanDto.qrToken,
             recordScanDto.jobId
