@@ -5,6 +5,7 @@ import {
   MinLength,
   IsNumber,
   IsOptional,
+  IsBoolean,
 } from 'class-validator';
 
 export class CreateClientDto {
@@ -71,4 +72,42 @@ export class CreateClientDto {
   @IsEmail()
   @IsOptional()
   accessEmail?: string;
+
+  @IsString()
+  @IsOptional()
+  street?: string;
+
+  @IsString()
+  @IsOptional()
+  streetNumber?: string;
+
+  @IsString()
+  @IsOptional()
+  floorDoor?: string;
+
+  @IsString()
+  @IsOptional()
+  postalCode?: string;
+
+  @IsString()
+  @IsOptional()
+  city?: string;
+
+  @IsString()
+  @IsOptional()
+  province?: string;
+
+  @IsString()
+  @IsOptional()
+  country?: string;
+
+  @IsOptional()
+  latitude?: number;
+
+  @IsOptional()
+  longitude?: number;
+
+  @IsBoolean()
+  @IsOptional()
+  active?: boolean;
 }

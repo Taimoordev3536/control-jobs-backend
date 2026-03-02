@@ -78,9 +78,15 @@ export class QrEmailService {
     // Send email via Resend
     try {
       if (fromEmail && this.resendClient && this.resendClient.emails) {
+        // Use RESEND_TO_EMAIL override for testing (sandbox sender can only deliver to verified email)
+        const overrideTo = this.configService.get<string>('RESEND_TO_EMAIL');
+        const finalTo = overrideTo || clientEmail;
+        if (overrideTo) {
+          this.logger.log(`RESEND_TO_EMAIL override active: sending to ${overrideTo} instead of ${clientEmail}`);
+        }
         const response = await this.resendClient.emails.send({
           from: fromEmail,
-          to: clientEmail,
+          to: finalTo,
           subject: emailSubject,
           html: emailContent,
         });

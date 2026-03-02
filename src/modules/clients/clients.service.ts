@@ -38,15 +38,32 @@ export class ClientsService {
     return this.clientRepo.find();
   }
 
-  async findOne(id: number) {
+  // Internal: returns raw entity for update/delete operations
+  private async findOneEntity(id: number): Promise<Client> {
     const client = await this.clientRepo.findOne({ where: { id } });
     if (!client) throw new NotFoundException('Client not found');
     return client;
   }
 
+  // Public: returns client with email for API responses
+  async findOne(id: number) {
+    const client = await this.findOneEntity(id);
+
+    // Fetch associated user email via client_user link
+    const clientUser = await this.clientUserRepo.findOne({
+      where: { clientId: id },
+      relations: ['user'],
+    });
+    const email = clientUser?.user?.email || '';
+
+    return { ...client, email };
+  }
+
   async update(id: number, dto: UpdateClientDto) {
-    const client = await this.findOne(id);
-    Object.assign(client, dto);
+    const client = await this.findOneEntity(id);
+    // Strip id, userId, and email to prevent overwriting primary key / saving non-entity fields
+    const { id: _id, userId: _userId, email: _email, ...safeDto } = dto as any;
+    Object.assign(client, safeDto);
     return this.clientRepo.save(client);
   }
 
@@ -58,7 +75,7 @@ export class ClientsService {
     // Work centers cascade delete is handled by database constraints
     // (Add more deletes here for other related tables if needed)
     // Remove the client itself
-    const client = await this.findOne(id);
+    const client = await this.findOneEntity(id);
     return this.clientRepo.remove(client);
   }
 
@@ -116,12 +133,31 @@ export class ClientsService {
       if (!employerUserLink || !employerUserLink.employer) throw new Error('Employer not found for this user');
       const employerId = employerUserLink.employer.id;
       // 3. Create client (only required fields)
+      console.log('[CreateClient] Address components received:', {
+        address: dto.address,
+        street: dto.street,
+        streetNumber: dto.streetNumber,
+        city: dto.city,
+        province: dto.province,
+        country: dto.country,
+        postalCode: dto.postalCode,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+      });
       const client = manager.create(Client, {
         name: dto.name,
         address: dto.address,
+        street: dto.street,
+        streetNumber: dto.streetNumber,
+        floorDoor: dto.floorDoor,
+        postalCode: dto.postalCode,
+        city: dto.city,
+        province: dto.province,
+        country: dto.country,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
         landline: dto.landline,
         mobile: dto.mobile,
-        email: dto.email,
         type: dto.type,
         code: dto.code,
         taxId: dto.taxId,
@@ -129,6 +165,7 @@ export class ClientsService {
         observation: dto.observation,
         responsible: dto.responsible,
         accessAccountStatus: dto.accessAccountStatus,
+        active: dto.active !== undefined ? dto.active : true,
         userId: savedUser.id,
       });
       const savedClient = await manager.save(Client, client);
@@ -177,25 +214,23 @@ export class ClientsService {
     });
     if (!employerUserLink || !employerUserLink.employer) throw new Error('Employer not found for this user');
     const employerId = employerUserLink.employer.id;
-    // Find all EmployerClient links for this employer
+
+    // Find all EmployerClient links for this employer (only real clients)
     const employerClients = await this.employerClientRepo.find({
       where: { employer: { id: employerId }, isActive: true },
       relations: ['client'],
     });
+
     // For each client, get the related user (for name)
     const clientIds = employerClients.map(ec => ec.client.id);
 
-    // Also check if the current employer user is itself linked as a client (employer may also be a client)
-    const ownClientRelations = await this.clientUserRepo.find({ where: { userId: employerUser.id } });
-    const ownClientIds = ownClientRelations.map(cu => cu.clientId);
+    const clientUsers = clientIds.length
+      ? await this.clientUserRepo.find({
+          where: clientIds.map(id => ({ clientId: id })),
+          relations: ['user'],
+        })
+      : [];
 
-    // Merge client IDs (employer's clients + any client records where the current user is a client)
-    const mergedClientIds = Array.from(new Set([...clientIds, ...ownClientIds]));
-
-    const clientUsers = await this.clientUserRepo.find({
-      where: mergedClientIds.length ? mergedClientIds.map(id => ({ clientId: id })) : undefined,
-      relations: ['user'],
-    });
     // Map clientId to user name
     const clientIdToUserName = new Map<number, string>();
     clientUsers.forEach(cu => {
@@ -203,63 +238,24 @@ export class ClientsService {
         clientIdToUserName.set(cu.clientId, cu.user.name);
       }
     });
-    // If the current user is also a client, add those client records to the list (avoid duplicates)
-    if (ownClientIds.length) {
-      const ownClients = await this.clientRepo.find({ where: ownClientIds.map(id => ({ id })) });
-      ownClients.forEach(c => {
-        if (!employerClients.some(ec => ec.client.id === c.id)) {
-          // Push a synthetic EmployerClient-like object so mapping below can treat it the same
-          employerClients.push({ employer: { id: employerId } as any, client: c, isActive: true } as any);
-        }
-      });
-    }
 
-    // Additionally, include the employer itself as a selectable "client" when relevant.
-    // This allows an employer (company) to create jobs for their own workers using the employer as the client.
-    try {
-      const employer = await this.employerRepo.findOne({ where: { id: employerId } });
-      if (employer) {
-        // Check if an equivalent client record already exists (by name/address or id)
-        const alreadyIncluded = employerClients.some(ec => {
-          const c = ec.client;
-          return (c.name && employer.name && c.name === employer.name) || (c.address && employer.address && c.address === employer.address) || (c.id === (employer as any).id);
-        });
+    // NOTE: The employer itself is NOT included here. Employers are not clients.
+    // The employer only appears as a selectable pseudo-client in the "Add Job"
+    // modal via the dedicated /client/for-add-job endpoint.
 
-        if (!alreadyIncluded) {
-          // Create a lightweight client-like object using employer fields so frontend can treat it the same
-          const syntheticClient: any = {
-            id: -(employer.id), // negative id to avoid collision with real client ids
-            name: employer.name || '',
-            address: employer.address || '',
-            type: 'employer',
-            responsible: employer.responsible || '',
-            mobile: employer.mobile || '',
-            status: 'Active',
-          };
-
-          employerClients.push({ employer: { id: employerId } as any, client: syntheticClient, isActive: true } as any);
-        }
-      }
-    } catch (err) {
-      // Non-fatal: if employer lookup fails, just continue without adding
-      console.error('Error while including employer as client:', err?.message || err);
-    }
-
-    // Map to frontend expectations. Include `isSelf` when the client corresponds
-    // to the current user (own client records) or when we added the synthetic
-    // employer entry (negative id).
+    // Map to frontend expectations (only real clients)
     return employerClients.map(ec => {
       const c = ec.client;
-      const isSelf = ownClientIds.includes(c.id) || (typeof c.id === 'number' && c.id < 0);
       return {
         id: c.id,
         name: clientIdToUserName.get(c.id) || c.name || '',
-        locality: c.address,
+        city: c.city || '',
         type: c.type,
         responsible: c.responsible,
-        telephones: c.mobile,
+        landline: c.landline,
+        mobile: c.mobile,
+        active: c.active,
         asset: c.status === 'Active' ? 'yeah' : 'no',
-        isSelf,
       };
     });
   }
@@ -316,7 +312,7 @@ export class ClientsService {
     return {
       id: c.id,
       name: clientIdToUserName.get(c.id) || c.name || '',
-      locality: c.address,
+      city: c.city || '',
       type: c.type,
       responsible: c.responsible,
       telephones: c.mobile,
@@ -334,7 +330,7 @@ export class ClientsService {
   result.push({
     id: -(employer.id),
     name: employer.name,
-    locality: employer.address,
+    city: employer.address || '',
     type: 'employer',
     responsible: employer.responsible,
     telephones: employer.mobile,

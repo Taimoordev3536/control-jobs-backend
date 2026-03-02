@@ -40,11 +40,20 @@ export class WorkersService {
   async findOne(id: number) {
     const worker = await this.workerRepo.findOne({ where: { id } });
     if (!worker) throw new NotFoundException('Worker not found');
-    return worker;
+
+    // Fetch linked user name
+    const workerUser = await this.workerUserRepo.findOne({
+      where: { workerId: id },
+      relations: ['user'],
+    });
+    const name = workerUser?.user?.name || '';
+
+    return { ...worker, name };
   }
 
   async update(id: number, dto: UpdateWorkerDto) {
-    const worker = await this.findOne(id);
+    const worker = await this.workerRepo.findOne({ where: { id } });
+    if (!worker) throw new NotFoundException('Worker not found');
     Object.assign(worker, dto);
     return this.workerRepo.save(worker);
   }
@@ -52,9 +61,11 @@ export class WorkersService {
   async remove(id: number) {
     // Remove all worker-user links
     await this.workerUserRepo.delete({ workerId: id });
-    // (Add more deletes here for other related tables if needed)
-    // Remove the worker itself
-    const worker = await this.findOne(id);
+    // Remove all employer-worker links
+    await this.employerWorkerRepo.delete({ worker: { id } });
+    // Remove the worker itself (query repo directly to get a proper entity)
+    const worker = await this.workerRepo.findOne({ where: { id } });
+    if (!worker) throw new NotFoundException('Worker not found');
     return this.workerRepo.remove(worker);
   }
 
@@ -124,7 +135,15 @@ export class WorkersService {
         accessAccountStatus: dto.accessAccountStatus || 'postpone',
         active: true,
         address: dto.address,
-        // address, observation, asset, etc. left empty
+        street: dto.street,
+        streetNumber: dto.streetNumber,
+        floorDoor: dto.floorDoor,
+        postalCode: dto.postalCode,
+        city: dto.city,
+        province: dto.province,
+        country: dto.country,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
       });
       const savedWorker = await manager.save(Worker, worker);
       // 4. Link employer and worker
@@ -214,8 +233,19 @@ export class WorkersService {
         id: w.id,
         name: workerIdToUserName.get(w.id) || '',
         occupation: w.occupation,
+        landline: w.landline || '',
+        mobile: w.mobile || '',
         telephones,
         address: (w as any).address || '',
+        street: (w as any).street || '',
+        streetNumber: (w as any).streetNumber || '',
+        floorDoor: (w as any).floorDoor || '',
+        postalCode: (w as any).postalCode || '',
+        city: (w as any).city || '',
+        province: (w as any).province || '',
+        country: (w as any).country || '',
+        latitude: (w as any).latitude || null,
+        longitude: (w as any).longitude || null,
         asset,
       };
     });

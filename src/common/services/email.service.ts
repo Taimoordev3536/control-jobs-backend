@@ -70,9 +70,15 @@ export class EmailService {
       try {
         // If we have a verified sender email and a Resend client, use Resend
         if (fromEmail && this.resendClient && this.resendClient.emails) {
+          // Use RESEND_TO_EMAIL override for testing (sandbox sender can only deliver to verified email)
+          const overrideTo = this.configService.get<string>('RESEND_TO_EMAIL');
+          const finalTo = overrideTo || to;
+          if (overrideTo) {
+            console.log(`[Email] RESEND_TO_EMAIL override active: sending to ${overrideTo} instead of ${to}`);
+          }
           const payload: any = {
             from: fromEmail,
-            to,
+            to: finalTo,
             subject: emailSubject,
             html: emailHtml,
           };
