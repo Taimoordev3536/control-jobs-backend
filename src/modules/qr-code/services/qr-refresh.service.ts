@@ -8,6 +8,7 @@ import { QrTokenGenerator } from '../helpers/qr-token-generator';
 @Injectable()
 export class QrRefreshService {
   private readonly logger = new Logger(QrRefreshService.name);
+  private isRefreshing = false;
 
   constructor(
     @InjectRepository(QrCode)
@@ -19,6 +20,10 @@ export class QrRefreshService {
    */
   @Cron('*/30 * * * * *') // Every 30 seconds
   async refreshDynamicQRCodes() {
+    // Prevent overlapping executions
+    if (this.isRefreshing) return;
+    this.isRefreshing = true;
+
     try {
       const now = new Date();
       
@@ -47,7 +52,22 @@ export class QrRefreshService {
         }
       }
     } catch (error) {
-      this.logger.error('❌ Error refreshing dynamic QR codes:', error);
+      // AggregateError wraps multiple underlying errors (e.g. DB connection pool failures)
+      // Expand inner errors for visibility
+      if (error instanceof AggregateError) {
+        this.logger.error(
+          `❌ Error refreshing dynamic QR codes (AggregateError with ${error.errors?.length ?? 0} inner error(s)):`,
+        );
+        (error.errors ?? []).forEach((inner: Error, i: number) => {
+          this.logger.error(`  [${i}] ${inner?.message ?? inner}`);
+        });
+      } else {
+        this.logger.error(
+          `❌ Error refreshing dynamic QR codes: ${(error as Error)?.message ?? error}`,
+        );
+      }
+    } finally {
+      this.isRefreshing = false;
     }
   }
 

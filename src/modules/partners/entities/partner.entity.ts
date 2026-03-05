@@ -25,6 +25,33 @@ export class Partner {
   @Column({ name: 'address', length: 255 })
   address: string;
 
+  @Column({ name: 'street', length: 100, nullable: true })
+  street: string;
+
+  @Column({ name: 'street_number', length: 20, nullable: true })
+  streetNumber: string;
+
+  @Column({ name: 'floor_door', length: 50, nullable: true })
+  floorDoor: string;
+
+  @Column({ name: 'postal_code', length: 20, nullable: true })
+  postalCode: string;
+
+  @Column({ name: 'city', length: 100, nullable: true })
+  city: string;
+
+  @Column({ name: 'province', length: 100, nullable: true })
+  province: string;
+
+  @Column({ name: 'country', length: 100, nullable: true })
+  country: string;
+
+  @Column({ name: 'latitude', type: 'decimal', precision: 10, scale: 8, nullable: true })
+  latitude: number | null;
+
+  @Column({ name: 'longitude', type: 'decimal', precision: 11, scale: 8, nullable: true })
+  longitude: number | null;
+
   @Column({ length: 20, nullable: true })
   landline: string; // ✅ New field from UI
 
@@ -82,7 +109,7 @@ export class Partner {
   @JoinColumn({ name: 'default_payment_method_id' })
   defaultPaymentMethod: PaymentMethod;
 
-  @OneToMany(() => Employer, (employer) => employer.partnerId)
+  @OneToMany(() => Employer, (employer) => employer.partner)
   employers: Employer[];
 
   @OneToMany(() => PartnerUser, (partnerUser) => partnerUser.partner)

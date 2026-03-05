@@ -67,6 +67,15 @@ export class EmployersService {
             name: createEmployerDto.name,
             taxId: createEmployerDto.taxId,
             address: createEmployerDto.address,
+            street: createEmployerDto.street,
+            streetNumber: createEmployerDto.streetNumber,
+            floorDoor: createEmployerDto.floorDoor,
+            postalCode: createEmployerDto.postalCode,
+            city: createEmployerDto.city,
+            province: createEmployerDto.province,
+            country: createEmployerDto.country,
+            latitude: createEmployerDto.latitude,
+            longitude: createEmployerDto.longitude,
             partnerId: createEmployerDto.partnerId,
             phone: createEmployerDto.phone,
             mobile: createEmployerDto.mobile,
@@ -214,15 +223,26 @@ export class EmployersService {
    * @param id - Employer ID
    * @returns Employer data
    */
-  async findOne(id: number): Promise<BaseResponse<Employer>> {
+  async findOne(id: number): Promise<BaseResponse<any>> {
     try {
       const employer = await this.employerRepository.findOne({ where: { id } });
       if (!employer) {
         throw new NotFoundException(`Employer with ID ${id} not found`);
       }
+
+      // Fetch the linked user's email via EmployerUser relation
+      let email: string | null = null;
+      const employerUser = await this.employerUserRepository.findOne({
+        where: { employer: { id } },
+        relations: ['user'],
+      });
+      if (employerUser?.user) {
+        email = employerUser.user.email || null;
+      }
+
       return {
         message: 'Employer retrieved successfully',
-        data: employer,
+        data: { ...employer, email },
         isSuccess: true,
         statusCode: 200,
         developerError: '',

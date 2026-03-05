@@ -225,6 +225,9 @@ export class WorkCentersService {
       landline: dto.landline ?? workCenter.landline,
       postalCode: dto.postalCode ?? workCenter.postalCode,
       observations: dto.observations ?? workCenter.observations,
+      latitude: dto.latitude !== undefined ? dto.latitude : workCenter.latitude,
+      longitude: dto.longitude !== undefined ? dto.longitude : workCenter.longitude,
+      gpsRadius: dto.gpsRadius ?? workCenter.gpsRadius,
     });
 
     return await this.workCenterRepo.save(workCenter);

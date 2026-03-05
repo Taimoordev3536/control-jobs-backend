@@ -84,7 +84,15 @@ export class PartnersService {
       const partner = this.partnerRepository.create({
         name: createPartnerDto.name,
         address: createPartnerDto.address,
-        // addressFloorDoor: createPartnerDto.addressFloorDoor,
+        street: createPartnerDto.street,
+        streetNumber: createPartnerDto.streetNumber,
+        floorDoor: createPartnerDto.floorDoor,
+        postalCode: createPartnerDto.postalCode,
+        city: createPartnerDto.city,
+        province: createPartnerDto.province,
+        country: createPartnerDto.country,
+        latitude: createPartnerDto.latitude ?? null,
+        longitude: createPartnerDto.longitude ?? null,
         landline: createPartnerDto.landline, // ✅ New
         mobile: createPartnerDto.mobile,
         email: createPartnerDto.email,
@@ -152,14 +160,14 @@ export class PartnersService {
    */
   async findAll(): Promise<BaseResponse<Partner[]>> {
     try {
-      const partners = await this.partnerRepository.find({
-        relations: [
-          'partnerTier',
-          'defaultPaymentMethod',
-          'partnerUsers',
-          'partnerUsers.user',
-        ],
-      });
+      const partners = await this.partnerRepository
+        .createQueryBuilder('partner')
+        .leftJoinAndSelect('partner.partnerTier', 'partnerTier')
+        .leftJoinAndSelect('partner.defaultPaymentMethod', 'defaultPaymentMethod')
+        .leftJoinAndSelect('partner.partnerUsers', 'partnerUsers')
+        .leftJoinAndSelect('partnerUsers.user', 'user')
+        .loadRelationCountAndMap('partner.employersCount', 'partner.employers')
+        .getMany();
       return {
         message: 'Partners retrieved successfully',
         data: partners,
@@ -237,7 +245,15 @@ export class PartnersService {
         ...partner,
         name: updatePartnerDto.name || partner.name,
         address: updatePartnerDto.address || partner.address,
-        // addressFloorDoor: updatePartnerDto.addressFloorDoor || partner.addressFloorDoor,
+        street: updatePartnerDto.street ?? partner.street,
+        streetNumber: updatePartnerDto.streetNumber ?? partner.streetNumber,
+        floorDoor: updatePartnerDto.floorDoor ?? partner.floorDoor,
+        postalCode: updatePartnerDto.postalCode ?? partner.postalCode,
+        city: updatePartnerDto.city ?? partner.city,
+        province: updatePartnerDto.province ?? partner.province,
+        country: updatePartnerDto.country ?? partner.country,
+        latitude: updatePartnerDto.latitude ?? partner.latitude,
+        longitude: updatePartnerDto.longitude ?? partner.longitude,
         mobile: updatePartnerDto.mobile || partner.mobile,
         email: updatePartnerDto.email || partner.email,
         taxId: updatePartnerDto.nif || partner.taxId,
