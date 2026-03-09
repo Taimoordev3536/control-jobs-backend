@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Delete, Get, Param, UseGuards, Req, ParseUUIDPipe } from '@nestjs/common';
 import { AlertsService } from './alerts.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -18,11 +18,11 @@ export class AlertsController {
   }
 
   @Delete(':id')
-  async dismiss(@Param('id') id: string, @Req() req: any) {
+  async dismiss(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const user = req.user;
     const userId = user?.id;
     const role = (user?.role?.name || user?.role || '').toString().toUpperCase();
-    await this.alertsService.dismissForRecipient(+id, role, userId);
+    await this.alertsService.dismissForRecipient(id, role, userId);
     return { isSuccess: true };
   }
 }

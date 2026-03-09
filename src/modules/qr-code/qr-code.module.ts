@@ -5,6 +5,7 @@ import { ConfigModule } from '@nestjs/config';
 import { QrCode } from './entities/qr-code.entity';
 import { WorkCenter } from '../work-centers/entities/work-center.entity';
 import { Job } from '../job/entities/job.entity';
+import { Client } from '../clients/entities/client.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
 import { QrCodeService } from './services/qr-code.service';
 import { QrValidationService } from './services/qr-validation.service';
@@ -16,7 +17,7 @@ import { JobScheduleService } from '../job/services/job-schedule.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([QrCode, WorkCenter, Job, ClientUser]),
+    TypeOrmModule.forFeature([QrCode, WorkCenter, Job, Client, ClientUser]),
     ScheduleModule.forRoot(),
     ConfigModule,
   ],

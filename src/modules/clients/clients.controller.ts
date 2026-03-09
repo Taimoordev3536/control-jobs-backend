@@ -6,7 +6,7 @@ import {
   Body,
   Put,
   Delete,
-  ParseIntPipe,
+  ParseUUIDPipe,
   UseGuards,
   Req,
 } from '@nestjs/common';
@@ -28,16 +28,15 @@ export class ClientsController {
   }
 
   @Get(':id/users')
-  getUsers(@Param('id', ParseIntPipe) id: number) {
-    return this.clientsService.getUsersByClient(id);
+  async getUsers(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.clientsService.resolvePublicId(id);
+    return this.clientsService.getUsersByClient(numericId);
   }
-
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
   async createByEmployer(@Body() dto: any, @Req() req) {
-    // req.user is populated by JwtAuthGuard
     return this.clientsService.createByEmployer(dto, req.user);
   }
 
@@ -45,46 +44,37 @@ export class ClientsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
   async findAllByEmployer(@Req() req) {
-    // Only return clients for the logged-in employer
     return this.clientsService.findAllByEmployerUser(req.user);
   }
 
-  //clients And employer for add job (Select client dropdown)
-    @Get('for-add-job')
+  @Get('for-add-job')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
   async findClientsForAddJob(@Req() req) {
-    // Only return clients for the logged-in employer
     return this.clientsService.findClientsForAddJob(req.user);
   }
 
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
-  async findOneByEmployer(@Param('id', ParseIntPipe) id: number, @Req() req) {
-    // Optionally, check employer ownership
-    return this.clientsService.findOne(id);
+  async findOneByEmployer(@Param('id', ParseUUIDPipe) id: string) {
+    return this.clientsService.findByPublicId(id);
   }
 
   @Put(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
   async updateByEmployer(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateClientDto,
-    @Req() req,
   ) {
-    // Optionally, check employer ownership
-    return this.clientsService.update(id, dto);
+    return this.clientsService.updateByPublicId(id, dto);
   }
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
-  async removeByEmployer(@Param('id', ParseIntPipe) id: number, @Req() req) {
-    // Optionally, check employer ownership
-    return this.clientsService.remove(id);
+  async removeByEmployer(@Param('id', ParseUUIDPipe) id: string) {
+    return this.clientsService.removeByPublicId(id);
   }
-
-  // Work center endpoints moved to /work-centers module
 }

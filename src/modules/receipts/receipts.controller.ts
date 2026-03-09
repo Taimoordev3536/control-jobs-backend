@@ -7,7 +7,7 @@ import {
   Request,
   UseInterceptors,
   UploadedFile,
-  ParseIntPipe,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ReceiptsService } from './receipts.service';
 // import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -56,7 +56,7 @@ export class ReceiptsController {
   @Roles(UserRole.ADMIN)
   @Post(':id/approve')
   async approve(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseUUIDPipe) id: string,
     @Request() req: ExpressRequest & { user: User }, // Type req with User
   ) {
     return this.receiptsService.approveReceipt(id, req.user);
@@ -66,7 +66,7 @@ export class ReceiptsController {
   @Roles(UserRole.ADMIN)
   @Post(':id/reject')
   async reject(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseUUIDPipe) id: string,
     @Request() req: ExpressRequest & { user: User }, // Type req with User
     @Body('reason') reason: string,
   ) {

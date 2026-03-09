@@ -1,8 +1,8 @@
 import { IsNumber, IsOptional, IsString, IsIn } from 'class-validator';
 
 export class RecordScanDto {
-  @IsNumber()
-  jobId: number;
+  @IsString()
+  jobId: string;
 
   @IsString()
   @IsIn(['check-in', 'check-out', 'break-start', 'break-end'])
@@ -42,8 +42,8 @@ export class RecordScanDto {
   qrToken?: string;
 
   @IsOptional()
-  @IsNumber()
-  workCenterId?: number;
+  @IsString()
+  workCenterId?: string;
 }
 
 

@@ -9,6 +9,9 @@ export class Survey {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
+
   // optional link to a job
   @ManyToOne(() => Job, { nullable: true, onDelete: 'CASCADE' })
   job: Job | null;

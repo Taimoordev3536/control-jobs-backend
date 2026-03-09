@@ -45,9 +45,9 @@ export class ReceiptsService {
     return this.receiptsRepository.save(receipt);
   }
 
-  async approveReceipt(receiptId: number, admin: User): Promise<Receipt> {
+  async approveReceipt(publicId: string, admin: User): Promise<Receipt> {
     const receipt = await this.receiptsRepository.findOneOrFail({
-      where: { id: receiptId },
+      where: { publicId },
       relations: ['user'],
     });
 
@@ -66,12 +66,12 @@ export class ReceiptsService {
   }
 
   async rejectReceipt(
-    receiptId: number,
+    publicId: string,
     admin: User,
     reason: string = 'No reason provided, could be due to invalid receipt, or cheating, contact support for more information',
   ): Promise<Receipt> {
     const receipt = await this.receiptsRepository.findOne({
-      where: { id: receiptId },
+      where: { publicId },
     });
 
     if (!receipt) {

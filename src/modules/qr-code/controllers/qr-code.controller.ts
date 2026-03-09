@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Post, Body, Param, UseGuards, Req, ParseIntPipe, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Put, Post, Body, Param, UseGuards, Req, ParseUUIDPipe, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -10,6 +10,7 @@ import { SendStaticQrEmailDto } from '../dto/send-static-qr-email.dto';
 import { UpdateWorkCenterGpsDto } from '../dto/update-work-center-gps.dto';
 import { GpsSelectionDto } from '../dto/gps-selection.dto';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
+import { Job } from '../../job/entities/job.entity';
 
 @Controller('work-centers')
 @UseGuards(JwtAuthGuard)
@@ -25,24 +26,13 @@ export class QrCodeController {
   /**
    * Get work center details
    * GET /work-centers/:id
+   * REMOVED — handled by WorkCentersController which uses ParseUUIDPipe
    */
-  @Get(':id')
-  async getWorkCenter(@Param('id', ParseIntPipe) workCenterId: number) {
-    const workCenter = await this.workCenterRepo.findOne({
-      where: { id: workCenterId },
-      relations: ['client'],
-    });
 
-    if (!workCenter) {
-      throw new NotFoundException(`Work center with ID ${workCenterId} not found`);
-    }
-
-    return {
-      isSuccess: true,
-      message: 'Work center retrieved successfully',
-      data: workCenter,
-      statusCode: 200,
-    };
+  private async resolveWorkCenterId(publicId: string): Promise<number> {
+    const wc = await this.workCenterRepo.findOne({ where: { publicId } });
+    if (!wc) throw new NotFoundException(`Work center not found`);
+    return wc.id;
   }
 
   /**
@@ -51,10 +41,11 @@ export class QrCodeController {
    */
   @Put(':id/signing-methods/qr')
   async updateWorkCenterQr(
-    @Param('id', ParseIntPipe) workCenterId: number,
+    @Param('id', ParseUUIDPipe) publicId: string,
     @Body() dto: UpdateWorkCenterQrDto,
     @Req() req,
   ) {
+    const workCenterId = await this.resolveWorkCenterId(publicId);
     const userId = req.user?.id;
     
     // Get employer ID from user
@@ -79,7 +70,8 @@ export class QrCodeController {
    * GET /work-centers/:id/qr-codes
    */
   @Get(':id/qr-codes')
-  async getWorkCenterQrCodes(@Param('id', ParseIntPipe) workCenterId: number) {
+  async getWorkCenterQrCodes(@Param('id', ParseUUIDPipe) publicId: string) {
+    const workCenterId = await this.resolveWorkCenterId(publicId);
     const result = await this.qrCodeService.getWorkCenterQrCodes(workCenterId);
 
     return {
@@ -95,9 +87,10 @@ export class QrCodeController {
    */
   @Post(':id/send-static-qr')
   async sendStaticQrEmail(
-    @Param('id', ParseIntPipe) workCenterId: number,
+    @Param('id', ParseUUIDPipe) publicId: string,
     @Body() dto: SendStaticQrEmailDto,
   ) {
+    const workCenterId = await this.resolveWorkCenterId(publicId);
     const result = await this.qrEmailService.sendStaticQrEmail(
       workCenterId,
       dto.clientEmail,
@@ -116,7 +109,8 @@ export class QrCodeController {
    * POST /work-centers/:id/regenerate-static-qr
    */
   @Post(':id/regenerate-static-qr')
-  async regenerateStaticQr(@Param('id', ParseIntPipe) workCenterId: number) {
+  async regenerateStaticQr(@Param('id', ParseUUIDPipe) publicId: string) {
+    const workCenterId = await this.resolveWorkCenterId(publicId);
     const result = await this.qrCodeService.regenerateStaticQr(workCenterId);
 
     return {
@@ -132,9 +126,10 @@ export class QrCodeController {
    */
   @Put(':id/signing-methods/gps')
   async updateWorkCenterGps(
-    @Param('id', ParseIntPipe) workCenterId: number,
+    @Param('id', ParseUUIDPipe) publicId: string,
     @Body() dto: UpdateWorkCenterGpsDto,
   ) {
+    const workCenterId = await this.resolveWorkCenterId(publicId);
     const workCenter = await this.workCenterRepo.findOne({ where: { id: workCenterId } });
     if (!workCenter) throw new NotFoundException(`Work center ${workCenterId} not found`);
 
@@ -172,11 +167,17 @@ export class QrCodeController {
    */
   @Post('check-in/gps-select')
   async selectWorkCenterByGps(@Body() dto: GpsSelectionDto) {
+    let numericJobId: number | undefined;
+    if (dto.jobId) {
+      const job = await this.workCenterRepo.manager.findOne(Job, { where: { publicId: dto.jobId } });
+      if (!job) throw new NotFoundException(`Job ${dto.jobId} not found`);
+      numericJobId = job.id;
+    }
     const result = await this.qrValidationService.selectWorkCenterByGps(
       dto.qrToken,
       dto.latitude,
       dto.longitude,
-      dto.jobId,
+      numericJobId,
     );
 
     return {
@@ -191,7 +192,8 @@ export class QrCodeController {
    * GET /work-centers/:id/preview-qr-email
    */
   @Get(':id/preview-qr-email')
-  async previewQrEmail(@Param('id', ParseIntPipe) workCenterId: number) {
+  async previewQrEmail(@Param('id', ParseUUIDPipe) publicId: string) {
+    const workCenterId = await this.resolveWorkCenterId(publicId);
     const htmlContent = await this.qrEmailService.previewEmail(workCenterId, true);
 
     return {

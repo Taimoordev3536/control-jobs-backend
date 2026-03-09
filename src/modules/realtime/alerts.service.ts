@@ -8,7 +8,9 @@ export type AlertType = 'CHECK_IN' | 'CHECK_OUT';
 export interface AlertPayload {
   type: AlertType;
   jobId: number;
+  jobPublicId?: string;
   workerId: number;
+  workerPublicId?: string;
   employerUserId: number;
   clientUserId: number;
   message: string;
@@ -37,7 +39,9 @@ export class AlertsService {
       message: payload.message,
       meta: {
         jobId: payload.jobId,
+        jobPublicId: payload.jobPublicId,
         workerId: payload.workerId,
+        workerPublicId: payload.workerPublicId,
         employerUserId: payload.employerUserId,
         clientUserId: payload.clientUserId,
         ...payload.meta,
@@ -53,7 +57,9 @@ export class AlertsService {
       message: payload.message,
       meta: {
         jobId: payload.jobId,
+        jobPublicId: payload.jobPublicId,
         workerId: payload.workerId,
+        workerPublicId: payload.workerPublicId,
         employerUserId: payload.employerUserId,
         clientUserId: payload.clientUserId,
         ...payload.meta,
@@ -79,8 +85,8 @@ export class AlertsService {
       .getMany();
   }
 
-  async dismissForRecipient(id: number, role: string, userId: number) {
-    const notif = await this.notifRepo.findOne({ where: { id, role, recipientId: userId } });
+  async dismissForRecipient(publicId: string, role: string, userId: number) {
+    const notif = await this.notifRepo.findOne({ where: { publicId, role, recipientId: userId } });
     if (notif) {
       await this.notifRepo.remove(notif);
     }

@@ -34,6 +34,12 @@ export class ClientsService {
   private readonly emailService: EmailService,
   ) {}
 
+  async resolvePublicId(publicId: string): Promise<number> {
+    const client = await this.clientRepo.findOne({ where: { publicId } });
+    if (!client) throw new NotFoundException('Client not found');
+    return client.id;
+  }
+
   findAll() {
     return this.clientRepo.find();
   }
@@ -59,6 +65,17 @@ export class ClientsService {
     return { ...client, email };
   }
 
+  async findByPublicId(publicId: string) {
+    const client = await this.clientRepo.findOne({ where: { publicId } });
+    if (!client) throw new NotFoundException('Client not found');
+    const clientUser = await this.clientUserRepo.findOne({
+      where: { clientId: client.id },
+      relations: ['user'],
+    });
+    const email = clientUser?.user?.email || '';
+    return { ...client, email };
+  }
+
   async update(id: number, dto: UpdateClientDto) {
     const client = await this.findOneEntity(id);
     // Strip id, userId, and email to prevent overwriting primary key / saving non-entity fields
@@ -67,20 +84,72 @@ export class ClientsService {
     return this.clientRepo.save(client);
   }
 
+  async updateByPublicId(publicId: string, dto: UpdateClientDto) {
+    const client = await this.clientRepo.findOne({ where: { publicId } });
+    if (!client) throw new NotFoundException('Client not found');
+    const { id: _id, userId: _userId, email: _email, ...safeDto } = dto as any;
+    Object.assign(client, safeDto);
+    return this.clientRepo.save(client);
+  }
+
   async remove(id: number) {
+    // Find linked users before deleting the links
+    const clientUserLinks = await this.clientUserRepo.find({
+      where: { clientId: id },
+    });
+    const linkedUserIds = clientUserLinks.map((cu) => cu.userId);
+
     // Remove all client-user links
     await this.clientUserRepo.delete({ clientId: id });
     // Remove all employer-client links
     await this.employerClientRepo.delete({ client: { id } });
     // Work centers cascade delete is handled by database constraints
-    // (Add more deletes here for other related tables if needed)
     // Remove the client itself
     const client = await this.findOneEntity(id);
-    return this.clientRepo.remove(client);
+    await this.clientRepo.remove(client);
+
+    // Delete orphaned users (not linked to any other entity)
+    for (const userId of linkedUserIds) {
+      await this.deleteOrphanedUser(userId);
+    }
+
+    return client;
+  }
+
+  async removeByPublicId(publicId: string) {
+    const client = await this.clientRepo.findOne({ where: { publicId } });
+    if (!client) throw new NotFoundException('Client not found');
+    return this.remove(client.id);
+  }
+
+  /**
+   * Delete a user if they are not linked to any client, employer, or worker
+   */
+  private async deleteOrphanedUser(userId: number) {
+    // Check if user is still linked to any client
+    const clientLink = await this.clientUserRepo.findOne({ where: { userId } });
+    if (clientLink) return;
+
+    // Check if user is linked to any employer
+    const employerLink = await this.dataSource
+      .getRepository(EmployerUser)
+      .findOne({ where: { user: { id: userId } } });
+    if (employerLink) return;
+
+    // Check if user is linked to any worker (WorkerUser)
+    const workerLink = await this.dataSource
+      .query(`SELECT 1 FROM "workers_users" WHERE "userId" = $1 LIMIT 1`, [userId]);
+    if (workerLink && workerLink.length > 0) return;
+
+    // User is orphaned — safe to delete
+    await this.userRepo.delete(userId);
   }
 
   async assignUser(dto: AssignClientUserDto) {
-    const relation = this.clientUserRepo.create(dto);
+    const clientId = await this.resolvePublicId(dto.clientId);
+    const user = await this.userRepo.findOne({ where: { publicId: dto.userId } });
+    if (!user) throw new NotFoundException(`User ${dto.userId} not found`);
+    const relation = this.clientUserRepo.create({ clientId, userId: user.id, isDefault: dto.isDefault });
     return this.clientUserRepo.save(relation);
   }
 
@@ -107,7 +176,7 @@ export class ClientsService {
       const existingUser = await manager.findOne(User, {
         where: { email: dto.email },
       });
-      if (existingUser) throw new Error('Email already in use');
+      if (existingUser) throw new Error('Email ya utilizado');
       const clientRole = await manager.findOne(Role, { where: { value: 4 } }); // 4 = Client
       if (!clientRole) throw new Error('Client role not found');
       // ✅ Auto-generate password
@@ -248,6 +317,7 @@ export class ClientsService {
       const c = ec.client;
       return {
         id: c.id,
+        publicId: c.publicId,
         name: clientIdToUserName.get(c.id) || c.name || '',
         city: c.city || '',
         type: c.type,
@@ -311,6 +381,7 @@ export class ClientsService {
     const c = ec.client;
     return {
       id: c.id,
+      publicId: c.publicId,
       name: clientIdToUserName.get(c.id) || c.name || '',
       city: c.city || '',
       type: c.type,
@@ -329,6 +400,7 @@ export class ClientsService {
   // expects numeric ids). The frontend can detect isEmployer or id < 0.
   result.push({
     id: -(employer.id),
+    publicId: employer.publicId,
     name: employer.name,
     city: employer.address || '',
     type: 'employer',

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Generated } from 'typeorm';
 import { Gender } from '../../../shared/entities/gender.entity';
 import { User } from '../../users/entities/user.entity';
 import { ScanLog } from '../../job/entities/scan-log.entity';
@@ -9,6 +9,9 @@ import { TaskHistory } from '../../job/entities/task-history.entity';
 export class Worker {
   @PrimaryGeneratedColumn()
   id: number;
+
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
 
   @Column()
   code: string;

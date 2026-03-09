@@ -44,8 +44,8 @@ export class CreateClientDto {
   @IsString()
   lastName: string;
 
-  @IsNumber()
-  employerId: number;
+  @IsString()
+  employerId: string;
 
   @IsString()
   landline: string;

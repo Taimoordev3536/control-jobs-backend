@@ -6,6 +6,9 @@ export class WorkSessionDay {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
+
   @ManyToOne(() => WorkSession, { nullable: false })
   @JoinColumn({ name: 'work_session_id' })
   workSession: WorkSession;

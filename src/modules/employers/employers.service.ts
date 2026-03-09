@@ -17,6 +17,8 @@ import { EmployerSubType } from './entities/employer-sub-type.entity';
 import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { UpdateEmployerDto } from './dto/update-employer.dto';
 import { Role } from '../users/entities/role.entity';
+import { Partner } from '../partners/entities/partner.entity';
+import { isUUID } from 'class-validator';
 import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
 
@@ -39,6 +41,23 @@ export class EmployersService {
     private readonly roleRepository: Repository<Role>,
     private readonly emailService: EmailService,
   ) {}
+
+  async resolvePublicId(publicId: string): Promise<number> {
+    const employer = await this.employerRepository.findOne({ where: { publicId } });
+    if (!employer) throw new NotFoundException('Employer not found');
+    return employer.id;
+  }
+
+  private async resolvePartnerIdFromPublicId(idOrPublicId: string): Promise<number> {
+    if (isUUID(idOrPublicId)) {
+      const partner = await this.employerRepository.manager.findOne(Partner, { where: { publicId: idOrPublicId } });
+      if (!partner) throw new NotFoundException(`Partner ${idOrPublicId} not found`);
+      return partner.id;
+    }
+    const num = parseInt(idOrPublicId, 10);
+    if (isNaN(num)) throw new BadRequestException(`Invalid partnerId: ${idOrPublicId}`);
+    return num;
+  }
 
   async create(
     createEmployerDto: CreateEmployerDto,
@@ -76,7 +95,7 @@ export class EmployersService {
             country: createEmployerDto.country,
             latitude: createEmployerDto.latitude,
             longitude: createEmployerDto.longitude,
-            partnerId: createEmployerDto.partnerId,
+            partnerId: await this.resolvePartnerIdFromPublicId(createEmployerDto.partnerId),
             phone: createEmployerDto.phone,
             mobile: createEmployerDto.mobile,
             landline: createEmployerDto.landline,
@@ -99,7 +118,7 @@ export class EmployersService {
             where: { email: createEmployerDto.user.email },
           });
           if (existingUser) {
-            throw new BadRequestException('Email already in use');
+            throw new BadRequestException('Email ya utilizado');
           }
 
           // Get employer role
@@ -194,6 +213,7 @@ export class EmployersService {
       // Map to include names
       const mapped = employers.map((e) => ({
         id: e.id,
+        publicId: e.publicId,
         name: e.name,
         class: e.subType?.name || null,
         type: e.type?.name || null,
@@ -240,9 +260,16 @@ export class EmployersService {
         email = employerUser.user.email || null;
       }
 
+      // Resolve numeric partnerId to partner publicId for frontend
+      let partnerPublicId: string | null = null;
+      if (employer.partnerId) {
+        const partner = await this.employerRepository.manager.findOne(Partner, { where: { id: employer.partnerId } });
+        if (partner) partnerPublicId = partner.publicId;
+      }
+
       return {
         message: 'Employer retrieved successfully',
-        data: { ...employer, email },
+        data: { ...employer, email, partnerId: partnerPublicId || employer.partnerId },
         isSuccess: true,
         statusCode: 200,
         developerError: '',
@@ -255,6 +282,12 @@ export class EmployersService {
         'Failed to retrieve employer: ' + error.message,
       );
     }
+  }
+
+  async findByPublicId(publicId: string): Promise<BaseResponse<any>> {
+    const employer = await this.employerRepository.findOne({ where: { publicId } });
+    if (!employer) throw new NotFoundException('Employer not found');
+    return this.findOne(employer.id);
   }
 
   /**
@@ -276,10 +309,14 @@ export class EmployersService {
           }
 
           // Update employer data
-          const { user: userData, ...employerData } = updateEmployerDto;
+          const { user: userData, partnerId: partnerIdRaw, ...employerData } = updateEmployerDto;
+          const resolvedData: any = { ...employerData };
+          if (partnerIdRaw !== undefined) {
+            resolvedData.partnerId = await this.resolvePartnerIdFromPublicId(String(partnerIdRaw));
+          }
           const updatedEmployer = await manager.save(Employer, {
             ...employer,
-            ...employerData,
+            ...resolvedData,
           });
 
           // If user data is provided, update the linked user
@@ -296,7 +333,7 @@ export class EmployersService {
                   where: { email: userData.email },
                 });
                 if (existingUser) {
-                  throw new BadRequestException('Email already in use');
+                  throw new BadRequestException('Email ya utilizado');
                 }
               }
 

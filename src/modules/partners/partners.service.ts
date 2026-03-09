@@ -35,6 +35,12 @@ export class PartnersService {
    * @param createPartnerDto - Partner creation data
    * @returns Created partner data
    */
+  async resolvePublicId(publicId: string): Promise<number> {
+    const partner = await this.partnerRepository.findOne({ where: { publicId } });
+    if (!partner) throw new NotFoundException('Partner not found');
+    return partner.id;
+  }
+
   async create(
     createPartnerDto: CreatePartnerDto,
   ): Promise<BaseResponse<Partner> & { generatedPassword: string }> {
@@ -63,7 +69,7 @@ export class PartnersService {
       });
 
       if (existingUser) {
-        throw new BadRequestException('Email already in use');
+        throw new BadRequestException('Email ya utilizado');
       }
 
       // ✅ Auto-generate password
@@ -218,6 +224,12 @@ export class PartnersService {
         'Failed to retrieve partner: ' + error.message,
       );
     }
+  }
+
+  async findByPublicId(publicId: string): Promise<BaseResponse<Partner>> {
+    const partner = await this.partnerRepository.findOne({ where: { publicId } });
+    if (!partner) throw new NotFoundException('Partner not found');
+    return this.findOne(partner.id);
   }
 
   /**

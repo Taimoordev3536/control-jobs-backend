@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, ManyToOne, OneToMany, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn } from 'typeorm';
 import { Survey } from './survey.entity';
 import { Job } from '../../job/entities/job.entity';
 import { Worker } from '../../workers/entities/worker.entity';
@@ -9,6 +9,9 @@ import { SurveyAnswer } from './survey-answer.entity';
 export class SurveyResponse {
   @PrimaryGeneratedColumn()
   id: number;
+
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
 
   @ManyToOne(() => Survey, { nullable: false })
   survey: Survey;

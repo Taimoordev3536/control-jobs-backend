@@ -1,4 +1,4 @@
-import { IsString, IsDateString, IsInt, IsArray, IsOptional, ValidateNested, IsEnum } from 'class-validator';
+import { IsString, IsDateString, IsArray, IsOptional, ValidateNested, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CreateShiftDto } from './create-shift.dto';
 import { ScheduleType } from '../entities/shift.entity';
@@ -23,21 +23,19 @@ export class UpdateJobDto {
   @IsOptional()
   endDate?: string;
 
-  @IsInt()
+  @IsString()
   @IsOptional()
-  @Type(() => Number)
-  clientId?: number;
+  clientId?: string;
 
   @IsArray()
-  @IsInt({ each: true })
+  @IsString({ each: true })
   @IsOptional()
-  @Type(() => Number)
-  workCenterIds?: number[];
+  workCenterIds?: string[];
 
   @IsArray()
-  @IsInt({ each: true })
+  @IsString({ each: true })
   @IsOptional()
-  workerIds?: number[];
+  workerIds?: string[];
 
   @IsString()
   @IsOptional()

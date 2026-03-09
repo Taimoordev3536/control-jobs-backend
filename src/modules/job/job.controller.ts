@@ -1,5 +1,5 @@
 
-import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Put, Query,Delete,Request,HttpException, HttpStatus, } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Put, Query,Delete,Request,HttpException, HttpStatus, ParseUUIDPipe } from '@nestjs/common';
 import { JobService } from './job.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
@@ -45,8 +45,9 @@ async createJob(@Body() createJobDto: CreateJobDto, @Req() req) {
   // Get all weekly shift recurrences for a job
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/shift-recurrence')
-  async getJobShiftRecurrences(@Param('jobId') jobId: number) {
-    return await this.jobService.getJobShiftRecurrences(jobId);
+  async getJobShiftRecurrences(@Param('jobId', ParseUUIDPipe) jobId: string) {
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
+    return await this.jobService.getJobShiftRecurrences(numericJobId);
   }
 
 
@@ -55,9 +56,10 @@ async createJob(@Body() createJobDto: CreateJobDto, @Req() req) {
 
 @UseGuards(JwtAuthGuard)
 @Delete(':id')
-async deleteJob(@Param('id') jobId: number, @Req() req) {
+async deleteJob(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+  const numericJobId = await this.jobService.resolvePublicId(id);
   const employerUserId = req.user.id;
-  await this.jobService.deleteJob(jobId, employerUserId);
+  await this.jobService.deleteJob(numericJobId, employerUserId);
   return { message: 'Job deleted successfully' };
 }
 
@@ -151,11 +153,12 @@ async getAllJobsForClientFromToken(@Req() req) {
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/scan-history')
   async getJobScanHistory(
-    @Param('jobId') jobId: number,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ): Promise<any> {
-    return await this.jobService.getJobScanHistory(jobId, startDate, endDate);
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
+    return await this.jobService.getJobScanHistory(numericJobId, startDate, endDate);
   }
 
   // @UseGuards(JwtAuthGuard)
@@ -175,12 +178,13 @@ async getAllJobsForClientFromToken(@Req() req) {
   @UseGuards(JwtAuthGuard)
   @Patch(':jobId/status')
   async updateJobStatus(
-    @Param('jobId') jobId: number,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
     @Body() updateJobStatusDto: UpdateJobStatusDto,
     @Req() req
   ): Promise<{ message: string; job: any }> {
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
     const userId = req.user?.id;
-    return await this.jobService.updateJobStatus(jobId, updateJobStatusDto, userId);
+    return await this.jobService.updateJobStatus(numericJobId, updateJobStatusDto, userId);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -196,10 +200,10 @@ async getAllJobsForClientFromToken(@Req() req) {
   // Get complete job data for editing
   @UseGuards(JwtAuthGuard)
   @Get(':id')
-  async getJobById(@Param('id') id: number, @Req() req) {
+  async getJobById(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
     try {
       const userId = req.user?.id;
-      const job = await this.jobService.getJobByIdForEdit(id, userId);
+      const job = await this.jobService.getJobByPublicIdForEdit(id, userId);
       return { 
         message: 'Job fetched successfully', 
         data: job,
@@ -221,13 +225,14 @@ async getAllJobsForClientFromToken(@Req() req) {
   @UseGuards(JwtAuthGuard)
   @Put(':id')
   async updateJob(
-    @Param('id') id: number,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() updateJobDto: UpdateJobDto,
     @Req() req
   ) {
     try {
+      const numericId = await this.jobService.resolvePublicId(id);
       const userId = req.user?.id;
-      const job = await this.jobService.updateJob(id, updateJobDto, userId);
+      const job = await this.jobService.updateJob(numericId, updateJobDto, userId);
       return {
         message: 'Job updated successfully',
         data: job,
@@ -247,8 +252,9 @@ async getAllJobsForClientFromToken(@Req() req) {
 
   @UseGuards(JwtAuthGuard)
   @Post(':jobId/auto-update-status')
-  async autoUpdateJobStatus(@Param('jobId') jobId: number): Promise<{ message: string }> {
-    await this.jobService.autoUpdateJobStatus(jobId);
+  async autoUpdateJobStatus(@Param('jobId', ParseUUIDPipe) jobId: string): Promise<{ message: string }> {
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
+    await this.jobService.autoUpdateJobStatus(numericJobId);
     return { message: 'Job status auto-updated successfully' };
   }
 
@@ -257,21 +263,24 @@ async getAllJobsForClientFromToken(@Req() req) {
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/worker/:workerId/session-status')
   async getWorkerSessionStatus(
-    @Param('jobId') jobId: number,
-    @Param('workerId') workerId: number
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Param('workerId', ParseUUIDPipe) workerId: string
   ): Promise<any> {
-    return await this.jobService.getWorkerSessionStatus(jobId, workerId);
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
+    const numericWorkerId = await this.jobService.resolveWorkerPublicId(workerId);
+    return await this.jobService.getWorkerSessionStatus(numericJobId, numericWorkerId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/worker/session-status')
   async getCurrentWorkerSessionStatus(
-    @Param('jobId') jobId: number,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
     @Req() req
   ): Promise<any> {
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
     const userId = req.user?.id;
     const workerId = await this.jobService.getWorkerIdFromUserId(userId);
-    return await this.jobService.getWorkerSessionStatus(jobId, workerId);
+    return await this.jobService.getWorkerSessionStatus(numericJobId, workerId);
   }
 
   // ========== Task Management Endpoints ========== //
@@ -289,8 +298,9 @@ async getAllJobsForClientFromToken(@Req() req) {
 
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/task-status')
-  async getJobTaskStatus(@Param('jobId') jobId: number): Promise<any> {
-    return await this.jobService.getJobTaskStatus(jobId);
+  async getJobTaskStatus(@Param('jobId', ParseUUIDPipe) jobId: string): Promise<any> {
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
+    return await this.jobService.getJobTaskStatus(numericJobId);
   }
 
   // @Post(':taskId/toggle-task/:workerId')
@@ -303,73 +313,72 @@ async getAllJobsForClientFromToken(@Req() req) {
   //   return await this.jobService.toggleTaskCompletion(taskId, workerId, userId);
   // }
 
-// job.controller.ts
-// job.controller.ts
   @UseGuards(JwtAuthGuard)
-  @Post(':jobId/tasks/:taskId/toggle') // ✅ Correct path parameter syntax
+  @Post(':jobId/tasks/:taskId/toggle')
   async toggleTaskCompletion(
-    @Param('jobId') jobId: number,
-    @Param('taskId') taskId: number,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Param('taskId', ParseUUIDPipe) taskId: string,
     @Req() req
   ) {
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
+    const numericTaskId = await this.jobService.resolveTaskPublicId(taskId);
     const userId = req.user.id;
     const workerId = await this.jobService.getWorkerIdFromUserId(userId);
-    return this.jobService.toggleTaskCompletion(taskId, workerId, jobId);
+    return this.jobService.toggleTaskCompletion(numericTaskId, workerId, numericJobId);
   }
 
 
   // Fetch task history for a job, worker, and date
   @Get(':jobId/task-history')
   async getTaskHistoryForJobWorkerDate(
-    @Param('jobId') jobId: number,
-    @Query('workerId') workerId: number,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Query('workerId') workerId: string,
     @Query('date') date?: string
   ): Promise<any> {
-    return await this.jobService.getTaskHistoryForJobWorkerDate(jobId, workerId, date);
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
+    const numericWorkerId = await this.jobService.resolveWorkerPublicId(workerId);
+    return await this.jobService.getTaskHistoryForJobWorkerDate(numericJobId, numericWorkerId, date);
   }
 
   // Get all tasks for a job and worker (includes today's per-worker status)
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/worker/:workerId/tasks')
   async getTasksForJobWorker(
-    @Param('jobId') jobId: number,
-    @Param('workerId') workerId: number,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Param('workerId', ParseUUIDPipe) workerId: string,
   ): Promise<any> {
-    return await this.jobService.getTasksForJobWorker(jobId, workerId);
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
+    const numericWorkerId = await this.jobService.resolveWorkerPublicId(workerId);
+    return await this.jobService.getTasksForJobWorker(numericJobId, numericWorkerId);
   }
 
   // Get today's tasks for a job grouped by work center
   @UseGuards(JwtAuthGuard)
   @Get(':jobId/today-tasks')
   async getTodayTasksByWorkCenter(
-    @Param('jobId') jobId: number,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
     @Req() req
   ): Promise<any> {
+    const numericJobId = await this.jobService.resolvePublicId(jobId);
     const userId = req.user.id;
     const workerId = await this.jobService.getWorkerIdFromUserId(userId);
-    return await this.jobService.getTodayTasksByWorkCenter(jobId, workerId);
+    return await this.jobService.getTodayTasksByWorkCenter(numericJobId, workerId);
   }
 
   // Get task detail by task id
   @UseGuards(JwtAuthGuard)
   @Get('tasks/:taskId')
-  async getTaskById(@Param('taskId') taskId: number): Promise<any> {
-    return await this.jobService.getTaskById(taskId);
+  async getTaskById(@Param('taskId', ParseUUIDPipe) taskId: string): Promise<any> {
+    const numericTaskId = await this.jobService.resolveTaskPublicId(taskId);
+    return await this.jobService.getTaskById(numericTaskId);
   }
-
-  // Generate recurrence for a task based on stored config
-  // @UseGuards(JwtAuthGuard)
-  // @Post('tasks/:taskId/generate-recurrence')
-  // async generateRecurrenceForTask(@Param('taskId') taskId: number, @Query('persist') persist?: string): Promise<any> {
-  //   const doPersist = persist === 'true'
-  //   return await this.jobService.generateRecurrenceForTask(taskId, doPersist)
-  // }
 
   // Convenience: allow GET for quick testing (no persistence)
   @UseGuards(JwtAuthGuard)
   @Get('tasks/:taskId/generate-recurrence')
-  async generateRecurrenceForTaskGet(@Param('taskId') taskId: number): Promise<any> {
-    return await this.jobService.generateRecurrenceForTask(taskId, false)
+  async generateRecurrenceForTaskGet(@Param('taskId', ParseUUIDPipe) taskId: string): Promise<any> {
+    const numericTaskId = await this.jobService.resolveTaskPublicId(taskId);
+    return await this.jobService.generateRecurrenceForTask(numericTaskId, false)
   }
 
   // ========== Employer Records Endpoints ========== //
@@ -378,23 +387,27 @@ async getAllJobsForClientFromToken(@Req() req) {
   @Get('employer/work-session-records')
   async getEmployerWorkSessionRecords(
     @Req() req,
-    @Query('jobId') jobId?: number,
+    @Query('jobId') jobId?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ): Promise<any> {
     const userId = req.user?.id;
-    return await this.jobService.getEmployerWorkSessionRecords(userId, jobId, startDate, endDate);
+    let numericJobId: number | undefined;
+    if (jobId) {
+      numericJobId = await this.jobService.resolvePublicId(jobId);
+    }
+    return await this.jobService.getEmployerWorkSessionRecords(userId, numericJobId, startDate, endDate);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('employer/work-session/:workSessionId')
   async getWorkSessionDetail(
     @Req() req,
-    @Param('workSessionId') workSessionId: number,
+    @Param('workSessionId', ParseUUIDPipe) workSessionId: string,
   ): Promise<any> {
     const userId = req.user?.id;
-    return await this.jobService.getWorkSessionDetail(userId, workSessionId);
+    const ws = await this.jobService.resolveWorkSessionPublicId(workSessionId);
+    return await this.jobService.getWorkSessionDetail(userId, ws);
   }
-
 
 }

@@ -1,9 +1,9 @@
-import { IsNumber } from 'class-validator';
+import { IsString } from 'class-validator';
 
 export class AssignWorkerUserDto {
-  @IsNumber()
-  workerId: number;
+  @IsString()
+  workerId: string;
 
-  @IsNumber()
-  userId: number;
+  @IsString()
+  userId: string;
 }

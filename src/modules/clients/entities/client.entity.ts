@@ -1,9 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, Generated } from 'typeorm';
 
 @Entity('clients')
 export class Client {
   @PrimaryGeneratedColumn()
   id: number;
+
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
 
   @Column()
   type: string;

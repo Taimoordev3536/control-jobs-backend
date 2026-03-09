@@ -4,10 +4,11 @@ import {
   Param,
   Query,
   UseGuards,
-  ParseIntPipe,
+  ParseUUIDPipe,
   Body,
   Request,
   Put,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -65,9 +66,10 @@ export class UsersController {
   @Roles(UserRole.Admin)
   @CheckPolicies((ability: AppAbility) => ability.can(Action.ManageRoles, 'all'))
   async updateRole(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() updateRoleDto: UpdateRoleDto,
   ) {
-    return this.usersService.updateRole(id, updateRoleDto.role);
+    const numericId = await this.usersService.resolvePublicId(id);
+    return this.usersService.updateRole(numericId, updateRoleDto.role);
   }
 }

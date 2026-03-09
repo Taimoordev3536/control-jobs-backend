@@ -27,13 +27,20 @@ async function runSpecificMigrations() {
     // Skip old QR code migrations, run only the new ones
     const migrationsToRun = [
       '20251017_add_monthly_weekday_columns.ts',
-      '20251023_create_survey_table.ts',
-      '20251106_add_total_week_hours_to_seasonal_schedule.ts',
+      '20251021_insert_virtual_workcenters.ts',
       '20251110_change_seasonal_schedule_dates_to_day_month.ts',
       '20251207_add_cascade_to_survey_job.ts',
       '20251207_add_weekly_days_to_survey.ts',
       '20251212_add_signing_method_fields.ts',
+      '20260126_work_center_qr_codes.ts',
       '20260130_add_address_components_to_work_center.ts',
+      '20260219_add_workcenter_gps.ts',
+      '20260302_add_address_components_to_clients.ts',
+      '20260302_add_active_to_clients.ts',
+      '20260302_rename_locality_to_city.ts',
+      '20260303_add_address_components_to_workers.ts',
+      '20260305_add_address_components_to_employers.ts',
+      '20260305_add_address_components_to_partners.ts',
     ];
 
     for (const file of migrationsToRun) {
@@ -63,9 +70,11 @@ async function runSpecificMigrations() {
       } catch (error: any) {
         if (error.message?.includes('already exists') || 
             error.message?.includes('duplicate') ||
+            error.message?.includes('does not exist') ||
             error.code === '42P07' || // table exists
-            error.code === '42701') {  // column exists
-          console.log(`ℹ️  Migration ${file} already applied, skipping...`);
+            error.code === '42701' || // column exists
+            error.code === '42703') {  // column does not exist (already renamed/migrated)
+          console.log(`ℹ️  Migration ${file} already applied or not needed, skipping...`);
         } else {
           console.error(`❌ Migration ${file} failed:`, error.message);
           throw error;

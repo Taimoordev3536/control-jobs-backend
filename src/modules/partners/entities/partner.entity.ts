@@ -19,6 +19,9 @@ export class Partner {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
+
   @Column({ length: 100 })
   name: string;
 

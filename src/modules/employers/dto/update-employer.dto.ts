@@ -70,9 +70,9 @@ export class UpdateEmployerDto {
     @Type(() => Number)
     longitude?: number;
 
-    @IsNumber()
+    @IsString()
     @IsOptional()
-    partnerId?: number;
+    partnerId?: string;
 
     @IsString()
     @IsOptional()

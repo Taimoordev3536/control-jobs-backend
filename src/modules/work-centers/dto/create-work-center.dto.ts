@@ -55,9 +55,9 @@ export class CreateWorkCenterDto {
   @IsOptional()
   observations?: string;
 
-  @IsNumber()
+  @IsString()
   @IsOptional()
-  clientId?: number;
+  clientId?: string;
 
   @IsNumber()
   @IsOptional()

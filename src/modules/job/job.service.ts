@@ -1,5 +1,6 @@
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { isUUID } from 'class-validator';
 import { DateTime } from 'luxon';
 import { InjectRepository } from '@nestjs/typeorm';
 import { convertDurationToMinutes, convertMinutesToDuration } from './helpers/duration-converter';
@@ -66,6 +67,63 @@ export class JobService {
     private jobScheduleService: JobScheduleService,
   ) {}
 
+  async resolvePublicId(publicId: string): Promise<number> {
+    const job = await this.jobRepo.findOne({ where: { publicId } });
+    if (!job) throw new NotFoundException('Job not found');
+    return job.id;
+  }
+
+  async resolveWorkerPublicId(publicId: string): Promise<number> {
+    const worker = await this.workerRepo.findOne({ where: { publicId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+    return worker.id;
+  }
+
+  async resolveTaskPublicId(publicId: string): Promise<number> {
+    const task = await this.taskRepo.findOne({ where: { publicId } });
+    if (!task) throw new NotFoundException('Task not found');
+    return task.id;
+  }
+
+  async resolveClientPublicId(idOrPublicId: string): Promise<number> {
+    // Special sentinel: "employer-self" means the employer selected themselves
+    if (idOrPublicId === 'employer-self') {
+      return -1;
+    }
+    if (isUUID(idOrPublicId)) {
+      // Try client table first
+      const client = await this.clientRepo.findOne({ where: { publicId: idOrPublicId } });
+      if (client) return client.id;
+      // If not found in clients, check if it's an employer publicId (employer-as-client)
+      const employer = await this.dataSource.getRepository(Employer).findOne({ where: { publicId: idOrPublicId } });
+      if (employer) return -(employer.id); // negative sentinel for employer selection
+      throw new NotFoundException(`Client ${idOrPublicId} not found`);
+    }
+    // Backwards compatibility: accept numeric string (including negative sentinel)
+    const num = parseInt(idOrPublicId, 10);
+    if (isNaN(num)) throw new NotFoundException(`Invalid clientId: ${idOrPublicId}`);
+    return num;
+  }
+
+  async resolveWorkSessionPublicId(publicId: string): Promise<number> {
+    const ws = await this.workSessionRepo.findOne({ where: { publicId } });
+    if (!ws) throw new NotFoundException(`WorkSession ${publicId} not found`);
+    return ws.id;
+  }
+
+  async resolveWorkCenterPublicId(idOrPublicId: string): Promise<number> {
+    // Sentinel values -1 (In itinere - In) and -2 (In itinere - Out) bypass UUID resolution
+    const num = Number(idOrPublicId);
+    if (num === -1 || num === -2) return num;
+    if (isUUID(idOrPublicId)) {
+      const wc = await this.dataSource.getRepository(WorkCenter).findOne({ where: { publicId: idOrPublicId } });
+      if (!wc) throw new NotFoundException(`WorkCenter ${idOrPublicId} not found`);
+      return wc.id;
+    }
+    // Backwards compatibility: accept numeric string
+    if (!isNaN(num)) return num;
+    throw new NotFoundException(`Invalid workCenterId: ${idOrPublicId}`);
+  }
 
   // create job api
   async createJob(createJobDto: CreateJobDto, employerUserId: number): Promise<Job> {
@@ -85,10 +143,8 @@ export class JobService {
       // Support negative clientId as the employer sentinel (e.g. -<employerId>)
       let isEmployerSelection = false;
       if (createJobDto.clientId != null) {
-        const cid = Number(createJobDto.clientId);
-        if (isNaN(cid)) {
-          throw new Error(`Invalid clientId ${createJobDto.clientId}`);
-        }
+        // Resolve UUID publicId or numeric string to internal numeric ID
+        const cid = await this.resolveClientPublicId(String(createJobDto.clientId));
 
         if (cid > 0) {
           client = await manager.findOne(Client, { where: { id: cid } });
@@ -111,12 +167,14 @@ export class JobService {
       let workCentersToAttach: WorkCenter[] = [];
 
       if (createJobDto.workCenterIds && Array.isArray(createJobDto.workCenterIds) && createJobDto.workCenterIds.length) {
-        // Load provided work centers and ensure they exist
-        const wcs = await manager.findBy(WorkCenter, { id: In(createJobDto.workCenterIds as number[]) });
-        if (!wcs || wcs.length !== createJobDto.workCenterIds.length) {
-          // find which ids are missing
+        // Resolve each workCenterId (UUID or numeric) to internal numeric ID
+        const resolvedWcIds = await Promise.all(
+          createJobDto.workCenterIds.map(id => this.resolveWorkCenterPublicId(String(id)))
+        );
+        const wcs = await manager.findBy(WorkCenter, { id: In(resolvedWcIds) });
+        if (!wcs || wcs.length !== resolvedWcIds.length) {
           const foundIds = new Set((wcs || []).map((w) => w.id));
-          const missing = (createJobDto.workCenterIds as number[]).filter((id) => !foundIds.has(id));
+          const missing = resolvedWcIds.filter((id) => !foundIds.has(id));
           throw new Error(`WorkCenter(s) not found: ${missing.join(', ')}`);
         }
         workCentersToAttach = wcs;
@@ -153,10 +211,14 @@ export class JobService {
         workCentersToAttach = [employerWc];
       }
 
-      // Load workers referenced in DTO
-      const workers = (createJobDto.workerIds && createJobDto.workerIds.length)
-        ? await manager.findBy(Worker, { id: In(createJobDto.workerIds as number[]) })
-        : [];
+      // Load workers referenced in DTO (resolve UUID publicIds to numeric IDs)
+      let workers: Worker[] = [];
+      if (createJobDto.workerIds && createJobDto.workerIds.length) {
+        const resolvedWorkerIds = await Promise.all(
+          createJobDto.workerIds.map(id => this.resolveWorkerPublicId(String(id)))
+        );
+        workers = await manager.findBy(Worker, { id: In(resolvedWorkerIds) });
+      }
 
       // Normalize scheduleType coming from frontend to the backend ScheduleType enum.
       // Frontend historically uses values like 'programming' and 'free' or 'flexible'.
@@ -352,6 +414,11 @@ export class JobService {
         for (const taskDto of createJobDto.tasks) {
           // Normalize monthly weekday inputs so backend stores canonical 0..6 values
           const payload: any = { ...taskDto, job };
+
+          // Resolve workCenterId from UUID to numeric (sentinel -1/-2 pass through)
+          if (payload.workCenterId !== undefined && payload.workCenterId !== null) {
+            payload.workCenterId = await this.resolveWorkCenterPublicId(String(payload.workCenterId));
+          }
 
           // Convert expectedDuration from HH:MM format to minutes
           if (payload.expectedDuration !== undefined) {
@@ -585,9 +652,9 @@ export class JobService {
         jobName: job.jobName,
         startDate: job.startDate,
         endDate: job.endDate,
-        clientId: job.client?.id || null,
-        workCenterIds: job.workCenters?.map(wc => wc.id) || [],
-        workerIds: job.workers?.map(w => w.id) || [],
+        clientId: job.client?.publicId || job.client?.id || null,
+        workCenterIds: job.workCenters?.map(wc => wc.publicId || wc.id) || [],
+        workerIds: job.workers?.map(w => w.publicId || w.id) || [],
         note: job.note || '',
         status: job.status,
         scheduleType: job.scheduleType,
@@ -623,15 +690,22 @@ export class JobService {
         })) || [],
 
         // Transform tasks
-        tasks: job.tasks?.map(task => ({
-          id: task.id,
+        tasks: job.tasks?.map(task => {
+          // Resolve numeric workCenterId to publicId using already-loaded workCenters
+          let taskWorkCenterId: string | number | null = null;
+          if (task.workCenterId != null) {
+            const matchedWc = job.workCenters?.find(wc => wc.id === task.workCenterId);
+            taskWorkCenterId = matchedWc?.publicId || task.workCenterId;
+          }
+          return {
+          id: task.publicId || task.id,
           name: task.name,
           note: task.note || '',
           expectedDuration: convertMinutesToDuration(task.expectedDuration),
           shift: task.shift || null,
           timing: task.timing,
           periodicity: task.periodicity,
-          workCenterId: task.workCenterId !== undefined && task.workCenterId !== null ? task.workCenterId : null,
+          workCenterId: taskWorkCenterId,
           startDate: task.startDate || null,
           endDate: task.endDate || null,
           interval: task.interval || 1,
@@ -645,7 +719,8 @@ export class JobService {
           yearlyDays: task.yearlyDays || null,
           alertTask: task.alertTask || false,
           pendingTask: task.pendingTask || false,
-        })) || [],
+        };
+        }) || [],
 
         // Separate surveys by type
         survey: null,
@@ -691,6 +766,12 @@ export class JobService {
       console.error('Error fetching job for edit:', error);
       throw error;
     }
+  }
+
+  async getJobByPublicIdForEdit(publicId: string, userId: number): Promise<any> {
+    const job = await this.jobRepo.findOne({ where: { publicId } });
+    if (!job) throw new NotFoundException('Job not found');
+    return this.getJobByIdForEdit(job.id, userId);
   }
 
 
@@ -765,7 +846,7 @@ export class JobService {
         if (updateJobDto.clientId === null) {
           job.client = null;
         } else {
-          const cid = Number(updateJobDto.clientId);
+          const cid = await this.resolveClientPublicId(String(updateJobDto.clientId));
           if (cid > 0) {
             const client = await manager.findOne(Client, { where: { id: cid } });
             if (!client) throw new Error(`Client with id ${cid} not found`);
@@ -784,10 +865,13 @@ export class JobService {
       // Update work centers
       if (updateJobDto.workCenterIds !== undefined && Array.isArray(updateJobDto.workCenterIds)) {
         if (updateJobDto.workCenterIds.length > 0) {
-          const wcs = await manager.findBy(WorkCenter, { id: In(updateJobDto.workCenterIds as number[]) });
-          if (wcs.length !== updateJobDto.workCenterIds.length) {
+          const resolvedWcIds = await Promise.all(
+            updateJobDto.workCenterIds.map(id => this.resolveWorkCenterPublicId(String(id)))
+          );
+          const wcs = await manager.findBy(WorkCenter, { id: In(resolvedWcIds) });
+          if (wcs.length !== resolvedWcIds.length) {
             const foundIds = new Set(wcs.map(w => w.id));
-            const missing = (updateJobDto.workCenterIds as number[]).filter(id => !foundIds.has(id));
+            const missing = resolvedWcIds.filter(id => !foundIds.has(id));
             throw new Error(`WorkCenter(s) not found: ${missing.join(', ')}`);
           }
           job.workCenters = wcs;
@@ -799,7 +883,10 @@ export class JobService {
       // Update workers
       if (updateJobDto.workerIds !== undefined && Array.isArray(updateJobDto.workerIds)) {
         if (updateJobDto.workerIds.length > 0) {
-          const workers = await manager.findBy(Worker, { id: In(updateJobDto.workerIds as number[]) });
+          const resolvedWorkerIds = await Promise.all(
+            updateJobDto.workerIds.map(id => this.resolveWorkerPublicId(String(id)))
+          );
+          const workers = await manager.findBy(Worker, { id: In(resolvedWorkerIds) });
           job.workers = workers;
         } else {
           job.workers = [];
@@ -959,6 +1046,11 @@ export class JobService {
       if (updateJobDto.tasks && Array.isArray(updateJobDto.tasks)) {
         for (const taskDto of updateJobDto.tasks) {
           const payload: any = { ...taskDto, job };
+
+          // Resolve workCenterId from UUID to numeric (sentinel -1/-2 pass through)
+          if (payload.workCenterId !== undefined && payload.workCenterId !== null) {
+            payload.workCenterId = await this.resolveWorkCenterPublicId(String(payload.workCenterId));
+          }
 
           // Convert expectedDuration from HH:MM format to minutes
           if (payload.expectedDuration !== undefined) {
@@ -1501,14 +1593,11 @@ async getAllJobsByEmployerFromToken(userId: number) {
 
       return {
         jobId: job.id,
+        publicId: job.publicId,
         jobName: job.jobName,
         jobStatus: job.status || JobStatus.SCHEDULED,
         clientName: job.client?.name || '',
-        workCenters: job.workCenters?.map(w => ({ id: w.id, name: w.name })) || [],
-        workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
-        startDate: job.startDate,
-        endDate: job.endDate,
-        scheduleType, // now can be free | fixed | summer | normal | seasonal(fallback)
+        workCenters: job.workCenters?.map(w => ({ id: w.id, publicId: w.publicId, name: w.name })) || [],
         totalShifts: job.seasonalSchedules?.reduce((acc, ss) => acc + (ss.shifts?.length || 0), 0) || 0,
         // expectedDuration unchanged for fixed/free; for seasonal we report active schedule week hours separately
         expectedDuration: ((): number => {
@@ -1529,12 +1618,14 @@ async getAllJobsByEmployerFromToken(userId: number) {
           }
         })(),
         activeScheduleWeekHours,
-        tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
+        clientId: job.client?.publicId || job.client?.id || null,
+        tasks: job.tasks?.map(task => ({ id: task.id, publicId: task.publicId, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
         signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
         hasClientSurvey,
         hasWorkerSurvey,
         workers: job.workers.map(worker => ({
           id: worker.id,
+          publicId: worker.publicId,
           code: worker.code,
           name: workerIdToName.get(worker.id) || null,
         })),
@@ -1692,10 +1783,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
       return {
         jobId: job.id,
+        publicId: job.publicId,
         jobName: job.jobName,
         jobStatus: job.status || JobStatus.SCHEDULED,
         clientName: job.client?.name || '',
-        workCenters: job.workCenters?.map(w => ({ id: w.id, name: w.name })) || [],
+        workCenters: job.workCenters?.map(w => ({ id: w.id, publicId: w.publicId, name: w.name })) || [],
         workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
         startDate: job.startDate,
         endDate: job.endDate,
@@ -1717,11 +1809,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
         })(),
         activeScheduleWeekHours,
-        tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
+        tasks: job.tasks?.map(task => ({ id: task.id, publicId: task.publicId, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
         signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
         hasClientSurvey,
         hasWorkerSurvey,
-        workers: job.workers.map(worker => ({ id: worker.id, code: worker.code, name: workerIdToName.get(worker.id) || null })),
+        workers: job.workers.map(worker => ({ id: worker.id, publicId: worker.publicId, code: worker.code, name: workerIdToName.get(worker.id) || null })),
         // Include active work session if exists
         workSession: jobIdToSession.has(job.id) ? (() => {
           const session = jobIdToSession.get(job.id);
@@ -1866,10 +1958,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
         return {
           jobId: job.id,
+          publicId: job.publicId,
           jobName: job.jobName,
           jobStatus: job.status || JobStatus.SCHEDULED,
           clientName: job.client?.name || '',
-          workCenters: job.workCenters?.map(w => ({ id: w.id, name: w.name })) || [],
+          workCenters: job.workCenters?.map(w => ({ id: w.id, publicId: w.publicId, name: w.name })) || [],
           workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
           startDate: job.startDate,
           endDate: job.endDate,
@@ -1891,9 +1984,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
             }
           })(),
           activeScheduleWeekHours,
-          tasks: job.tasks?.map(task => ({ id: task.id, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
+          tasks: job.tasks?.map(task => ({ id: task.id, publicId: task.publicId, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
           signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
-          workers: job.workers.map(worker => ({ id: worker.id, code: worker.code, name: workerIdToName.get(worker.id) || null })),
+          workers: job.workers.map(worker => ({ id: worker.id, publicId: worker.publicId, code: worker.code, name: workerIdToName.get(worker.id) || null })),
         };
       });
 
@@ -2149,6 +2242,13 @@ async getAllJobsByWorkerFromToken(userId: number) {
   }
 
   async recordScan(recordScanDto: RecordScanDto, userId: number): Promise<{ status: string; scanData: ScanLog; workSession?: any }> {
+    // Resolve publicId → numeric ID at entry point
+    const resolvedJobId = await this.resolvePublicId(recordScanDto.jobId);
+    let resolvedWorkCenterId: number | undefined;
+    if (recordScanDto.workCenterId) {
+      resolvedWorkCenterId = await this.resolveWorkCenterPublicId(recordScanDto.workCenterId);
+    }
+
     return await this.dataSource.transaction(async (txManager) => {
       try {
         console.log('=== Starting recordScan (transaction) ===');
@@ -2171,13 +2271,13 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
           if (employerUser?.employer?.id) {
             const job = await txManager.findOne(Job, {
-              where: { id: recordScanDto.jobId },
+              where: { id: resolvedJobId },
               relations: ['workers'],
             });
 
             if (!job) throw new Error('Job not found');
             if (job.workers.length === 0) throw new Error('No workers assigned');
-            
+
             workerId = job.workers[0].id;
             console.log('Using first worker for testing:', workerId);
           } else {
@@ -2189,7 +2289,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
         // Verify job and worker assignment
         const job = await txManager.findOne(Job, {
-          where: { id: recordScanDto.jobId },
+          where: { id: resolvedJobId },
           relations: ['workers', 'employer', 'client', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
         });
 
@@ -2222,9 +2322,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
         // Determine validated work center ID
         let validatedWorkCenterId: number | undefined;
 
-        if (recordScanDto.workCenterId) {
+        if (resolvedWorkCenterId) {
           // Manual selection provided by the worker (GPS fallback flow)
-          validatedWorkCenterId = recordScanDto.workCenterId;
+          validatedWorkCenterId = resolvedWorkCenterId;
         } else if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
           // ── Merged QR: REQUIRE explicit workCenterId ──────────────────
           // Merged tokens contain multiple work centers. The frontend must
@@ -2240,7 +2340,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
           // ── Static/single QR: work center is embedded in the token ────
           const validationResult = await this.qrValidationService.validateQrToken(
             recordScanDto.qrToken,
-            recordScanDto.jobId
+            resolvedJobId
           );
           if (!validationResult.valid) {
             throw new Error(validationResult.message || 'Invalid or expired QR code');
@@ -2289,7 +2389,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
         // Create scan log
         const scanLog = txManager.create(ScanLog, {
-          jobId: recordScanDto.jobId,
+          jobId: resolvedJobId,
           workerId: workerId,
           workCenterId: validatedWorkCenterId,
           scanType: recordScanDto.scanType,
@@ -2311,17 +2411,20 @@ async getAllJobsByWorkerFromToken(userId: number) {
         
         switch (recordScanDto.scanType) {
           case 'check-in':
-            workSession = await this.handleCheckInTx(txManager, recordScanDto.jobId, workerId, recordScanDto.signingMethod, validatedWorkCenterId);
+            workSession = await this.handleCheckInTx(txManager, resolvedJobId, workerId, recordScanDto.signingMethod, validatedWorkCenterId);
             // Emit alert after transaction
             if (job?.employer?.id && job?.client?.id) {
               const employerUser = await txManager.findOne(EmployerUser, { where: { employer: { id: job.employer.id } }, relations: ['user'] });
               const clientUser = await txManager.findOne(ClientUser, { where: { client: { id: job.client.id } }, relations: ['user'] });
               if (employerUser?.user?.id && clientUser?.user?.id) {
+                const checkinWorker = job.workers?.find(w => w.id === workerId);
                 setImmediate(() => {
                   this.alertsService.createAndEmitAlert({
                     type: 'CHECK_IN',
                     jobId: job.id,
+                    jobPublicId: job.publicId,
                     workerId,
+                    workerPublicId: checkinWorker?.publicId,
                     employerUserId: employerUser.user.id,
                     clientUserId: clientUser.user.id,
                     message: `Worker checked in to ${job.jobName}`,
@@ -2332,22 +2435,25 @@ async getAllJobsByWorkerFromToken(userId: number) {
             }
             break;
           case 'break-start':
-            workSession = await this.handleBreakStartTx(txManager, recordScanDto.jobId, workerId);
+            workSession = await this.handleBreakStartTx(txManager, resolvedJobId, workerId);
             break;
           case 'break-end':
-            workSession = await this.handleBreakEndTx(txManager, recordScanDto.jobId, workerId);
+            workSession = await this.handleBreakEndTx(txManager, resolvedJobId, workerId);
             break;
           case 'check-out':
-            workSession = await this.handleCheckOutTx(txManager, recordScanDto.jobId, workerId, recordScanDto.signingMethod, validatedWorkCenterId);
+            workSession = await this.handleCheckOutTx(txManager, resolvedJobId, workerId, recordScanDto.signingMethod, validatedWorkCenterId);
             if (job?.employer?.id && job?.client?.id) {
               const employerUser = await txManager.findOne(EmployerUser, { where: { employer: { id: job.employer.id } }, relations: ['user'] });
               const clientUser = await txManager.findOne(ClientUser, { where: { client: { id: job.client.id } }, relations: ['user'] });
               if (employerUser?.user?.id && clientUser?.user?.id) {
+                const checkoutWorker = job.workers?.find(w => w.id === workerId);
                 setImmediate(() => {
                   this.alertsService.createAndEmitAlert({
                     type: 'CHECK_OUT',
                     jobId: job.id,
+                    jobPublicId: job.publicId,
                     workerId,
+                    workerPublicId: checkoutWorker?.publicId,
                     employerUserId: employerUser.user.id,
                     clientUserId: clientUser.user.id,
                     message: `Worker checked out from ${job.jobName}`,
@@ -4242,14 +4348,17 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         }
 
         return {
-          id: session.id.toString(),
+          id: session.publicId || session.id.toString(),
           workSessionId: session.id,
+          workSessionPublicId: session.publicId,
           jobId: session.job.id,
+          jobPublicId: session.job.publicId,
           fecha,
           titular: employerName || 'N/A',
           job: session.job.jobName || 'N/A',
           trabajador: session.worker.user?.name || session.worker.code || 'N/A',
           workerCode: session.worker.code,
+          workerPublicId: session.worker.publicId,
           entrada,
           salida,
           total,

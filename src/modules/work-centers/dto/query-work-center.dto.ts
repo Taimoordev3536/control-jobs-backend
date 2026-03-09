@@ -1,16 +1,14 @@
-import { IsOptional, IsNumber, IsString } from 'class-validator';
+import { IsOptional, IsNumber, IsString, IsUUID } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class QueryWorkCenterDto {
   @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  clientId?: number;
+  @IsString()
+  clientId?: string;
 
   @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  employerId?: number;
+  @IsString()
+  employerId?: string;
 
   @IsOptional()
   @IsString()

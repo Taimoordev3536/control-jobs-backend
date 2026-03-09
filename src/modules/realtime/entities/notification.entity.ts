@@ -5,6 +5,9 @@ export class Notification {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
+
   @Column({ type: 'varchar', length: 50 })
   @Index()
   role: string; // 'EMPLOYER', 'CLIENT', 'WORKER'

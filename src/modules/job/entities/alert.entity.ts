@@ -13,6 +13,9 @@ export class Alert {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
+
   @ManyToOne(() => Job, job => job.alerts, { nullable: false })
   job: Job;
 

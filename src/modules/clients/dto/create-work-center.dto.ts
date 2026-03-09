@@ -29,7 +29,7 @@ export class CreateWorkCenterDto {
   @IsOptional()
   postalCode?: string;
 
-  @IsNumber()
+  @IsString()
   @IsOptional()
-  employerId?: number;
+  employerId?: string;
 }

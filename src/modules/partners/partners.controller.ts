@@ -9,6 +9,7 @@ import {
   UseGuards,
   Request,
   Logger,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 
 import { PartnersService } from './partners.service';
@@ -58,41 +59,27 @@ export class PartnersController {
     return this.partnersService.findAll();
   }
 
-  /**
-   * Get a partner by ID
-   * @param id - Partner ID
-   * @returns Partner data
-   */
   @Get(':id')
-  @Roles(1) // Admin role
-  async findOne(@Param('id') id: string): Promise<BaseResponse<Partner>> {
-    return this.partnersService.findOne(+id);
+  @Roles(1)
+  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.partnersService.findByPublicId(id);
   }
 
-  /**
-   * Update a partner
-   * @param id - Partner ID
-   * @param updatePartnerDto - Partner update data
-   * @returns Updated partner data
-   */
   @Patch(':id')
-  @Roles(1) // Admin role
+  @Roles(1)
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() updatePartnerDto: UpdatePartnerDto,
-  ): Promise<BaseResponse<Partner>> {
-    return this.partnersService.update(+id, updatePartnerDto);
+  ) {
+    const numericId = await this.partnersService.resolvePublicId(id);
+    return this.partnersService.update(numericId, updatePartnerDto);
   }
 
-  /**
-   * Delete a partner
-   * @param id - Partner ID
-   * @returns Success message
-   */
   @Delete(':id')
-  @Roles(1) // Admin role
-  async remove(@Param('id') id: string): Promise<BaseResponse<null>> {
-    return this.partnersService.remove(+id);
+  @Roles(1)
+  async remove(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.partnersService.resolvePublicId(id);
+    return this.partnersService.remove(numericId);
   }
 
   // Partner: Get own data
@@ -109,12 +96,8 @@ export class PartnersController {
     return this.partnersService.update(req.user.sub, updatePartnerDto);
   }
 
-  /**
-   * Get all partner tiers
-   * @returns List of all partner tiers
-   */
   @Get('tiers')
-  @Roles(1) // Admin role
+  @Roles(1)
   async findAllTiers(): Promise<BaseResponse<PartnerTier[]>> {
     return this.partnersService.findAllTiers();
   }

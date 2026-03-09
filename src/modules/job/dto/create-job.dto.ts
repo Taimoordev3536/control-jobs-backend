@@ -1,4 +1,4 @@
-import { IsString, IsDateString, IsInt, IsArray, IsOptional, IsNotEmpty, ValidateNested, IsEnum } from 'class-validator';
+import { IsString, IsDateString, IsArray, IsOptional, IsNotEmpty, ValidateNested, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CreateShiftDto } from './create-shift.dto';
 import { ScheduleType } from '../entities/shift.entity';
@@ -21,22 +21,20 @@ export class CreateJobDto {
   @IsDateString()
   endDate: string;
 
-  @IsInt()
+  @IsString()
   @IsOptional()
-  @Type(() => Number)
-  clientId?: number;
+  clientId?: string;
 
   // Deprecated single workCenterId removed in favor of workCenterIds array
   // Use workCenterIds to pass multiple work center IDs from frontend
   @IsArray()
-  @IsInt({ each: true })
+  @IsString({ each: true })
   @IsOptional()
-  @Type(() => Number)
-  workCenterIds?: number[];
+  workCenterIds?: string[];
 
   @IsArray()
-  @IsInt({ each: true })
-  workerIds: number[];
+  @IsString({ each: true })
+  workerIds: string[];
 
   @IsString()
   @IsOptional()

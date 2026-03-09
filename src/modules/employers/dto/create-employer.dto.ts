@@ -78,9 +78,9 @@ export class CreateEmployerDto {
   @Type(() => Number)
   longitude?: number;
 
-  @IsNumber()
+  @IsString()
   @IsNotEmpty()
-  partnerId: number;
+  partnerId: string;
 
   @IsString()
   @IsOptional()

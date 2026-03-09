@@ -34,6 +34,6 @@ export class CreateUserDto {
   roleId?: number;
 
   @IsOptional()
-  @IsNumber()
-  partnerId?: number;
+  @IsString()
+  partnerId?: string;
 }

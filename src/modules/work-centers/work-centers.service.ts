@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like } from 'typeorm';
+import { isUUID } from 'class-validator';
 import { WorkCenter } from './entities/work-center.entity';
 import { CreateWorkCenterDto } from './dto/create-work-center.dto';
 import { UpdateWorkCenterDto } from './dto/update-work-center.dto';
@@ -27,6 +28,23 @@ export class WorkCentersService {
     private employerClientRepo: Repository<EmployerClient>,
   ) {}
 
+  async resolvePublicId(publicId: string): Promise<number> {
+    const wc = await this.workCenterRepo.findOne({ where: { publicId } });
+    if (!wc) throw new NotFoundException('Work center not found');
+    return wc.id;
+  }
+
+  private async resolveEmployerIdFromPublicId(idOrPublicId: string): Promise<number> {
+    if (isUUID(idOrPublicId)) {
+      const employer = await this.employerRepo.findOne({ where: { publicId: idOrPublicId } });
+      if (!employer) throw new NotFoundException(`Employer ${idOrPublicId} not found`);
+      return employer.id;
+    }
+    const num = parseInt(idOrPublicId, 10);
+    if (isNaN(num)) throw new BadRequestException(`Invalid employerId: ${idOrPublicId}`);
+    return num;
+  }
+
   /**
    * Create a new work center
    */
@@ -43,18 +61,20 @@ export class WorkCentersService {
 
     const employerId = employerUserLink.employer.id;
 
-    // If clientId is provided, verify employer has access to that client
+    // If clientId (UUID) is provided, resolve to numeric and verify employer has access
+    let numericClientId: number | null = null;
     if (dto.clientId) {
-      const client = await this.clientRepo.findOne({ where: { id: dto.clientId } });
+      const client = await this.clientRepo.findOne({ where: { publicId: dto.clientId } });
       if (!client) {
         throw new NotFoundException('Client not found');
       }
+      numericClientId = client.id;
 
       // Verify employer-client association
       const association = await this.employerClientRepo.findOne({
         where: { 
           employer: { id: employerId }, 
-          client: { id: dto.clientId }, 
+          client: { id: numericClientId }, 
           isActive: true 
         },
       });
@@ -86,12 +106,13 @@ export class WorkCentersService {
     };
 
     // If dto.employerId is provided and matches the acting employer, create employer-owned
-    if (dto.employerId && dto.employerId === employerId) {
+    const resolvedEmployerId = dto.employerId ? await this.resolveEmployerIdFromPublicId(String(dto.employerId)) : null;
+    if (resolvedEmployerId && resolvedEmployerId === employerId) {
       workCenterData.employerId = employerId;
       workCenterData.clientId = null;
-    } else if (dto.clientId) {
+    } else if (numericClientId) {
       // Create client-owned work center
-      workCenterData.clientId = dto.clientId;
+      workCenterData.clientId = numericClientId;
       workCenterData.employerId = null;
     } else {
       // Default to employer-owned
@@ -127,13 +148,27 @@ export class WorkCentersService {
     let whereCondition: any = {};
     
     if (query.clientId) {
-      console.log('🔍 Filtering by clientId:', query.clientId);
+      // Resolve clientId: if it looks like a UUID query by publicId, otherwise by numeric id
+      // This avoids PostgreSQL type errors when a numeric string is passed to a UUID column
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let client: any = null;
+      if (uuidRegex.test(query.clientId)) {
+        client = await this.clientRepo.findOne({ where: { publicId: query.clientId } });
+      } else {
+        const numericId = parseInt(query.clientId, 10);
+        if (!isNaN(numericId)) {
+          client = await this.clientRepo.findOne({ where: { id: numericId } });
+        }
+      }
+      if (!client) return { data: [], total: 0 };
+      const numericClientId = client.id;
+      console.log('🔍 Filtering by clientId (resolved):', query.clientId, '->', numericClientId);
       
       // Verify employer has access to this client
       const association = await this.employerClientRepo.findOne({
         where: { 
           employer: { id: employerId }, 
-          client: { id: query.clientId },
+          client: { id: numericClientId },
           isActive: true 
         },
       });
@@ -152,7 +187,7 @@ export class WorkCentersService {
         return { data: [], total: 0 };
       }
 
-      whereCondition.clientId = query.clientId;
+      whereCondition.clientId = numericClientId;
     } else {
       // Get employer-owned work centers (where clientId is null)
       whereCondition.employerId = employerId;
@@ -200,6 +235,13 @@ export class WorkCentersService {
     // Verify access
     await this.verifyAccess(workCenter, user);
 
+    return workCenter;
+  }
+
+  async findByPublicId(publicId: string, user: User): Promise<WorkCenter> {
+    const workCenter = await this.workCenterRepo.findOne({ where: { publicId } });
+    if (!workCenter) throw new NotFoundException('Work center not found');
+    await this.verifyAccess(workCenter, user);
     return workCenter;
   }
 

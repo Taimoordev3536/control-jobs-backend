@@ -9,7 +9,7 @@ import {
   Query,
   UseGuards,
   Req,
-  ParseIntPipe,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { WorkCentersService } from './work-centers.service';
 import { CreateWorkCenterDto } from './dto/create-work-center.dto';
@@ -55,13 +55,10 @@ export class WorkCentersController {
     };
   }
 
-  /**
-   * Get one work center by ID
-   * GET /work-centers/:id
-   */
   @Get(':id')
-  async findOne(@Param('id', ParseIntPipe) id: number, @Req() req) {
-    const workCenter = await this.workCentersService.findOne(id, req.user);
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+    const numericId = await this.workCentersService.resolvePublicId(id);
+    const workCenter = await this.workCentersService.findOne(numericId, req.user);
     return {
       message: 'Work center retrieved successfully',
       data: workCenter,
@@ -69,17 +66,14 @@ export class WorkCentersController {
     };
   }
 
-  /**
-   * Update a work center
-   * PUT /work-centers/:id
-   */
   @Put(':id')
   async update(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateWorkCenterDto,
     @Req() req,
   ) {
-    const workCenter = await this.workCentersService.update(id, dto, req.user);
+    const numericId = await this.workCentersService.resolvePublicId(id);
+    const workCenter = await this.workCentersService.update(numericId, dto, req.user);
     return {
       message: 'Work center updated successfully',
       data: workCenter,
@@ -87,13 +81,10 @@ export class WorkCentersController {
     };
   }
 
-  /**
-   * Delete a work center
-   * DELETE /work-centers/:id
-   */
   @Delete(':id')
-  async remove(@Param('id', ParseIntPipe) id: number, @Req() req) {
-    const result = await this.workCentersService.remove(id, req.user);
+  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+    const numericId = await this.workCentersService.resolvePublicId(id);
+    const result = await this.workCentersService.remove(numericId, req.user);
     return {
       message: result.message,
       statusCode: 200,

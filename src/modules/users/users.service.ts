@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { isUUID } from 'class-validator';
 import { User } from './entities/user.entity';
 import { Role } from './entities/role.entity';
+import { Partner } from '../partners/entities/partner.entity';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AwsService } from '../aws/aws.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -18,10 +20,30 @@ export class UsersService {
     private readonly awsService: AwsService,
   ) { }
 
+  async resolvePublicId(publicId: string): Promise<number> {
+    const user = await this.usersRepository.findOne({ where: { publicId } });
+    if (!user) throw new NotFoundException('User not found');
+    return user.id;
+  }
+
+  private async resolvePartnerIdFromPublicId(idOrPublicId: string): Promise<number> {
+    if (isUUID(idOrPublicId)) {
+      const partner = await this.usersRepository.manager.findOne(Partner, { where: { publicId: idOrPublicId } });
+      if (!partner) throw new NotFoundException(`Partner ${idOrPublicId} not found`);
+      return partner.id;
+    }
+    const num = parseInt(idOrPublicId, 10);
+    if (isNaN(num)) throw new NotFoundException(`Invalid partnerId: ${idOrPublicId}`);
+    return num;
+  }
+
   async create(createUserDto: CreateUserDto): Promise<User> {
-    const user = this.usersRepository.create({
-      ...createUserDto,
-    });
+    const { partnerId: partnerIdRaw, ...rest } = createUserDto;
+    const data: any = { ...rest };
+    if (partnerIdRaw !== undefined) {
+      data.partnerId = await this.resolvePartnerIdFromPublicId(String(partnerIdRaw));
+    }
+    const user = this.usersRepository.create(data as Partial<User>);
     return this.usersRepository.save(user);
   }
 
@@ -72,6 +94,22 @@ export class UsersService {
     return user;
   }
 
+  async findByPublicId(publicId: string, relations: string[] = []): Promise<User> {
+    const user = await this.usersRepository.findOne({
+      where: { publicId },
+      relations: [...relations, 'role'],
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.role) {
+      const workerRole = await this.rolesRepository.findOne({ where: { value: 5 } });
+      if (workerRole) {
+        user.role = workerRole;
+        await this.usersRepository.save(user);
+      }
+    }
+    return user;
+  }
+
   async getAllUsers(
     page: number = 1,
     limit: number = 10,
@@ -107,7 +145,12 @@ export class UsersService {
 
   async update(id: number, updateUserDto: UpdateUserDto): Promise<User> {
     await this.findById(id);
-    await this.usersRepository.update(id, updateUserDto);
+    const { partnerId: partnerIdRaw, ...rest } = updateUserDto;
+    const data: any = { ...rest };
+    if (partnerIdRaw !== undefined) {
+      data.partnerId = await this.resolvePartnerIdFromPublicId(String(partnerIdRaw));
+    }
+    await this.usersRepository.update(id, data);
     return this.findById(id);
   }
 

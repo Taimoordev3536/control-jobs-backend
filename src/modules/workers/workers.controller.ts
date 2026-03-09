@@ -7,6 +7,7 @@ import {
   Put,
   Delete,
   ParseIntPipe,
+  ParseUUIDPipe,
   UseGuards,
   Req,
 } from '@nestjs/common';
@@ -29,15 +30,15 @@ export class WorkersController {
   }
 
   @Get(':id/users')
-  getUsers(@Param('id', ParseIntPipe) id: number) {
-    return this.workersService.getUsersByWorker(id);
+  async getUsers(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.getUsersByWorker(numericId);
   }
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
   async createByEmployer(@Body() dto: CreateWorkerDto, @Req() req) {
-    // req.user is populated by JwtAuthGuard
     return this.workersService.createByEmployer(dto, req.user);
   }
 
@@ -51,28 +52,24 @@ export class WorkersController {
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
-  async findOneByEmployer(@Param('id', ParseIntPipe) id: number, @Req() req) {
-    // Optionally, check employer ownership
-    return this.workersService.findOne(id);
+  async findOneByEmployer(@Param('id', ParseUUIDPipe) id: string) {
+    return this.workersService.findByPublicId(id);
   }
 
   @Put(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
   async updateByEmployer(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateWorkerDto,
-    @Req() req
   ) {
-    // Optionally, check employer ownership
-    return this.workersService.update(id, dto);
+    return this.workersService.updateByPublicId(id, dto);
   }
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
-  async removeByEmployer(@Param('id', ParseIntPipe) id: number, @Req() req) {
-    // Optionally, check employer ownership
-    return this.workersService.remove(id);
+  async removeByEmployer(@Param('id', ParseUUIDPipe) id: string) {
+    return this.workersService.removeByPublicId(id);
   }
 }

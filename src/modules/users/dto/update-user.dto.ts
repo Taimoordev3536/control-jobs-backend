@@ -18,6 +18,6 @@ export class UpdateUserDto {
   roleId?: number;
 
   @IsOptional()
-  @IsNumber()
-  partnerId?: number;
+  @IsString()
+  partnerId?: string;
 }

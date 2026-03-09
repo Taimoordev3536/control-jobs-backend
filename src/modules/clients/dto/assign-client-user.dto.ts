@@ -1,11 +1,11 @@
-import { IsBoolean, IsNumber } from 'class-validator';
+import { IsBoolean, IsString } from 'class-validator';
 
 export class AssignClientUserDto {
-  @IsNumber()
-  clientId: number;
+  @IsString()
+  clientId: string;
 
-  @IsNumber()
-  userId: number;
+  @IsString()
+  userId: string;
 
   @IsBoolean()
   isDefault: boolean;

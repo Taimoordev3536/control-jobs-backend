@@ -16,6 +16,6 @@ export class GpsSelectionDto {
 
   /** When provided, only return work centers that belong to this job */
   @IsOptional()
-  @IsNumber()
-  jobId?: number;
+  @IsString()
+  jobId?: string;
 }

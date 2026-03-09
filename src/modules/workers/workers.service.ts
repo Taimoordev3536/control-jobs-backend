@@ -33,6 +33,12 @@ export class WorkersService {
     private readonly emailService: EmailService,
   ) {}
 
+  async resolvePublicId(publicId: string): Promise<number> {
+    const worker = await this.workerRepo.findOne({ where: { publicId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+    return worker.id;
+  }
+
   findAll() {
     return this.workerRepo.find();
   }
@@ -51,6 +57,17 @@ export class WorkersService {
     return { ...worker, name };
   }
 
+  async findByPublicId(publicId: string) {
+    const worker = await this.workerRepo.findOne({ where: { publicId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+    const workerUser = await this.workerUserRepo.findOne({
+      where: { workerId: worker.id },
+      relations: ['user'],
+    });
+    const name = workerUser?.user?.name || '';
+    return { ...worker, name };
+  }
+
   async update(id: number, dto: UpdateWorkerDto) {
     const worker = await this.workerRepo.findOne({ where: { id } });
     if (!worker) throw new NotFoundException('Worker not found');
@@ -58,19 +75,71 @@ export class WorkersService {
     return this.workerRepo.save(worker);
   }
 
+  async updateByPublicId(publicId: string, dto: UpdateWorkerDto) {
+    const worker = await this.workerRepo.findOne({ where: { publicId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+    Object.assign(worker, dto);
+    return this.workerRepo.save(worker);
+  }
+
   async remove(id: number) {
+    // Find linked users before deleting the links
+    const workerUserLinks = await this.workerUserRepo.find({
+      where: { workerId: id },
+    });
+    const linkedUserIds = workerUserLinks.map((wu) => wu.userId);
+
     // Remove all worker-user links
     await this.workerUserRepo.delete({ workerId: id });
     // Remove all employer-worker links
     await this.employerWorkerRepo.delete({ worker: { id } });
-    // Remove the worker itself (query repo directly to get a proper entity)
+    // Remove the worker itself
     const worker = await this.workerRepo.findOne({ where: { id } });
     if (!worker) throw new NotFoundException('Worker not found');
-    return this.workerRepo.remove(worker);
+    await this.workerRepo.remove(worker);
+
+    // Delete orphaned users (not linked to any other entity)
+    for (const userId of linkedUserIds) {
+      await this.deleteOrphanedUser(userId);
+    }
+
+    return worker;
+  }
+
+  async removeByPublicId(publicId: string) {
+    const worker = await this.workerRepo.findOne({ where: { publicId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+    return this.remove(worker.id);
+  }
+
+  /**
+   * Delete a user if they are not linked to any worker, client, or employer
+   */
+  private async deleteOrphanedUser(userId: number) {
+    // Check if user is still linked to any worker
+    const workerLink = await this.workerUserRepo.findOne({ where: { userId } });
+    if (workerLink) return;
+
+    // Check if user is linked to any client
+    const clientLink = await this.dataSource
+      .query(`SELECT 1 FROM "clients_users" WHERE "userId" = $1 LIMIT 1`, [userId]);
+    if (clientLink && clientLink.length > 0) return;
+
+    // Check if user is linked to any employer
+    const employerLink = await this.dataSource
+      .getRepository(EmployerUser)
+      .findOne({ where: { user: { id: userId } } });
+    if (employerLink) return;
+
+    // User is orphaned — safe to delete
+    await this.userRepo.delete(userId);
   }
 
   async assignUser(dto: AssignWorkerUserDto) {
-    const relation = this.workerUserRepo.create(dto);
+    const workerId = await this.resolvePublicId(dto.workerId);
+    const user = await this.userRepo.findOne({ where: { publicId: dto.userId } });
+    if (!user) throw new NotFoundException(`User ${dto.userId} not found`);
+    const relation = this.workerUserRepo.create({ workerId, userId: user.id });
     return this.workerUserRepo.save(relation);
   }
 
@@ -97,7 +166,7 @@ export class WorkersService {
       const existingUser = await manager.findOne(User, {
         where: { email: dto.email },
       });
-      if (existingUser) throw new Error('Email already in use');
+      if (existingUser) throw new Error('Email ya utilizado');
       const workerRole = await manager.findOne(Role, { where: { value: 5 } }); // 5 = Worker
       if (!workerRole) throw new Error('Worker role not found');
       // Auto-generate password (or set default)
@@ -231,6 +300,7 @@ export class WorkersService {
       }
       return {
         id: w.id,
+        publicId: w.publicId,
         name: workerIdToUserName.get(w.id) || '',
         occupation: w.occupation,
         landline: w.landline || '',

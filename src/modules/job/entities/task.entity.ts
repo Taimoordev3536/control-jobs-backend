@@ -24,6 +24,9 @@ export class Task {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
+  publicId: string;
+
   @ManyToOne(() => Job, job => job.tasks, { nullable: false })
   job: Job;
 

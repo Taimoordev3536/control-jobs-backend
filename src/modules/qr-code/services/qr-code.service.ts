@@ -4,6 +4,7 @@ import { Repository, In } from 'typeorm';
 import { QrCode, QrCodeType } from '../entities/qr-code.entity';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 import { Job } from '../../job/entities/job.entity';
+import { Client } from '../../clients/entities/client.entity';
 import { ClientUser } from '../../clients/entities/client-user.entity';
 import { QrTokenGenerator } from '../helpers/qr-token-generator';
 import { QrImageGenerator } from '../helpers/qr-image-generator';
@@ -21,6 +22,8 @@ export class QrCodeService {
     private workCenterRepo: Repository<WorkCenter>,
     @InjectRepository(Job)
     private jobRepo: Repository<Job>,
+    @InjectRepository(Client)
+    private clientRepo: Repository<Client>,
     @InjectRepository(ClientUser)
     private clientUserRepo: Repository<ClientUser>,
     private jobScheduleService: JobScheduleService,
@@ -230,14 +233,14 @@ export class QrCodeService {
   /**
    * Get merged dynamic QR for a job (includes all work centers)
    */
-  async getMergedDynamicQrForJob(jobId: number): Promise<MergedQrResponse> {
+  async getMergedDynamicQrForJob(publicId: string): Promise<MergedQrResponse> {
     const job = await this.jobRepo.findOne({
-      where: { id: jobId },
+      where: { publicId },
       relations: ['workCenters'],
     });
 
     if (!job) {
-      throw new NotFoundException(`Job with ID ${jobId} not found`);
+      throw new NotFoundException(`Job with public ID ${publicId} not found`);
     }
 
     if (!job.workCenters || job.workCenters.length === 0) {
@@ -313,7 +316,7 @@ export class QrCodeService {
 
     const mergedData: MergedQrData = {
       workCenters: workCentersData,
-      jobId,
+      jobId: job.id,
       generatedAt: new Date().toISOString(),
     };
 
@@ -400,8 +403,15 @@ export class QrCodeService {
    * 3. Only include work centers with explicitly activated QR codes (isSelected = true)
    * 4. Generate merged QR code
    */
-  async getMergedDynamicQrForClient(clientId: number): Promise<MergedQrResponse> {
+  async getMergedDynamicQrForClient(publicId: string): Promise<MergedQrResponse> {
     const today = new Date();
+
+    // Resolve publicId to numeric client id
+    const client = await this.clientRepo.findOne({ where: { publicId } });
+    if (!client) {
+      throw new NotFoundException(`Client with public ID ${publicId} not found`);
+    }
+    const clientId = client.id;
 
     // 1. Get all jobs for this client
     const allJobs = await this.jobRepo.find({
@@ -560,13 +570,11 @@ export class QrCodeService {
       relations: ['client'],
     });
 
-    if (!clientUser?.client?.id) {
+    if (!clientUser?.client?.publicId) {
       throw new NotFoundException('Client not found for this user');
     }
 
-    const clientId = clientUser.client.id;
-
-    // Delegate to existing method
-    return this.getMergedDynamicQrForClient(clientId);
+    // Delegate to existing method via publicId
+    return this.getMergedDynamicQrForClient(clientUser.client.publicId);
   }
 }

@@ -144,6 +144,7 @@ export class AuthService {
       if (employerInfo) {
         returnedUser.employer = {
           id: employerInfo.id,
+          publicId: employerInfo.publicId,
           name: employerInfo.name,
           typeId: employerInfo.typeId,
           subTypeId: employerInfo.subTypeId,
@@ -216,6 +217,7 @@ export class AuthService {
     const payload: any = {
       sub: user.id,
       id: user.id,
+      publicId: user.publicId,
       email: user.email,
       role: user.role,
       roleValue: user.roleValue,

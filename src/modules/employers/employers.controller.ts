@@ -9,6 +9,7 @@ import {
   UseGuards,
   Request,
   Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { EmployersService } from './employers.service';
 import { CreateEmployerDto } from './dto/create-employer.dto';
@@ -43,12 +44,26 @@ export class EmployersController {
     return this.employersService.findAll(partnerId);
   }
 
-  // Admin/Partner: Get employer by ID
+  // Employer: Get own data (must be before :id to avoid conflict)
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  async getMe(@Request() req) {
+    return this.employersService.findOne(req.user.sub);
+  }
+
+  // Employer: Update own data (must be before :id to avoid conflict)
+  @Patch('me')
+  @UseGuards(JwtAuthGuard)
+  async updateMe(@Request() req, @Body() updateEmployerDto: UpdateEmployerDto) {
+    return this.employersService.update(req.user.sub, updateEmployerDto);
+  }
+
+  // Admin/Partner: Get employer by UUID
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(1, 2)
-  async findOne(@Param('id') id: string): Promise<BaseResponse<Employer>> {
-    return this.employersService.findOne(+id);
+  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.employersService.findByPublicId(id);
   }
 
   // Admin/Partner: Update employer
@@ -56,31 +71,19 @@ export class EmployersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(1, 2)
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() updateEmployerDto: UpdateEmployerDto,
-  ): Promise<BaseResponse<Employer>> {
-    return this.employersService.update(+id, updateEmployerDto);
+  ) {
+    const numericId = await this.employersService.resolvePublicId(id);
+    return this.employersService.update(numericId, updateEmployerDto);
   }
 
   // Admin/Partner: Delete employer
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(1, 2)
-  async remove(@Param('id') id: string): Promise<BaseResponse<null>> {
-    return this.employersService.remove(+id);
-  }
-
-  // Employer: Get own data
-  @Get('me')
-  @UseGuards(JwtAuthGuard)
-  async getMe(@Request() req) {
-    return this.employersService.findOne(req.user.sub);
-  }
-
-  // Employer: Update own data
-  @Patch('me')
-  @UseGuards(JwtAuthGuard)
-  async updateMe(@Request() req, @Body() updateEmployerDto: UpdateEmployerDto) {
-    return this.employersService.update(req.user.sub, updateEmployerDto);
+  async remove(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.employersService.resolvePublicId(id);
+    return this.employersService.remove(numericId);
   }
 }

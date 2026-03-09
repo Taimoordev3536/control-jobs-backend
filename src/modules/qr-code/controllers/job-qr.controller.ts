@@ -1,4 +1,4 @@
-import { Controller, Get, Param, UseGuards, ParseIntPipe, Req } from '@nestjs/common';
+import { Controller, Get, Param, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { QrCodeService } from '../services/qr-code.service';
 
@@ -12,7 +12,7 @@ export class JobQrController {
    * GET /jobs/:id/merged-qr
    */
   @Get(':id/merged-qr')
-  async getMergedDynamicQr(@Param('id', ParseIntPipe) jobId: number) {
+  async getMergedDynamicQr(@Param('id', ParseUUIDPipe) jobId: string) {
     const result = await this.qrCodeService.getMergedDynamicQrForJob(jobId);
 
     return {
@@ -27,7 +27,7 @@ export class JobQrController {
    * GET /jobs/clients/:clientId/today-merged-qr
    */
   @Get('clients/:clientId/today-merged-qr')
-  async getTodayMergedQrForClient(@Param('clientId', ParseIntPipe) clientId: number) {
+  async getTodayMergedQrForClient(@Param('clientId', ParseUUIDPipe) clientId: string) {
     const result = await this.qrCodeService.getMergedDynamicQrForClient(clientId);
 
     return {
