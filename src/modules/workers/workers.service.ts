@@ -47,14 +47,15 @@ export class WorkersService {
     const worker = await this.workerRepo.findOne({ where: { id } });
     if (!worker) throw new NotFoundException('Worker not found');
 
-    // Fetch linked user name
+    // Fetch linked user name and email
     const workerUser = await this.workerUserRepo.findOne({
       where: { workerId: id },
       relations: ['user'],
     });
     const name = workerUser?.user?.name || '';
+    const email = workerUser?.user?.email || '';
 
-    return { ...worker, name };
+    return { ...worker, name, email };
   }
 
   async findByPublicId(publicId: string) {
@@ -65,21 +66,58 @@ export class WorkersService {
       relations: ['user'],
     });
     const name = workerUser?.user?.name || '';
-    return { ...worker, name };
+    const email = workerUser?.user?.email || '';
+    return { ...worker, name, email };
   }
 
   async update(id: number, dto: UpdateWorkerDto) {
     const worker = await this.workerRepo.findOne({ where: { id } });
     if (!worker) throw new NotFoundException('Worker not found');
-    Object.assign(worker, dto);
-    return this.workerRepo.save(worker);
+
+    // Extract user-level fields before assigning to worker entity
+    const { email, accessEmail, name, ...workerFields } = dto as any;
+    Object.assign(worker, workerFields);
+    await this.workerRepo.save(worker);
+
+    // Update linked user's email/name if provided
+    if (email !== undefined || name !== undefined) {
+      const workerUser = await this.workerUserRepo.findOne({
+        where: { workerId: id },
+        relations: ['user'],
+      });
+      if (workerUser?.user) {
+        if (email !== undefined) workerUser.user.email = email;
+        if (name !== undefined) workerUser.user.name = name;
+        await this.userRepo.save(workerUser.user);
+      }
+    }
+
+    return this.findOne(id);
   }
 
   async updateByPublicId(publicId: string, dto: UpdateWorkerDto) {
     const worker = await this.workerRepo.findOne({ where: { publicId } });
     if (!worker) throw new NotFoundException('Worker not found');
-    Object.assign(worker, dto);
-    return this.workerRepo.save(worker);
+
+    // Extract user-level fields before assigning to worker entity
+    const { email, accessEmail, name, ...workerFields } = dto as any;
+    Object.assign(worker, workerFields);
+    await this.workerRepo.save(worker);
+
+    // Update linked user's email/name if provided
+    if (email !== undefined || name !== undefined) {
+      const workerUser = await this.workerUserRepo.findOne({
+        where: { workerId: worker.id },
+        relations: ['user'],
+      });
+      if (workerUser?.user) {
+        if (email !== undefined) workerUser.user.email = email;
+        if (name !== undefined) workerUser.user.name = name;
+        await this.userRepo.save(workerUser.user);
+      }
+    }
+
+    return this.findByPublicId(publicId);
   }
 
   async remove(id: number) {
@@ -245,7 +283,9 @@ export class WorkersService {
         }
       }
 
-      return { worker: savedWorker, user: savedUser };
+      // Re-fetch to get DB-generated publicId (uuid_generate_v4)
+      const fullWorker = await manager.findOne(Worker, { where: { id: savedWorker.id } });
+      return { worker: fullWorker, user: savedUser };
     });
   }
 

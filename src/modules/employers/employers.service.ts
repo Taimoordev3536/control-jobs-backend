@@ -118,7 +118,7 @@ export class EmployersService {
             where: { email: createEmployerDto.user.email },
           });
           if (existingUser) {
-            throw new BadRequestException('Email ya utilizado');
+            throw new BadRequestException('Email already in use');
           }
 
           // Get employer role
@@ -332,8 +332,8 @@ export class EmployersService {
                 const existingUser = await manager.findOne(User, {
                   where: { email: userData.email },
                 });
-                if (existingUser) {
-                  throw new BadRequestException('Email ya utilizado');
+                if (existingUser && existingUser.id !== user.id) {
+                  throw new BadRequestException('Email already in use');
                 }
               }
 

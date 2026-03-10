@@ -114,6 +114,10 @@ export class UpdateEmployerDto {
     @IsOptional()
     probationPeriod?: string;
 
+    @IsString()
+    @IsOptional()
+    responsible?: string;
+
     @ValidateNested()
     @Type(() => UpdateEmployerUserDto)
     @IsOptional()

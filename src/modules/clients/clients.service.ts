@@ -267,7 +267,9 @@ export class ClientsService {
           console.error('Failed to send client credentials email:', emailError?.message || emailError);
         }
       }
-      return { client: savedClient, user: savedUser };
+      // Re-fetch to get DB-generated publicId (uuid_generate_v4)
+      const fullClient = await manager.findOne(Client, { where: { id: savedClient.id } });
+      return { client: fullClient, user: savedUser };
     });
   }
 
