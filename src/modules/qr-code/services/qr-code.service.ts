@@ -51,6 +51,10 @@ export class QrCodeService {
 
     const { selectedType, active } = dto;
 
+    // Update the explicit boolean flag on the work center
+    workCenter.isQrcodeActive = active;
+    await this.workCenterRepo.save(workCenter);
+
     if (!active) {
       // Deactivate all QR codes for this work center
       await this.qrCodeRepo.update(

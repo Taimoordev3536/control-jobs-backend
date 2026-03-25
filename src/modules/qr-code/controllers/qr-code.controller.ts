@@ -8,6 +8,7 @@ import { QrValidationService } from '../services/qr-validation.service';
 import { UpdateWorkCenterQrDto } from '../dto/update-work-center-qr.dto';
 import { SendStaticQrEmailDto } from '../dto/send-static-qr-email.dto';
 import { UpdateWorkCenterGpsDto } from '../dto/update-work-center-gps.dto';
+import { UpdateWorkCenterIpDto } from '../dto/update-work-center-ip.dto';
 import { GpsSelectionDto } from '../dto/gps-selection.dto';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 import { Job } from '../../job/entities/job.entity';
@@ -141,10 +142,23 @@ export class QrCodeController {
       workCenter.longitude = dto.longitude;
       workCenter.gpsRadius = dto.radius ?? workCenter.gpsRadius ?? 100;
     } else {
-      // Deactivate: clear coordinates
-      workCenter.latitude  = null;
-      workCenter.longitude = null;
+      // Deactivate: only update config fields if provided (preserve existing config)
+      if (dto.latitude != null)  workCenter.latitude  = dto.latitude;
+      if (dto.longitude != null) workCenter.longitude = dto.longitude;
+      if (dto.radius != null)    workCenter.gpsRadius = dto.radius;
     }
+
+    // Update address fields when provided (reverse-geocoded from GPS dialog)
+    if (dto.address != null)      workCenter.address      = dto.address;
+    if (dto.street != null)       workCenter.street        = dto.street;
+    if (dto.streetNumber != null)  workCenter.streetNumber  = dto.streetNumber;
+    if (dto.locality != null)     workCenter.locality      = dto.locality;
+    if (dto.province != null)     workCenter.province      = dto.province;
+    if (dto.country != null)      workCenter.country       = dto.country;
+    if (dto.postalCode != null)   workCenter.postalCode    = dto.postalCode;
+
+    // Set the explicit boolean flag — config (lat/lng/radius) is always preserved
+    workCenter.isGpsActive = dto.active;
 
     await this.workCenterRepo.save(workCenter);
 
@@ -152,10 +166,46 @@ export class QrCodeController {
       message: 'GPS configuration saved successfully',
       data: {
         workCenterId,
-        active: dto.active,
+        active: workCenter.isGpsActive,
         latitude:  workCenter.latitude,
         longitude: workCenter.longitude,
         gpsRadius: workCenter.gpsRadius,
+      },
+      statusCode: 200,
+    };
+  }
+
+  /**
+   * Save IP configuration for a work center
+   * PUT /work-centers/:id/signing-methods/ip
+   */
+  @Put(':id/signing-methods/ip')
+  async updateWorkCenterIp(
+    @Param('id', ParseUUIDPipe) publicId: string,
+    @Body() dto: UpdateWorkCenterIpDto,
+  ) {
+    const workCenterId = await this.resolveWorkCenterId(publicId);
+    const workCenter = await this.workCenterRepo.findOne({ where: { id: workCenterId } });
+    if (!workCenter) throw new NotFoundException(`Work center ${workCenterId} not found`);
+
+    if (dto.active && !dto.ipAddress) {
+      throw new BadRequestException('ipAddress is required when active is true');
+    }
+
+    if (dto.ipAddress != null) {
+      workCenter.allowedIp = dto.ipAddress;
+    }
+
+    workCenter.isIpActive = dto.active;
+
+    await this.workCenterRepo.save(workCenter);
+
+    return {
+      message: 'IP configuration saved successfully',
+      data: {
+        workCenterId,
+        active: workCenter.isIpActive,
+        ipAddress: workCenter.allowedIp,
       },
       statusCode: 200,
     };

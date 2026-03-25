@@ -78,6 +78,18 @@ export class WorkCenter {
     @Column({ name: 'gps_radius', type: 'integer', default: 100 })
     gpsRadius: number;
 
+    @Column({ name: 'is_gps_active', type: 'boolean', default: false })
+    isGpsActive: boolean;
+
+    @Column({ name: 'is_qrcode_active', type: 'boolean', default: false })
+    isQrcodeActive: boolean;
+
+    @Column({ name: 'is_ip_active', type: 'boolean', default: false })
+    isIpActive: boolean;
+
+    @Column({ name: 'allowed_ip', type: 'varchar', length: 45, nullable: true })
+    allowedIp: string | null;
+
     @OneToMany(() => EmployerWorkCenter, employerWorkCenter => employerWorkCenter.workCenter)
     employerWorkCenters: EmployerWorkCenter[];
 

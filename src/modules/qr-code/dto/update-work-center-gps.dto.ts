@@ -1,4 +1,4 @@
-import { IsBoolean, IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class UpdateWorkCenterGpsDto {
   @IsBoolean()
@@ -20,6 +20,34 @@ export class UpdateWorkCenterGpsDto {
   @IsOptional()
   @IsNumber()
   @Min(10)
-  @Max(5000)
+  @Max(20000000)
   radius?: number;
+
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @IsOptional()
+  @IsString()
+  street?: string;
+
+  @IsOptional()
+  @IsString()
+  streetNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  locality?: string;
+
+  @IsOptional()
+  @IsString()
+  province?: string;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  postalCode?: string;
 }

@@ -140,9 +140,6 @@ export class WorkCentersService {
 
     const employerId = employerUserLink.employer.id;
 
-    console.log('🔍 Fetching work centers for employerId:', employerId);
-    console.log('🔍 Query filters:', query);
-
     // Simple approach: If clientId filter is provided, get client's work centers
     // Otherwise, get employer's work centers
     let whereCondition: any = {};
@@ -162,7 +159,6 @@ export class WorkCentersService {
       }
       if (!client) return { data: [], total: 0 };
       const numericClientId = client.id;
-      console.log('🔍 Filtering by clientId (resolved):', query.clientId, '->', numericClientId);
       
       // Verify employer has access to this client
       const association = await this.employerClientRepo.findOne({
@@ -173,17 +169,7 @@ export class WorkCentersService {
         },
       });
 
-      console.log('🔍 Employer-Client association found:', association ? 'YES' : 'NO');
-      if (association) {
-        console.log('🔍 Association details:', { 
-          id: association.id, 
-          employerId: association.employer?.id, 
-          clientId: association.client?.id 
-        });
-      }
-
       if (!association) {
-        console.log('❌ Employer does not have access to this client');
         return { data: [], total: 0 };
       }
 
@@ -194,28 +180,17 @@ export class WorkCentersService {
       whereCondition.clientId = null;
     }
 
-    console.log('🔍 About to query with whereCondition:', whereCondition);
-
     try {
       const workCenters = await this.workCenterRepo.find({ 
         where: whereCondition,
         order: { createdAt: 'DESC' }
       });
 
-      console.log('✅ Found work centers:', workCenters.length);
-      console.log('📋 Work centers:', workCenters.map(wc => ({ 
-        id: wc.id, 
-        name: wc.name, 
-        employerId: wc.employerId, 
-        clientId: wc.clientId 
-      })));
-
       return { 
         data: workCenters, 
         total: workCenters.length 
       };
     } catch (error) {
-      console.error('❌ Error querying work centers:', error);
       throw error;
     }
   }
@@ -226,10 +201,22 @@ export class WorkCentersService {
   async findOne(id: number, user: User): Promise<WorkCenter> {
     const workCenter = await this.workCenterRepo.findOne({
       where: { id },
+      relations: ['employer', 'client'],
     });
 
     if (!workCenter) {
       throw new NotFoundException('Work center not found');
+    }
+
+    // If no direct employer but has a client, resolve employer via employerClients bridge
+    if (!workCenter.employer && workCenter.clientId) {
+      const link = await this.employerClientRepo.findOne({
+        where: { client: { id: workCenter.clientId }, isActive: true },
+        relations: ['employer'],
+      });
+      if (link?.employer) {
+        workCenter.employer = link.employer;
+      }
     }
 
     // Verify access

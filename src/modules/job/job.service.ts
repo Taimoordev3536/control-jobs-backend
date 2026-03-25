@@ -2207,12 +2207,28 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * Uses database transaction to ensure atomic operations
    */
   /**
+   * Calculate the Haversine distance between two geographic points.
+   * Returns distance in meters.
+   */
+  private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const R = 6_371_000; // Earth's radius in meters
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  /**
    * Returns whether the current time falls within the allowed check-in window
    * for any of today's shifts: [baseStartTime - 30 min, baseEndTime + 2h].
    * FREE schedule type has no time restriction.
    * If no shifts are configured, check-in is allowed (shifts not mandatory).
+   * For GPS signing method: only checks that a shift EXISTS for today (no time window).
    */
-  private isWithinShiftWindow(job: Job, now: Date): { allowed: boolean; reason?: string } {
+  private isWithinShiftWindow(job: Job, now: Date, signingMethod?: string): { allowed: boolean; reason?: string } {
     if (job.scheduleType === ScheduleType.FREE) {
       return { allowed: true };
     }
@@ -2221,6 +2237,21 @@ async getAllJobsByWorkerFromToken(userId: number) {
     if (!activeSchedule || !activeSchedule.shifts?.length) {
       return { allowed: true };
     }
+
+    // GPS method: only require that a shift exists for today — no time-of-day restriction
+    if (signingMethod === 'gps') {
+      const todayWeekday = now.getDay(); // 0=Sunday
+      const hasShiftToday = activeSchedule.shifts.some(shift => {
+        const start = Number(shift.startWeekday ?? 0);
+        const end = Number(shift.endWeekday ?? 6);
+        return start <= end
+          ? todayWeekday >= start && todayWeekday <= end
+          : todayWeekday >= start || todayWeekday <= end;
+      });
+      if (hasShiftToday) return { allowed: true };
+      return { allowed: false, reason: 'No shift is scheduled for today' };
+    }
+
     const nowMins = now.getHours() * 60 + now.getMinutes();
     for (const shift of activeSchedule.shifts) {
       const [sh, sm] = shift.baseStartTime.split(':').map(Number);
@@ -2313,7 +2344,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
           if (!isScheduledToday) {
             throw new Error('This job is not scheduled for today. Check-in rejected.');
           }
-          const timeCheck = this.isWithinShiftWindow(job, localNow);
+          const timeCheck = this.isWithinShiftWindow(job, localNow, recordScanDto.signingMethod);
           if (!timeCheck.allowed) {
             throw new Error(timeCheck.reason || 'Check-in time is outside the allowed shift window.');
           }
@@ -2346,6 +2377,66 @@ async getAllJobsByWorkerFromToken(userId: number) {
             throw new Error(validationResult.message || 'Invalid or expired QR code');
           }
           validatedWorkCenterId = validationResult.workCenterId;
+        } else if (recordScanDto.signingMethod === 'gps' && !resolvedWorkCenterId && !recordScanDto.qrToken) {
+          // ── Standalone GPS: auto-select nearest GPS-active WC ──────────
+          if (recordScanDto.latitude == null || recordScanDto.longitude == null) {
+            throw new Error('GPS coordinates are required for GPS check-in');
+          }
+
+          // Filter only WCs where GPS is explicitly activated
+          const gpsActiveWcs = (job.workCenters || []).filter(
+            wc => wc.isGpsActive === true && wc.latitude != null && wc.longitude != null
+          );
+
+          if (gpsActiveWcs.length === 0) {
+            throw new Error('GPS check-in is not available — no work center has GPS activated');
+          }
+
+          // Calculate distance to each GPS-active WC and filter by radius
+          const validWcs = gpsActiveWcs
+            .map(wc => ({
+              id: wc.id,
+              name: wc.name,
+              distance: this.calculateDistance(
+                recordScanDto.latitude!,
+                recordScanDto.longitude!,
+                Number(wc.latitude),
+                Number(wc.longitude),
+              ),
+              allowedRadius: wc.gpsRadius ?? 100,
+            }))
+            .filter(wc => wc.distance <= wc.allowedRadius)
+            .sort((a, b) => a.distance - b.distance);
+
+          if (validWcs.length === 0) {
+            throw new Error('You are not in range of any work center');
+          }
+
+          // Select nearest GPS-active WC within range
+          validatedWorkCenterId = validWcs[0].id;
+          console.log(`GPS auto-selected WC: ${validWcs[0].name} (${Math.round(validWcs[0].distance)}m away)`);
+        } else if (recordScanDto.signingMethod === 'ip' && !resolvedWorkCenterId && !recordScanDto.qrToken) {
+          // ── Standalone IP: auto-select matching IP-active WC ──────────
+          if (!recordScanDto.ipAddress) {
+            throw new Error('IP address is required for IP check-in');
+          }
+
+          const ipActiveWcs = (job.workCenters || []).filter(
+            wc => wc.isIpActive === true && wc.allowedIp != null
+          );
+
+          if (ipActiveWcs.length === 0) {
+            throw new Error('IP check-in is not available — no work center has IP check-in activated');
+          }
+
+          const matchingWc = ipActiveWcs.find(wc => wc.allowedIp === recordScanDto.ipAddress);
+
+          if (!matchingWc) {
+            throw new Error(`Your IP address (${recordScanDto.ipAddress}) does not match any work center's allowed IP`);
+          }
+
+          validatedWorkCenterId = matchingWc.id;
+          console.log(`IP auto-selected WC: ${matchingWc.name} (IP: ${recordScanDto.ipAddress})`);
         }
 
         // WorkCenter membership check
@@ -2356,9 +2447,27 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
         }
 
+        // ── IP validation (check-in only) ──────────────────────────
+        if (
+          recordScanDto.scanType === 'check-in' &&
+          recordScanDto.signingMethod === 'ip' &&
+          validatedWorkCenterId
+        ) {
+          const resolvedWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
+          if (resolvedWc) {
+            if (!resolvedWc.isIpActive) {
+              throw new Error('IP check-in is not activated for this work center');
+            }
+            if (resolvedWc.allowedIp && resolvedWc.allowedIp !== recordScanDto.ipAddress) {
+              throw new Error(`Your IP address does not match the allowed IP for "${resolvedWc.name}"`);
+            }
+          }
+        }
+
         // ── GPS proximity enforcement (check-in only) ──────────────────────────
         // If the resolved work center has GPS coordinates AND the worker sent their
         // coordinates, enforce that the worker is within the allowed radius.
+        // Note: For standalone GPS flow, proximity was already validated during auto-selection above.
         if (
           recordScanDto.scanType === 'check-in' &&
           validatedWorkCenterId &&
@@ -2366,17 +2475,21 @@ async getAllJobsByWorkerFromToken(userId: number) {
           recordScanDto.longitude != null
         ) {
           const resolvedWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
+
+          // Validate GPS activation for GPS method
+          if (recordScanDto.signingMethod === 'gps' && resolvedWc) {
+            if (!resolvedWc.isGpsActive) {
+              throw new Error('GPS check-in is not activated for this work center');
+            }
+          }
+
           if (resolvedWc && resolvedWc.latitude != null && resolvedWc.longitude != null) {
-            const toRad = (deg: number) => (deg * Math.PI) / 180;
-            const R = 6_371_000;
-            const lat1 = toRad(recordScanDto.latitude);
-            const lat2 = toRad(Number(resolvedWc.latitude));
-            const dLat = toRad(Number(resolvedWc.latitude) - recordScanDto.latitude);
-            const dLon = toRad(Number(resolvedWc.longitude) - recordScanDto.longitude);
-            const a =
-              Math.sin(dLat / 2) ** 2 +
-              Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-            const distanceMeters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const distanceMeters = this.calculateDistance(
+              recordScanDto.latitude,
+              recordScanDto.longitude,
+              Number(resolvedWc.latitude),
+              Number(resolvedWc.longitude),
+            );
             const allowedRadius = resolvedWc.gpsRadius ?? 100;
             if (distanceMeters > allowedRadius) {
               throw new Error(

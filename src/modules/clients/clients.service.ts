@@ -327,7 +327,7 @@ export class ClientsService {
         landline: c.landline,
         mobile: c.mobile,
         active: c.active,
-        asset: c.status === 'Active' ? 'yeah' : 'no',
+        asset: c.active ? 'yeah' : 'no',
       };
     });
   }
@@ -389,7 +389,7 @@ export class ClientsService {
       type: c.type,
       responsible: c.responsible,
       telephones: c.mobile,
-      asset: c.status === 'Active' ? 'yeah' : 'no',
+      asset: c.active ? 'yeah' : 'no',
       isSelf: ownClientIds.includes(c.id),
       isEmployer: false,
     };
