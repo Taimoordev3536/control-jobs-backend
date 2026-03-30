@@ -320,7 +320,7 @@ export class ClientsService {
       return {
         id: c.id,
         publicId: c.publicId,
-        name: clientIdToUserName.get(c.id) || c.name || '',
+        name: c.name || clientIdToUserName.get(c.id) || '',
         city: c.city || '',
         type: c.type,
         responsible: c.responsible,
