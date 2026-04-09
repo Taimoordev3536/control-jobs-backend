@@ -392,6 +392,11 @@ export class ClientsService {
       asset: c.active ? 'yeah' : 'no',
       isSelf: ownClientIds.includes(c.id),
       isEmployer: false,
+      // Summer period (DD/MM) — drives the read-only summer date display in
+      // the Add Job modal so the employer can't edit them per-job. Same names
+      // as SeasonalSchedule.startDate/endDate on the job side for consistency.
+      summerStartDate: c.summerStartDate || null,
+      summerEndDate: c.summerEndDate || null,
     };
   });
 
@@ -411,7 +416,9 @@ export class ClientsService {
     asset: 'yeah',
     isSelf: true,
     isEmployer: true,
-  });
+    summerStartDate: null,
+    summerEndDate: null,
+  } as any);
 
   return result;
 }

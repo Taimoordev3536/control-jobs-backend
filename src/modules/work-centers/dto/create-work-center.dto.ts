@@ -1,4 +1,5 @@
-import { IsString, IsOptional, IsEmail, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsEmail, IsNumber, ValidateIf } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateWorkCenterDto {
   @IsString()
@@ -39,9 +40,14 @@ export class CreateWorkCenterDto {
   @IsOptional()
   contactPhone?: string;
 
+  // contactEmail is optional. Empty string is coerced to null and validation is skipped
+  // when the field is null/undefined, so the user can leave it blank or clear an existing
+  // value without tripping @IsEmail().
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? null : value))
+  @ValidateIf((o) => o.contactEmail !== null && o.contactEmail !== undefined)
   @IsEmail()
   @IsOptional()
-  contactEmail?: string;
+  contactEmail?: string | null;
 
   @IsString()
   @IsOptional()

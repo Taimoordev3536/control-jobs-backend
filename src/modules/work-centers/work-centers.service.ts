@@ -250,7 +250,9 @@ export class WorkCentersService {
       country: dto.country ?? workCenter.country,
       contactName: dto.contactName ?? workCenter.contactName,
       contactPhone: dto.contactPhone ?? workCenter.contactPhone,
-      contactEmail: dto.contactEmail ?? workCenter.contactEmail,
+      // Use `=== undefined` (not `??`) so an explicit `null` from the client clears
+      // the existing email. With `??`, sending null would silently keep the old value.
+      contactEmail: dto.contactEmail === undefined ? workCenter.contactEmail : dto.contactEmail,
       landline: dto.landline ?? workCenter.landline,
       postalCode: dto.postalCode ?? workCenter.postalCode,
       observations: dto.observations ?? workCenter.observations,

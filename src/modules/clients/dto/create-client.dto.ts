@@ -65,6 +65,16 @@ export class CreateClientDto {
   @IsString()
   summerSchedule: string;
 
+  // Summer period start/end (DD/MM). Mirrors SeasonalSchedule.startDate/endDate
+  // naming so the same logic from the job side can be reused unchanged.
+  @IsString()
+  @IsOptional()
+  summerStartDate?: string;
+
+  @IsString()
+  @IsOptional()
+  summerEndDate?: string;
+
   @IsString()
   @IsOptional()
   accessAccountStatus?: 'postpone' | 'request'; // ✅ New field

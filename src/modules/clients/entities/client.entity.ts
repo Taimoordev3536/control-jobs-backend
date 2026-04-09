@@ -41,6 +41,18 @@ export class Client {
   @Column({ name: 'summer_schedule', nullable: true })
   summerSchedule: string;
 
+  // Summer period boundaries (DD/MM strings) — source of truth for any job
+  // belonging to this client. Mirrors the naming convention used by
+  // SeasonalSchedule.startDate / endDate so the same logic in
+  // job.service.ts (see ~line 1547) can be reused without translation.
+  // Between summerStartDate and summerEndDate, the job's summer shifts apply;
+  // outside this window, the normal/year-round shifts apply.
+  @Column({ name: 'summer_start_date', nullable: true })
+  summerStartDate: string;
+
+  @Column({ name: 'summer_end_date', nullable: true })
+  summerEndDate: string;
+
   @Column({ name: 'access_account_status', default: 'postpone' })
   accessAccountStatus: 'postpone' | 'request'; // ✅ New field from UI
 
