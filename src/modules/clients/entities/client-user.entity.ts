@@ -7,6 +7,7 @@ import {
 } from 'typeorm';
 import { Client } from './client.entity';
 import { User } from '../../users/entities/user.entity';
+import { SubUserPermission } from '../../auth/enums/sub-user-permission.enum';
 
 @Entity('clients_users')
 export class ClientUser {
@@ -29,4 +30,19 @@ export class ClientUser {
 
   @Column({ default: false })
   isDefault: boolean;
+
+  @Column({
+    name: 'permission',
+    type: 'enum',
+    enum: SubUserPermission,
+    nullable: true,
+  })
+  permission: SubUserPermission | null;
+
+  @Column({ name: 'parent_user_id', nullable: true })
+  parentUserId: number | null;
+
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'parent_user_id' })
+  parentUser: User | null;
 }

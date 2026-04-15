@@ -35,6 +35,9 @@ export class User {
   @Column({ name: 'partner_id', nullable: true })
   partnerId: number;
 
+  @Column({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

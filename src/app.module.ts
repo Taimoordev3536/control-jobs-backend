@@ -13,6 +13,8 @@ import { QrCodeModule } from './modules/qr-code/qr-code.module';
 import { WorkCentersModule } from './modules/work-centers/work-centers.module';
 import { config } from 'dotenv';
 import { AlertsModule } from './modules/realtime/alerts.module';
+import { ManualAttendanceModule } from './modules/manual-attendance/manual-attendance.module';
+import { SubUsersModule } from './modules/sub-users/sub-users.module';
 
 config();
 
@@ -52,6 +54,8 @@ config();
     QrCodeModule,
     WorkCentersModule,
     AlertsModule,
+    ManualAttendanceModule,
+    SubUsersModule,
   ],
 })
 export class AppModule { }

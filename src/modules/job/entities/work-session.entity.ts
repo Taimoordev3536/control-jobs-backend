@@ -50,6 +50,9 @@ export class WorkSession {
   @Column({ type: 'varchar', length: 20, nullable: true, name: 'check_out_method' })
   checkOutMethod?: string; // 'web', 'ip', 'gps', 'qrcode'
 
+  @Column({ type: 'varchar', length: 20, default: 'SCAN' })
+  source: string; // 'SCAN' (normal real-time) or 'MANUAL' (from approved manual request)
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

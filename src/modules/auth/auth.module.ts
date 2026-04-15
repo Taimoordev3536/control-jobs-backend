@@ -13,17 +13,19 @@ import { Role } from '../users/entities/role.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { RolesGuard } from './guards/roles.guard';
 import { CaslGuard } from './guards/casl.guard';
+import { ViewOnlyBlockerInterceptor } from './guards/view-only-blocker.guard';
 import { AbilityFactory } from './casl/ability.factory';
 import { CaslModule } from './casl/casl.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CommonModule } from '../../common/common.module';
 import { Partner } from '../partners/entities/partner.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
+import { ClientUser } from '../clients/entities/client-user.entity';
 
 @Module({
   imports: [
     ConfigModule,
-  TypeOrmModule.forFeature([Role, Partner, PartnerUser, EmployerUser]),
+  TypeOrmModule.forFeature([Role, Partner, PartnerUser, EmployerUser, ClientUser]),
     OTPModule,
     PassportModule,
     JwtModule.registerAsync({
@@ -53,8 +55,9 @@ import { PartnerUser } from '../partners/entities/partner-user.entity';
     JwtStrategy,
     RolesGuard,
     CaslGuard,
+    ViewOnlyBlockerInterceptor,
     AbilityFactory,
   ],
-  exports: [AuthService, RolesGuard, CaslGuard, AbilityFactory, CaslModule],
+  exports: [AuthService, RolesGuard, CaslGuard, ViewOnlyBlockerInterceptor, AbilityFactory, CaslModule],
 })
 export class AuthModule { }

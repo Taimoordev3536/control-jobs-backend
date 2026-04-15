@@ -50,6 +50,9 @@ export class ScanLog {
   @Column({ type: 'text', nullable: true, name: 'qr_token' })
   qrToken?: string;
 
+  @Column({ type: 'varchar', length: 20, default: 'SCAN' })
+  source: string; // 'SCAN' (normal real-time) or 'MANUAL' (from approved manual request)
+
   // Relations
   @ManyToOne(() => Job, job => job.scanLogs)
   @JoinColumn({ name: 'job_id' })

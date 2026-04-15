@@ -10,6 +10,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import { ViewOnlyBlockerInterceptor } from './modules/auth/guards/view-only-blocker.guard';
 
 async function bootstrap() {
   const server = express();
@@ -31,8 +32,11 @@ async function bootstrap() {
     forbidNonWhitelisted: true,
   }));
 
-  // Use global response interceptor
-  app.useGlobalInterceptors(new TransformInterceptor());
+  // Use global response interceptor + VIEW_ONLY sub-user write blocker
+  app.useGlobalInterceptors(
+    new ViewOnlyBlockerInterceptor(),
+    new TransformInterceptor(),
+  );
 
   // Use global exception filter
   app.useGlobalFilters(new HttpExceptionFilter());

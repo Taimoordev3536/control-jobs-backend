@@ -4,7 +4,13 @@ import { Repository } from 'typeorm';
 import { Notification } from './entities/notification.entity';
 import { AlertsGateway } from './alerts.gateway';
 
-export type AlertType = 'CHECK_IN' | 'CHECK_OUT';
+export type AlertType =
+  | 'CHECK_IN'
+  | 'CHECK_OUT'
+  | 'MANUAL_ATTENDANCE_REQUESTED'
+  | 'MANUAL_ATTENDANCE_APPROVED'
+  | 'MANUAL_ATTENDANCE_REJECTED'
+  | 'MANUAL_ATTENDANCE_CANCELLED';
 export interface AlertPayload {
   type: AlertType;
   jobId: number;
