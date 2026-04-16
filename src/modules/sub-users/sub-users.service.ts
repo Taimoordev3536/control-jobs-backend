@@ -13,6 +13,7 @@ import * as bcrypt from 'bcrypt';
 
 import { User } from '../users/entities/user.entity';
 import { Role } from '../users/entities/role.entity';
+import { AdminUser } from '../users/entities/admin-user.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
@@ -21,7 +22,7 @@ import { SubUserPermission } from '../auth/enums/sub-user-permission.enum';
 import { CreateSubUserDto } from './dto/create-sub-user.dto';
 import { UpdateSubUserDto } from './dto/update-sub-user.dto';
 
-type ScopeType = 'partner' | 'employer' | 'client';
+type ScopeType = 'admin' | 'partner' | 'employer' | 'client';
 
 interface RequesterScope {
   scope: ScopeType;
@@ -49,6 +50,7 @@ export class SubUsersService {
   constructor(
     @InjectRepository(User) private usersRepo: Repository<User>,
     @InjectRepository(Role) private rolesRepo: Repository<Role>,
+    @InjectRepository(AdminUser) private adminUserRepo: Repository<AdminUser>,
     @InjectRepository(PartnerUser) private partnerUserRepo: Repository<PartnerUser>,
     @InjectRepository(EmployerUser) private employerUserRepo: Repository<EmployerUser>,
     @InjectRepository(ClientUser) private clientUserRepo: Repository<ClientUser>,
@@ -70,6 +72,18 @@ export class SubUsersService {
 
     if (!userId) {
       throw new UnauthorizedException('Invalid requester');
+    }
+
+    if (roleValue === UserRole.Admin) {
+      // Admin users don't have an external entity; use their own user ID as the entity reference.
+      let link = await this.adminUserRepo.findOne({ where: { userId, isDefault: true } });
+      if (!link) {
+        // Auto-create the default AdminUser row on first access so existing admins work seamlessly.
+        link = await this.adminUserRepo.save(
+          this.adminUserRepo.create({ userId, isDefault: true, permission: null, parentUserId: null }),
+        );
+      }
+      return { scope: 'admin', entityId: userId, roleId: requester.roleId };
     }
 
     if (roleValue === UserRole.Partner) {
@@ -128,7 +142,13 @@ export class SubUsersService {
     const scope = await this.resolveRequesterScope(requester);
     const rows: SubUserRow[] = [];
 
-    if (scope.scope === 'partner') {
+    if (scope.scope === 'admin') {
+      const links = await this.adminUserRepo.find({
+        where: { parentUserId: requester.id },
+        relations: ['user'],
+      });
+      for (const l of links) rows.push(this.mapRow(l.id, 'admin', l.user, l.permission, requester.id));
+    } else if (scope.scope === 'partner') {
       const links = await this.partnerUserRepo.find({
         where: { parentUserId: requester.id, partnerId: scope.entityId },
         relations: ['user'],
@@ -202,7 +222,15 @@ export class SubUsersService {
     } as Partial<User>);
     const savedUser = await this.usersRepo.save(user);
 
-    if (scope.scope === 'partner') {
+    if (scope.scope === 'admin') {
+      const link = this.adminUserRepo.create({
+        userId: savedUser.id,
+        isDefault: false,
+        permission: dto.permission,
+        parentUserId: requester.id,
+      });
+      await this.adminUserRepo.save(link);
+    } else if (scope.scope === 'partner') {
       const link = this.partnerUserRepo.create({
         partnerId: scope.entityId,
         userId: savedUser.id,
@@ -239,6 +267,9 @@ export class SubUsersService {
 
   private async loadJunctionForUser(subUserId: number, parentUserId: number) {
     const candidates = await Promise.all([
+      this.adminUserRepo
+        .findOne({ where: { userId: subUserId, parentUserId }, relations: ['user'] })
+        .then((r) => (r ? { scope: 'admin' as ScopeType, row: r } : null)),
       this.partnerUserRepo
         .findOne({ where: { userId: subUserId, parentUserId }, relations: ['user'] })
         .then((r) => (r ? { scope: 'partner' as ScopeType, row: r } : null)),
@@ -258,7 +289,12 @@ export class SubUsersService {
     if (!found) throw new NotFoundException('Sub-user not found');
 
     if (dto.permission) {
-      if (found.scope === 'partner') {
+      if (found.scope === 'admin') {
+        await this.adminUserRepo.update(
+          { id: (found.row as AdminUser).id },
+          { permission: dto.permission },
+        );
+      } else if (found.scope === 'partner') {
         await this.partnerUserRepo.update(
           { id: (found.row as PartnerUser).id },
           { permission: dto.permission },

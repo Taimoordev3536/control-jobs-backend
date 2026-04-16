@@ -5,11 +5,15 @@ import {
   UseGuards,
   Get,
   Request,
+  Ip,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ImpersonateDto } from './dto/impersonate.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RolesGuard } from './guards/roles.guard';
+import { Roles } from './decorators/roles.decorator';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 
 @Controller('auth')
@@ -62,5 +66,40 @@ export class AuthController {
       data: subUser,
       developerError: '',
     };
+  }
+
+  /**
+   * Returns the current session's impersonation context.
+   * Used by the frontend to show the impersonation banner.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('me/impersonation-context')
+  async getImpersonationContext(@Request() req): Promise<BaseResponse> {
+    const impersonation = req.user?.impersonation || { isImpersonating: false };
+    return {
+      isSuccess: true,
+      statusCode: 200,
+      message: 'Impersonation context',
+      data: impersonation,
+      developerError: '',
+    };
+  }
+
+  /**
+   * Impersonate a child user. Opens an impersonated session for the target user.
+   * Only Admin(1), Partner(2), Employer(3) can impersonate.
+   * Admin → Partner, Employer
+   * Partner → Employer (own only)
+   * Employer → Client, Worker (own only)
+   */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1, 2, 3)
+  @Post('impersonate')
+  async impersonate(
+    @Request() req,
+    @Body() dto: ImpersonateDto,
+    @Ip() ip: string,
+  ): Promise<BaseResponse> {
+    return this.authService.impersonate(req.user, dto, ip);
   }
 }

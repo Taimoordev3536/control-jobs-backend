@@ -19,13 +19,21 @@ import { CaslModule } from './casl/casl.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CommonModule } from '../../common/common.module';
 import { Partner } from '../partners/entities/partner.entity';
+import { Employer } from '../employers/entities/employer.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
+import { EmployerClient } from '../employers/entities/employer-client.entity';
+import { EmployerWorker } from '../employers/entities/employer-worker.entity';
+import { Client } from '../clients/entities/client.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
+import { Worker } from '../workers/entities/worker.entity';
+import { WorkerUser } from '../workers/entities/worker-user.entity';
+import { AdminUser } from '../users/entities/admin-user.entity';
+import { ImpersonationLog } from './entities/impersonation-log.entity';
 
 @Module({
   imports: [
     ConfigModule,
-  TypeOrmModule.forFeature([Role, Partner, PartnerUser, EmployerUser, ClientUser]),
+  TypeOrmModule.forFeature([Role, Partner, Employer, AdminUser, PartnerUser, EmployerUser, EmployerClient, EmployerWorker, Client, ClientUser, Worker, WorkerUser, ImpersonationLog]),
     OTPModule,
     PassportModule,
     JwtModule.registerAsync({

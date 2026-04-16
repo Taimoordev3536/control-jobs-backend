@@ -25,43 +25,43 @@ export class SubUsersController {
 
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Partner, UserRole.Employer, UserRole.Client)
+  @Roles(UserRole.Admin, UserRole.Partner, UserRole.Employer, UserRole.Client)
   async list(@Request() req) {
     const data = await this.service.list(req.user);
-    return { isSuccess: true, statusCode: 200, message: 'Sub-users retrieved', data };
+    return { isSuccess: true, statusCode: 200, message: 'Members retrieved', data };
   }
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Partner, UserRole.Employer, UserRole.Client)
+  @Roles(UserRole.Admin, UserRole.Partner, UserRole.Employer, UserRole.Client)
   async create(@Request() req, @Body() dto: CreateSubUserDto) {
     const data = await this.service.create(req.user, dto);
-    return { isSuccess: true, statusCode: 201, message: 'Sub-user invited', data };
+    return { isSuccess: true, statusCode: 201, message: 'Member invited', data };
   }
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Partner, UserRole.Employer, UserRole.Client)
+  @Roles(UserRole.Admin, UserRole.Partner, UserRole.Employer, UserRole.Client)
   async update(
     @Request() req,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateSubUserDto,
   ) {
     const data = await this.service.update(req.user, id, dto);
-    return { isSuccess: true, statusCode: 200, message: 'Sub-user updated', data };
+    return { isSuccess: true, statusCode: 200, message: 'Member updated', data };
   }
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Partner, UserRole.Employer, UserRole.Client)
+  @Roles(UserRole.Admin, UserRole.Partner, UserRole.Employer, UserRole.Client)
   async remove(@Request() req, @Param('id', ParseIntPipe) id: number) {
     const data = await this.service.remove(req.user, id);
-    return { isSuccess: true, statusCode: 200, message: 'Sub-user deactivated', data };
+    return { isSuccess: true, statusCode: 200, message: 'Member deactivated', data };
   }
 
   @Post(':id/reset-password')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Partner, UserRole.Employer, UserRole.Client)
+  @Roles(UserRole.Admin, UserRole.Partner, UserRole.Employer, UserRole.Client)
   async resetPassword(@Request() req, @Param('id', ParseIntPipe) id: number) {
     const data = await this.service.resetPassword(req.user, id);
     return { isSuccess: true, statusCode: 200, message: 'Password reset link generated', data };
@@ -69,7 +69,7 @@ export class SubUsersController {
 
   @Post(':id/resend-invite')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.Partner, UserRole.Employer, UserRole.Client)
+  @Roles(UserRole.Admin, UserRole.Partner, UserRole.Employer, UserRole.Client)
   async resendInvite(@Request() req, @Param('id', ParseIntPipe) id: number) {
     const data = await this.service.resendInvite(req.user, id);
     return { isSuccess: true, statusCode: 200, message: 'Invite re-generated', data };

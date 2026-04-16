@@ -8,6 +8,7 @@ import { UsersService } from '../../users/users.service';
 import { AbilityFactory, SubUserContext } from '../casl/ability.factory';
 import { User } from '../../users/entities/user.entity';
 import { Role } from '../../users/entities/role.entity';
+import { AdminUser } from '../../users/entities/admin-user.entity';
 import { PartnerUser } from '../../partners/entities/partner-user.entity';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { ClientUser } from '../../clients/entities/client-user.entity';
@@ -18,6 +19,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private configService: ConfigService,
     private usersService: UsersService,
     private abilityFactory: AbilityFactory,
+    @InjectRepository(AdminUser)
+    private adminUserRepo: Repository<AdminUser>,
     @InjectRepository(PartnerUser)
     private partnerUserRepo: Repository<PartnerUser>,
     @InjectRepository(EmployerUser)
@@ -62,9 +65,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
 
     const subUserContext = await this.loadSubUserContext(user.id);
-    const ability = this.abilityFactory.createForUser(userWithRole, subUserContext);
 
-    return { ...userWithRole, ability, subUser: subUserContext };
+    const impersonationContext = {
+      isImpersonating: payload.isImpersonating || false,
+      impersonatorUserId: payload.impersonatorUserId || null,
+      impersonatorRole: payload.impersonatorRole || null,
+    };
+
+    const ability = this.abilityFactory.createForUser(userWithRole, subUserContext, impersonationContext);
+
+    return { ...userWithRole, ability, subUser: subUserContext, impersonation: impersonationContext };
   }
 
   /**
@@ -73,23 +83,26 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
    * with parent_user_id set (and is_default = false).
    */
   private async loadSubUserContext(userId: number): Promise<SubUserContext> {
-    const [partnerLink, employerLink, clientLink] = await Promise.all([
+    const [adminLink, partnerLink, employerLink, clientLink] = await Promise.all([
+      this.adminUserRepo.findOne({ where: { userId, isDefault: false } }),
       this.partnerUserRepo.findOne({ where: { userId, isDefault: false } }),
       this.employerUserRepo.findOne({ where: { user: { id: userId }, isDefault: false } }),
       this.clientUserRepo.findOne({ where: { userId, isDefault: false } }),
     ]);
 
-    const link = partnerLink ?? employerLink ?? clientLink;
+    const link = adminLink ?? partnerLink ?? employerLink ?? clientLink;
 
     if (!link || !link.parentUserId) {
       return { isSubUser: false };
     }
 
-    const scopeType = partnerLink
-      ? 'partner'
-      : employerLink
-        ? 'employer'
-        : 'client';
+    const scopeType = adminLink
+      ? 'admin'
+      : partnerLink
+        ? 'partner'
+        : employerLink
+          ? 'employer'
+          : 'client';
 
     return {
       isSubUser: true,

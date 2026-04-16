@@ -25,7 +25,13 @@ export interface SubUserContext {
   isSubUser: boolean;
   permission?: SubUserPermission | null;
   parentUserId?: number | null;
-  scopeType?: 'partner' | 'employer' | 'client' | null;
+  scopeType?: 'admin' | 'partner' | 'employer' | 'client' | null;
+}
+
+export interface ImpersonationContext {
+  isImpersonating: boolean;
+  impersonatorUserId?: number | null;
+  impersonatorRole?: string | null;
 }
 
 @Injectable()
@@ -36,7 +42,7 @@ export class AbilityFactory {
    * A sub-user inherits the parent's role-based abilities. If their
    * permission is VIEW_ONLY we strip all write actions down to Read.
    */
-  createForUser(user: User, subUserContext?: SubUserContext) {
+  createForUser(user: User, subUserContext?: SubUserContext, impersonationContext?: ImpersonationContext) {
     const { can, cannot, build } = new AbilityBuilder<PureAbility<[Action, Subjects]>>(
       PureAbility as AbilityClass<AppAbility>,
     );
@@ -67,6 +73,7 @@ export class AbilityFactory {
     }
 
     // VIEW_ONLY sub-users lose every write action regardless of role.
+    // ADMIN and EDIT sub-users keep full write access for their role.
     if (subUserContext?.isSubUser && subUserContext.permission === SubUserPermission.VIEW_ONLY) {
       cannot(Action.Manage, 'all');
       cannot(Action.Create, 'all');
@@ -79,6 +86,12 @@ export class AbilityFactory {
     // Sub-users (any permission) cannot manage other sub-users.
     if (subUserContext?.isSubUser) {
       cannot(Action.ManageUsers, 'all');
+    }
+
+    // Impersonated sessions: block member management and password changes.
+    if (impersonationContext?.isImpersonating) {
+      cannot(Action.ManageUsers, 'all');
+      cannot(Action.ManageRoles, 'all');
     }
 
     return build({
