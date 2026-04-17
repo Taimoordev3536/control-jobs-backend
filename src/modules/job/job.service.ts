@@ -4491,6 +4491,124 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     }
   }
 
+  /**
+   * Get all work session records for the signed-in worker.
+   * Mirrors getEmployerWorkSessionRecords but scoped to the worker.
+   */
+  async getWorkerWorkSessionRecords(
+    workerUserId: number,
+    jobId?: number,
+    startDate?: string,
+    endDate?: string,
+  ): Promise<any> {
+    try {
+      // Resolve worker id from user id via the workers_users junction
+      const workerUserLink = await this.dataSource.getRepository('WorkerUser').findOne({
+        where: { user: { id: workerUserId } },
+        relations: ['worker', 'user'],
+      }) as any;
+
+      if (!workerUserLink || !workerUserLink.worker) {
+        return {
+          message: 'Worker not found for this user',
+          data: [],
+          isSuccess: false,
+          statusCode: 404,
+          developerError: 'No worker association found for user ID ' + workerUserId,
+        };
+      }
+
+      const workerId = workerUserLink.worker.id;
+
+      const query = this.workSessionRepo.createQueryBuilder('workSession')
+        .leftJoinAndSelect('workSession.job', 'job')
+        .leftJoinAndSelect('job.client', 'client')
+        .leftJoinAndSelect('job.employer', 'employer')
+        .leftJoinAndSelect('workSession.worker', 'worker')
+        .leftJoinAndSelect('worker.user', 'workerUser')
+        .where('worker.id = :workerId', { workerId });
+
+      if (jobId) {
+        query.andWhere('job.id = :jobId', { jobId });
+      }
+      if (startDate) {
+        query.andWhere('workSession.checkInTime >= :startDate', { startDate });
+      }
+      if (endDate) {
+        const endDatePlusOne = new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1));
+        query.andWhere('workSession.checkInTime < :endDate', { endDate: endDatePlusOne });
+      }
+
+      query.orderBy('workSession.checkInTime', 'DESC');
+
+      const workSessions = await query.getMany();
+
+      const formattedRecords = workSessions.map(session => {
+        const checkInDate = new Date(session.checkInTime);
+        const checkOutDate = session.checkOutTime ? new Date(session.checkOutTime) : null;
+
+        const formatDate = (date: Date) =>
+          `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+
+        const fecha = checkOutDate
+          ? `${formatDate(checkInDate)} - ${formatDate(checkOutDate)}`
+          : `${formatDate(checkInDate)} - En progreso`;
+
+        const entrada = `${String(checkInDate.getHours()).padStart(2, '0')}:${String(checkInDate.getMinutes()).padStart(2, '0')}`;
+        const salida = checkOutDate
+          ? `${String(checkOutDate.getHours()).padStart(2, '0')}:${String(checkOutDate.getMinutes()).padStart(2, '0')}`
+          : session.isActive ? 'En progreso' : '-';
+
+        const totalHours = Math.floor(session.totalWorkMinutes / 60);
+        const totalMinutes = session.totalWorkMinutes % 60;
+        const total = `${totalHours}h ${totalMinutes}m`;
+
+        const alerts: string[] = [];
+        if (session.isActive && !session.checkOutTime) alerts.push('Sesión activa');
+        if (session.totalBreakMinutes > 60) alerts.push('Descanso largo');
+
+        return {
+          id: session.publicId || session.id.toString(),
+          workSessionId: session.id,
+          workSessionPublicId: session.publicId,
+          jobId: session.job?.id,
+          jobPublicId: session.job?.publicId,
+          fecha,
+          titular: session.job?.employer?.name || 'N/A',
+          job: session.job?.jobName || 'N/A',
+          client: session.job?.client?.name || 'N/A',
+          entrada,
+          salida,
+          total,
+          totalWorkMinutes: session.totalWorkMinutes,
+          totalBreakMinutes: session.totalBreakMinutes,
+          alerts: alerts.length > 0 ? alerts.join(', ') : 'None',
+          isActive: session.isActive,
+          isOnBreak: session.isOnBreak,
+          source: session.source,
+          checkInTime: session.checkInTime,
+          checkOutTime: session.checkOutTime,
+        };
+      });
+
+      return {
+        message: 'Success',
+        data: formattedRecords,
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    } catch (error) {
+      return {
+        message: 'Failed to fetch work session records',
+        data: [],
+        isSuccess: false,
+        statusCode: 500,
+        developerError: error.message,
+      };
+    }
+  }
+
   // Get detailed work session with scans and tasks grouped by date
   async getWorkSessionDetail(employerUserId: number, workSessionId: number): Promise<any> {
     try {

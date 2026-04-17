@@ -410,4 +410,22 @@ async getAllJobsForClientFromToken(@Req() req) {
     return await this.jobService.getWorkSessionDetail(userId, ws);
   }
 
+  // ========== Worker Records Endpoint ========== //
+
+  @UseGuards(JwtAuthGuard)
+  @Get('worker/work-session-records')
+  async getWorkerWorkSessionRecords(
+    @Req() req,
+    @Query('jobId') jobId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ): Promise<any> {
+    const userId = req.user?.id;
+    let numericJobId: number | undefined;
+    if (jobId) {
+      numericJobId = await this.jobService.resolvePublicId(jobId);
+    }
+    return await this.jobService.getWorkerWorkSessionRecords(userId, numericJobId, startDate, endDate);
+  }
+
 }
