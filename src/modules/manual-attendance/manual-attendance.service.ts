@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+import { Repository, DataSource, Between, MoreThanOrEqual, LessThanOrEqual, In } from 'typeorm';
 import { isUUID } from 'class-validator';
 import { ManualAttendanceRequest } from './entities/manual-attendance-request.entity';
 import { ManualAttendancePermission } from './entities/manual-attendance-permission.entity';
@@ -472,7 +472,7 @@ export class ManualAttendanceService {
     // Reload with relations
     const updated = await this.requestRepo.findOne({
       where: { id: request.id },
-      relations: ['job', 'worker', 'workCenter', 'resultWorkSession', 'requestedByUser', 'reviewedByUser'],
+      relations: ['job', 'job.client', 'worker', 'worker.user', 'workCenter', 'resultWorkSession', 'requestedByUser', 'reviewedByUser'],
     });
 
     // Notify worker
@@ -632,6 +632,72 @@ export class ManualAttendanceService {
     return this.requestRepo.save(request);
   }
 
+  // ─── Helper: attach the worker's human-readable name to each request ─
+  // The Worker entity has NO `name` column. Names are stored on the linked
+  // User via the `workers_users` join table. This helper looks those names
+  // up and attaches them as a top-level `name` field on `request.worker`
+  // (matching the pattern used by WorkersService.findOne / findAll).
+  private async enrichWorkerUsers(
+    requests: ManualAttendanceRequest[],
+  ): Promise<ManualAttendanceRequest[]> {
+    if (!requests.length) return requests;
+
+    const workerIds = requests
+      .filter((r) => r.worker)
+      .map((r) => r.worker.id);
+
+    const uniqueIds = [...new Set(workerIds)];
+    if (!uniqueIds.length) return requests;
+
+    // Query by workerId column directly — simpler than walking the relation
+    const workerUsers = await this.workerUserRepo.find({
+      where: { workerId: In(uniqueIds) },
+      relations: ['user'],
+    });
+
+    const byWorkerId = new Map<
+      number,
+      { name?: string; firstName?: string; lastName?: string; email?: string }
+    >();
+    for (const wu of workerUsers) {
+      if (wu.workerId && wu.user) {
+        byWorkerId.set(wu.workerId, {
+          name: wu.user.name,
+          firstName: wu.user.firstName,
+          lastName: wu.user.lastName,
+          email: (wu.user as any).email,
+        });
+      }
+    }
+
+    for (const r of requests) {
+      if (!r.worker) continue;
+      const u = byWorkerId.get(r.worker.id);
+      if (!u) continue;
+
+      // Top-level `name` — what the frontend (and the workers listing) reads
+      const display =
+        u.name ||
+        [u.firstName, u.lastName].filter(Boolean).join(' ').trim() ||
+        undefined;
+      if (display && !(r.worker as any).name) {
+        (r.worker as any).name = display;
+      }
+
+      // Nested `user` — defensive, for callers that read w.user?.name
+      if (!(r.worker as any).user?.name) {
+        (r.worker as any).user = {
+          name: u.name,
+          firstName: u.firstName,
+          lastName: u.lastName,
+          email: u.email,
+        };
+      }
+    }
+
+    return requests;
+  }
+
   // ─── Query Requests ───────────────────────────────────────────────
 
   async getRequests(
@@ -642,9 +708,10 @@ export class ManualAttendanceService {
 
     const qb = this.requestRepo.createQueryBuilder('r')
       .leftJoinAndSelect('r.job', 'job')
+      .leftJoinAndSelect('job.client', 'client')
       .leftJoin('job.employer', 'employer')
-      .leftJoin('job.client', 'client')
       .leftJoinAndSelect('r.worker', 'worker')
+      .leftJoinAndSelect('worker.user', 'workerUser')
       .leftJoinAndSelect('r.workCenter', 'workCenter')
       .leftJoinAndSelect('r.requestedByUser', 'requestedByUser')
       .leftJoinAndSelect('r.reviewedByUser', 'reviewedByUser')
@@ -681,24 +748,26 @@ export class ManualAttendanceService {
       qb.andWhere('r.requested_date <= :endDate', { endDate: query.endDate });
     }
 
-    return qb.getMany();
+    const results = await qb.getMany();
+    return this.enrichWorkerUsers(results);
   }
 
   async getMyRequests(userId: number): Promise<ManualAttendanceRequest[]> {
     const workerId = await this.getWorkerIdForUser(userId);
     if (!workerId) throw new ForbiddenException('Not a worker');
 
-    return this.requestRepo.find({
+    const results = await this.requestRepo.find({
       where: { workerId },
-      relations: ['job', 'worker', 'workCenter', 'requestedByUser', 'reviewedByUser'],
+      relations: ['job', 'job.client', 'worker', 'worker.user', 'workCenter', 'requestedByUser', 'reviewedByUser'],
       order: { createdAt: 'DESC' },
     });
+    return this.enrichWorkerUsers(results);
   }
 
   async getRequestByPublicId(publicId: string): Promise<ManualAttendanceRequest> {
     const request = await this.requestRepo.findOne({
       where: { publicId },
-      relations: ['job', 'worker', 'workCenter', 'resultWorkSession', 'requestedByUser', 'reviewedByUser'],
+      relations: ['job', 'job.client', 'worker', 'worker.user', 'workCenter', 'resultWorkSession', 'requestedByUser', 'reviewedByUser'],
     });
     if (!request) throw new NotFoundException('Request not found');
     return request;
@@ -770,7 +839,7 @@ export class ManualAttendanceService {
 
     return this.requestRepo.findOne({
       where: { id: request.id },
-      relations: ['job', 'worker', 'workCenter', 'resultWorkSession', 'requestedByUser', 'reviewedByUser'],
+      relations: ['job', 'job.client', 'worker', 'worker.user', 'workCenter', 'resultWorkSession', 'requestedByUser', 'reviewedByUser'],
     });
   }
 

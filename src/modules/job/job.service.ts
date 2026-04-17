@@ -1683,8 +1683,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       order: { checkInTime: 'DESC' },
     }) : [];
 
-    console.log(`📊 Found ${workSessions.length} active work sessions for worker ${workerId}`);
-    
+
     // Create a map of jobId -> workSession for quick lookup
     const jobIdToSession = new Map<number, any>();
     workSessions.forEach(session => {
@@ -4366,19 +4365,11 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     endDate?: string,
   ): Promise<any> {
     try {
-      console.log('=== getEmployerWorkSessionRecords ===');
-      console.log('employerUserId:', employerUserId);
-      console.log('jobId:', jobId);
-      console.log('startDate:', startDate);
-      console.log('endDate:', endDate);
-
       // First, find the employer through EmployerUser junction table
       const employerUserLink = await this.dataSource.getRepository('EmployerUser').findOne({
         where: { user: { id: employerUserId } },
         relations: ['employer', 'user'],
       }) as any;
-
-      console.log('EmployerUser link found:', employerUserLink ? `Employer ID: ${employerUserLink.employer?.id}` : 'NOT FOUND');
 
       if (!employerUserLink || !employerUserLink.employer) {
         return {
@@ -4419,11 +4410,7 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
       // Order by most recent first
       query.orderBy('workSession.checkInTime', 'DESC');
 
-      console.log('Query SQL:', query.getSql());
-
       const workSessions = await query.getMany();
-
-      console.log('Work sessions found:', workSessions.length);
 
       // Format the data for the frontend
       const formattedRecords = workSessions.map(session => {

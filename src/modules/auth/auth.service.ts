@@ -247,9 +247,10 @@ export class AuthService {
   ): Promise<BaseResponse> {
     const requesterRoleValue = requester.role?.value ?? requester.roleValue;
 
-    // Only main users can impersonate (not sub-users)
-    if (requester.subUser?.isSubUser) {
-      throw new ForbiddenException('Members cannot impersonate other users');
+    // Main users always may; sub-users may impersonate only with EDIT permission.
+    // VIEW_ONLY members get the same 403 the UI hides for.
+    if (requester.subUser?.isSubUser && requester.subUser?.permission !== 'EDIT') {
+      throw new ForbiddenException('Read-only members cannot impersonate other users');
     }
 
     // Only Admin, Partner, Employer can impersonate
