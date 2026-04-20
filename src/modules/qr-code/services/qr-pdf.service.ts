@@ -115,7 +115,21 @@ export class QrPdfService implements OnModuleDestroy {
   }
 
   private async renderHtmlToPdf(html: string): Promise<Buffer> {
-    const browser = await this.getBrowser();
+    let browser: Browser;
+    try {
+      browser = await this.getBrowser();
+    } catch (err: any) {
+      // Surface the underlying Puppeteer/Chromium launch error in the logs so
+      // production 500s are diagnosable (missing Chrome binary, missing shared
+      // libs on the host, etc.) instead of being swallowed into a generic
+      // stack trace on the client.
+      this.logger.error(
+        `Failed to launch Chromium for PDF rendering: ${err?.message ?? err}`,
+        err?.stack,
+      );
+      throw err;
+    }
+
     const page = await browser.newPage();
     try {
       // Use `networkidle0` so all inline data-URL images resolve before the
@@ -153,10 +167,24 @@ export class QrPdfService implements OnModuleDestroy {
 
   private async launchBrowser(): Promise<Browser> {
     const puppeteer = (await import('puppeteer-core')).default;
-    const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 
-    if (isServerless) {
-      // Serverless path: use the stripped Chromium from @sparticuz/chromium.
+    // If the operator pinned a Chrome/Chromium path (e.g. a Docker image with
+    // google-chrome-stable pre-installed), always honor it.
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      return puppeteer.launch({
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      });
+    }
+
+    // Use the bundled Chromium from @sparticuz/chromium on any Linux prod
+    // host — Vercel, AWS Lambda, Render, Fly, a bare EC2 box, etc. The binary
+    // is the same everywhere and doesn't require a system Chrome install.
+    // Previously we only did this for Vercel/Lambda; on Render the fallback
+    // path tried to launch a Windows/macOS Chrome that doesn't exist on a
+    // Linux container, so every request errored 500.
+    if (process.platform === 'linux') {
       const chromium = (await import('@sparticuz/chromium')).default;
       return puppeteer.launch({
         args: chromium.args,
@@ -165,10 +193,8 @@ export class QrPdfService implements OnModuleDestroy {
       });
     }
 
-    // Local/dev path: rely on a locally-installed Chrome/Chromium.
-    // PUPPETEER_EXECUTABLE_PATH lets devs point at their system browser.
-    const executablePath =
-      process.env.PUPPETEER_EXECUTABLE_PATH || this.guessLocalChromePath();
+    // Local dev on macOS/Windows: use the system Chrome install.
+    const executablePath = this.guessLocalChromePath();
     return puppeteer.launch({
       executablePath,
       headless: true,
