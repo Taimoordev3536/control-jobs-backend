@@ -1,10 +1,12 @@
-import { Controller, Get, Put, Post, Body, Param, UseGuards, Req, ParseUUIDPipe, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Put, Post, Body, Param, UseGuards, Req, Res, ParseUUIDPipe, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { QrCodeService } from '../services/qr-code.service';
 import { QrEmailService } from '../services/qr-email.service';
 import { QrValidationService } from '../services/qr-validation.service';
+import { QrPdfService } from '../services/qr-pdf.service';
 import { UpdateWorkCenterQrDto } from '../dto/update-work-center-qr.dto';
 import { SendStaticQrEmailDto } from '../dto/send-static-qr-email.dto';
 import { UpdateWorkCenterGpsDto } from '../dto/update-work-center-gps.dto';
@@ -20,6 +22,7 @@ export class QrCodeController {
     private readonly qrCodeService: QrCodeService,
     private readonly qrEmailService: QrEmailService,
     private readonly qrValidationService: QrValidationService,
+    private readonly qrPdfService: QrPdfService,
     @InjectRepository(WorkCenter)
     private readonly workCenterRepo: Repository<WorkCenter>,
   ) {}
@@ -64,6 +67,31 @@ export class QrCodeController {
       data: result,
       statusCode: 200,
     };
+  }
+
+  /**
+   * Generate an A5 portrait PDF for the currently-selected QR code.
+   * GET /work-centers/:id/qr-pdf
+   *
+   * Returns the PDF binary so the client can trigger a download. The layout
+   * mirrors the client-side print template in qr-code-dialog.tsx (Puppeteer
+   * renders the same HTML), producing consistent output across browsers,
+   * printers, and user print-dialog settings.
+   */
+  @Get(':id/qr-pdf')
+  async getWorkCenterQrPdf(
+    @Param('id', ParseUUIDPipe) publicId: string,
+    @Res() res: Response,
+  ) {
+    const workCenterId = await this.resolveWorkCenterId(publicId);
+    const pdf = await this.qrPdfService.generatePdfForWorkCenter(workCenterId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="qr-${publicId}.pdf"`,
+    );
+    res.setHeader('Content-Length', pdf.length.toString());
+    res.end(pdf);
   }
 
   /**

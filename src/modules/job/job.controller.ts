@@ -103,6 +103,15 @@ async getAllJobsForClientFromToken(@Req() req) {
   return this.jobService.getAllJobsByClientFromToken(userId);
 }
 
+// List all jobs for a specific client (used by the Clients detail page's
+// "Jobs" tab where an employer/admin browses a particular client rather
+// than being scoped to their own client via the auth token).
+@UseGuards(JwtAuthGuard)
+@Get('by-client/:publicId')
+async getAllJobsByClientPublicId(@Param('publicId', ParseUUIDPipe) publicId: string) {
+  return this.jobService.getAllJobsByClientPublicId(publicId);
+}
+
 
 
 

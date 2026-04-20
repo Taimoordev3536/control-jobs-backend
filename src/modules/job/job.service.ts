@@ -1866,8 +1866,56 @@ async getAllJobsByWorkerFromToken(userId: number) {
         throw new Error('Client not found for this user');
       }
 
-      const clientId = clientUser.client.id;
+      return this.getAllJobsByClientId(clientUser.client.id);
+    } catch (error) {
+      return {
+        message: 'Error fetching client jobs',
+        data: [],
+        isSuccess: false,
+        statusCode: 500,
+        developerError: error.message,
+      };
+    }
+  }
 
+  /**
+   * List every job belonging to a client, formatted for the client-jobs tab
+   * on the Clients detail page. Accepts the client's UUID public id rather
+   * than an authenticated user, so admins/employers can view a specific
+   * client's jobs instead of being scoped to their own via the token.
+   */
+  async getAllJobsByClientPublicId(publicId: string) {
+    try {
+      const client = await this.clientRepo.findOne({ where: { publicId } });
+      if (!client) {
+        return {
+          message: 'Client not found',
+          data: [],
+          isSuccess: false,
+          statusCode: 404,
+          developerError: `Client with publicId ${publicId} not found`,
+        };
+      }
+      return this.getAllJobsByClientId(client.id);
+    } catch (error) {
+      return {
+        message: 'Error fetching client jobs',
+        data: [],
+        isSuccess: false,
+        statusCode: 500,
+        developerError: error.message,
+      };
+    }
+  }
+
+  /**
+   * Shared worker for both the token-based (client dashboard) and
+   * publicId-based (Clients detail page) endpoints. Keeps the formatted
+   * response identical across both call sites so the frontend can reuse
+   * the same row shape.
+   */
+  private async getAllJobsByClientId(clientId: number) {
+    try {
       // Keep relations consistent with employer endpoint and include signingMethods
       const jobs = await this.jobRepo.find({
         where: { client: { id: clientId } },
