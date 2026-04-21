@@ -2,35 +2,25 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  Logger,
-  OnModuleDestroy,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import type { Browser } from 'puppeteer-core';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 import { EmployerClient } from '../../employers/entities/employer-client.entity';
 import { Employer } from '../../employers/entities/employer.entity';
 import { QrCodeService } from './qr-code.service';
-import { buildQrPdfHtml, QrPdfTemplateData } from '../helpers/qr-pdf-template';
+import {
+  generateQrPdfBuffer,
+  QrPdfTemplateData,
+} from '../helpers/qr-pdf-template';
 
 /**
- * Renders the QR-code A5 print template to a PDF via headless Chromium.
- *
- * Uses `puppeteer-core` + `@sparticuz/chromium` because the backend is
- * deployed to Vercel serverless — full `puppeteer` bundles a ~280MB Chromium
- * which blows past the function-size limit. The sparticuz build is a
- * stripped Chromium (~50MB) designed for Lambda/Vercel environments.
- *
- * Browser launch is expensive (~1–2s cold start), so we reuse a single
- * browser instance across requests and close it only when the Nest module
- * is destroyed.
+ * Generates the A5 QR-code PDF for a work center via a pure-JS renderer
+ * (`pdfkit`) — no Chromium, no native dependencies, works identically on
+ * every Node platform.
  */
 @Injectable()
-export class QrPdfService implements OnModuleDestroy {
-  private readonly logger = new Logger(QrPdfService.name);
-  private browserPromise: Promise<Browser> | null = null;
-
+export class QrPdfService {
   constructor(
     @InjectRepository(WorkCenter)
     private readonly workCenterRepo: Repository<WorkCenter>,
@@ -39,23 +29,6 @@ export class QrPdfService implements OnModuleDestroy {
     private readonly qrCodeService: QrCodeService,
   ) {}
 
-  async onModuleDestroy(): Promise<void> {
-    if (this.browserPromise) {
-      try {
-        const browser = await this.browserPromise;
-        await browser.close();
-      } catch (err) {
-        this.logger.warn(`Failed to close browser cleanly: ${err}`);
-      }
-      this.browserPromise = null;
-    }
-  }
-
-  /**
-   * Generate an A5 portrait PDF for the work center's currently-selected QR.
-   * Throws NotFoundException if the work center doesn't exist, or
-   * BadRequestException if QR isn't configured/selected yet.
-   */
   async generatePdfForWorkCenter(workCenterId: number): Promise<Buffer> {
     const workCenter = await this.workCenterRepo.findOne({
       where: { id: workCenterId },
@@ -65,10 +38,9 @@ export class QrPdfService implements OnModuleDestroy {
       throw new NotFoundException(`Work center ${workCenterId} not found`);
     }
 
-    // Work centers can be owned directly by an employer, or indirectly via a
-    // client that's linked to an employer through the employer_clients bridge.
-    // Mirror the fallback in WorkCentersService.findOne so the footer's
-    // employer block renders in both ownership models.
+    // Work centers may be owned by an employer directly or indirectly via a
+    // client linked through employer_clients — mirror WorkCentersService.findOne
+    // so the footer's employer block renders in both ownership models.
     const employer = await this.resolveEmployer(workCenter);
 
     const qrCodes = await this.qrCodeService.getWorkCenterQrCodes(workCenterId);
@@ -98,7 +70,7 @@ export class QrPdfService implements OnModuleDestroy {
         : undefined,
     };
 
-    return this.renderHtmlToPdf(buildQrPdfHtml(templateData));
+    return generateQrPdfBuffer(templateData);
   }
 
   private async resolveEmployer(
@@ -112,106 +84,5 @@ export class QrPdfService implements OnModuleDestroy {
       relations: ['employer'],
     });
     return link?.employer ?? null;
-  }
-
-  private async renderHtmlToPdf(html: string): Promise<Buffer> {
-    let browser: Browser;
-    try {
-      browser = await this.getBrowser();
-    } catch (err: any) {
-      // Surface the underlying Puppeteer/Chromium launch error in the logs so
-      // production 500s are diagnosable (missing Chrome binary, missing shared
-      // libs on the host, etc.) instead of being swallowed into a generic
-      // stack trace on the client.
-      this.logger.error(
-        `Failed to launch Chromium for PDF rendering: ${err?.message ?? err}`,
-        err?.stack,
-      );
-      throw err;
-    }
-
-    const page = await browser.newPage();
-    try {
-      // Use `networkidle0` so all inline data-URL images resolve before the
-      // layout is measured, but we still gate PDF generation on our own
-      // __qrPdfReady flag — networkidle alone doesn't guarantee the fitter
-      // has run.
-      await page.setContent(html, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => (window as any).__qrPdfReady === true, {
-        timeout: 5000,
-      });
-
-      const pdf = await page.pdf({
-        format: 'A5',
-        printBackground: true,
-        preferCSSPageSize: true,
-        margin: { top: 0, right: 0, bottom: 0, left: 0 },
-      });
-      return Buffer.from(pdf);
-    } finally {
-      await page.close();
-    }
-  }
-
-  private async getBrowser(): Promise<Browser> {
-    if (!this.browserPromise) {
-      this.browserPromise = this.launchBrowser().catch((err) => {
-        // Reset on failure so the next request retries the launch instead of
-        // reusing a poisoned promise.
-        this.browserPromise = null;
-        throw err;
-      });
-    }
-    return this.browserPromise;
-  }
-
-  private async launchBrowser(): Promise<Browser> {
-    const puppeteer = (await import('puppeteer-core')).default;
-
-    // If the operator pinned a Chrome/Chromium path (e.g. a Docker image with
-    // google-chrome-stable pre-installed), always honor it.
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-      return puppeteer.launch({
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
-    }
-
-    // Use the bundled Chromium from @sparticuz/chromium on any Linux prod
-    // host — Vercel, AWS Lambda, Render, Fly, a bare EC2 box, etc. The binary
-    // is the same everywhere and doesn't require a system Chrome install.
-    // Previously we only did this for Vercel/Lambda; on Render the fallback
-    // path tried to launch a Windows/macOS Chrome that doesn't exist on a
-    // Linux container, so every request errored 500.
-    if (process.platform === 'linux') {
-      const chromium = (await import('@sparticuz/chromium')).default;
-      return puppeteer.launch({
-        args: chromium.args,
-        executablePath: await chromium.executablePath(),
-        headless: true,
-      });
-    }
-
-    // Local dev on macOS/Windows: use the system Chrome install.
-    const executablePath = this.guessLocalChromePath();
-    return puppeteer.launch({
-      executablePath,
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-  }
-
-  private guessLocalChromePath(): string | undefined {
-    const platform = process.platform;
-    if (platform === 'win32') {
-      return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-    }
-    if (platform === 'darwin') {
-      return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    }
-    // Linux — leave undefined and let puppeteer-core error out with a clear
-    // message so the operator can set PUPPETEER_EXECUTABLE_PATH.
-    return undefined;
   }
 }
