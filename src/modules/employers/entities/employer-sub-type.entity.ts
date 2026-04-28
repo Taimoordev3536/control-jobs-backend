@@ -1,9 +1,9 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 export enum EmployerSubTypeEnum {
-    Individual = 'Individual',
-    SelfEmployed = 'Self-Employed',
-    Company = 'Company'
+    INDIVIDUAL = 'INDIVIDUAL',
+    FREELANCER = 'FREELANCER',
+    COMPANY = 'COMPANY'
 }
 
 @Entity('employerSubTypes')

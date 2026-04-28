@@ -1,0 +1,45 @@
+import {
+  Body,
+  Controller,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { BillingPreviewService } from '../services/billing-preview.service';
+import { BillingAccessService } from '../services/billing-access.service';
+import { EmployersService } from '../../employers/employers.service';
+import { isUUID } from 'class-validator';
+
+interface PreviewBody {
+  employerId: string | number; // accepts numeric id or publicId UUID
+}
+
+@Controller('billing')
+@UseGuards(JwtAuthGuard)
+export class BillingController {
+  constructor(
+    private readonly preview: BillingPreviewService,
+    private readonly employers: EmployersService,
+    private readonly access: BillingAccessService,
+  ) {}
+
+  /** Live preview of the current month's bill for an employer. No DB writes. */
+  @Post('preview')
+  async previewCurrentMonth(@Req() req: any, @Body() body: PreviewBody) {
+    const numericId = await this.resolveEmployerId(body.employerId);
+    const scope = await this.access.resolveScope(req.user);
+    await this.access.assertCanViewEmployer(scope, numericId);
+    const data = await this.preview.previewCurrentMonth(numericId);
+    return { data };
+  }
+
+  private async resolveEmployerId(idOrPublicId: string | number): Promise<number> {
+    if (typeof idOrPublicId === 'number') return idOrPublicId;
+    if (isUUID(idOrPublicId)) {
+      return this.employers.resolvePublicId(idOrPublicId);
+    }
+    const n = parseInt(String(idOrPublicId), 10);
+    return n;
+  }
+}

@@ -1,9 +1,9 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 export enum EmployerTypeEnum {
-    Home = 'Home',
-    Static = 'Static',
-    Remote = 'Remote'
+    HOME = 'HOME',
+    STATIC = 'STATIC',
+    REMOTE = 'REMOTE'
 }
 
 @Entity('employerTypes')

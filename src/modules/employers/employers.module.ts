@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EmployersController } from './employers.controller';
 import { EmployersService } from './employers.service';
@@ -13,6 +13,7 @@ import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { CommonModule } from '../../common/common.module';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { UsersModule } from '../users/users.module';
     CommonModule,
     AuthModule,
     UsersModule,
+    forwardRef(() => BillingModule),
   ],
   controllers: [EmployersController],
   providers: [EmployersService],

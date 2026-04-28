@@ -131,4 +131,68 @@ export class EmailService {
       throw error;
     }
   }
+
+  /**
+   * Send an employer invitation email (Method 2 — self-service signup).
+   * The recipient clicks the link and completes the 3-step signup form.
+   */
+  async sendEmployerInvitation(
+    to: string,
+    partnerName: string,
+    inviteLink: string,
+    trialDays: number,
+  ): Promise<any> {
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
+    const subject = `${partnerName} te ha invitado a probar ControlJobs`;
+    const trialNote =
+      trialDays > 0
+        ? `<p>Tienes <strong>${trialDays} días de prueba gratis</strong> para conocer la plataforma.</p>`
+        : '';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #662D91;">Invitación a ControlJobs</h2>
+        <p>Hola,</p>
+        <p><strong>${partnerName}</strong> te ha invitado a registrar tu empresa en ControlJobs.</p>
+        ${trialNote}
+        <p style="margin: 28px 0;">
+          <a href="${inviteLink}"
+             style="background:#662D91;color:#fff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:600;">
+            Completar registro
+          </a>
+        </p>
+        <p style="color:#666;font-size:13px;">
+          Este enlace caduca en 7 días. Si no esperabas esta invitación, simplemente ignora este mensaje.
+        </p>
+        <hr style="border:none;border-top:1px solid #eee;margin:24px 0;" />
+        <p style="color:#888;font-size:12px;">— Equipo ControlJobs</p>
+      </div>
+    `;
+
+    try {
+      if (fromEmail && this.resendClient && this.resendClient.emails) {
+        const overrideTo = this.configService.get<string>('RESEND_TO_EMAIL');
+        const finalTo = overrideTo || to;
+        if (overrideTo) {
+          console.log(`[Email] RESEND_TO_EMAIL override active: sending to ${overrideTo} instead of ${to}`);
+        }
+        const response = await this.resendClient.emails.send({
+          from: fromEmail,
+          to: finalTo,
+          subject,
+          html,
+        });
+        console.log('Employer-invitation email response for', to, ':', response);
+        return response;
+      }
+      console.log('=== INVITATION (no email provider configured) ===');
+      console.log(`To: ${to}`);
+      console.log(`Subject: ${subject}`);
+      console.log(`Link: ${inviteLink}`);
+      console.log('=== END ===');
+      return { statusCode: 200, body: 'Email not sent - link logged to console' };
+    } catch (error) {
+      console.error('Failed to send employer invitation:', error);
+      throw error;
+    }
+  }
 }

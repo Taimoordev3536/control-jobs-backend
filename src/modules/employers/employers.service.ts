@@ -3,6 +3,8 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -21,6 +23,7 @@ import { Partner } from '../partners/entities/partner.entity';
 import { isUUID } from 'class-validator';
 import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
+import { RatePlanService } from '../billing/services/rate-plan.service';
 
 @Injectable()
 export class EmployersService {
@@ -40,6 +43,8 @@ export class EmployersService {
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
     private readonly emailService: EmailService,
+    @Inject(forwardRef(() => RatePlanService))
+    private readonly ratePlanService: RatePlanService,
   ) {}
 
   async resolvePublicId(publicId: string): Promise<number> {
@@ -77,6 +82,19 @@ export class EmployersService {
     if (!subType) throw new BadRequestException('Invalid employer sub-type');
     if (!paymentMethod) throw new BadRequestException('Invalid payment method');
 
+    // Resolve the matching rate plan so we can snapshot the rates onto the
+    // new employer. Future price changes won't retroactively affect them.
+    const ratePlan = await this.ratePlanService.findMatch(
+      createEmployerDto.subTypeId,
+      createEmployerDto.typeId,
+    );
+
+    // Compute trial_ends_at from probationPeriod (parsed as integer days,
+    // default 0 = no trial = ACTIVE immediately).
+    const trialDays = parseTrialDays(createEmployerDto.probationPeriod);
+    const trialEndsAt = trialDays > 0 ? addDays(new Date(), trialDays) : null;
+    const billingStatus = trialDays > 0 ? 'TRIAL' : 'ACTIVE';
+
     try {
       // Start a transaction
       return await this.employerRepository.manager.transaction(
@@ -109,6 +127,13 @@ export class EmployersService {
             probationPeriod: createEmployerDto.probationPeriod,
             responsible: createEmployerDto.responsible,
             accessAccountStatus: createEmployerDto.accessAccountStatus,
+            // Billing snapshot
+            ratePlanId: ratePlan?.id ?? null,
+            monthlyFixedRate: ratePlan ? Number(ratePlan.monthlyFixed) : 0,
+            perWorkCenterRate: ratePlan ? Number(ratePlan.perWorkCenter) : 0,
+            perWorkerRate: ratePlan ? Number(ratePlan.perWorker) : 0,
+            trialEndsAt,
+            billingStatus,
           });
 
           const savedEmployer = await manager.save(Employer, employer);
@@ -129,10 +154,18 @@ export class EmployersService {
             throw new BadRequestException('Employer role not found');
           }
 
-          // ✅ Auto-generate password (consistent with partner creation)
-          const rawPassword = randomBytes(6).toString('base64').slice(0, 10); // Generates a 10-char password
+          // If the caller supplies a password (Method 2 invitation flow,
+          // where the employer chose their own), use it. Otherwise auto-
+          // generate one and email it (Method 1 admin/partner flow).
+          const providedPassword = (createEmployerDto as any)?.user?.password;
+          const rawPassword =
+            typeof providedPassword === 'string' && providedPassword.length >= 8
+              ? providedPassword
+              : randomBytes(6).toString('base64').slice(0, 10);
           const hashedPassword = await bcrypt.hash(rawPassword, 10);
-          console.log(`Generated password for employer: ${rawPassword}`);
+          if (!providedPassword) {
+            console.log(`Generated password for employer: ${rawPassword}`);
+          }
 
           // Create user (now required)
           const user = manager.create(User, {
@@ -424,4 +457,17 @@ export class EmployersService {
       );
     }
   }
+}
+
+function parseTrialDays(value: unknown): number {
+  if (value === null || value === undefined || value === '') return 0;
+  const n = parseInt(String(value), 10);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(n, 365); // hard cap so a typo can't create a 100-year trial
+}
+
+function addDays(date: Date, days: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
 }

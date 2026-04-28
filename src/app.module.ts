@@ -15,6 +15,8 @@ import { config } from 'dotenv';
 import { AlertsModule } from './modules/realtime/alerts.module';
 import { ManualAttendanceModule } from './modules/manual-attendance/manual-attendance.module';
 import { SubUsersModule } from './modules/sub-users/sub-users.module';
+import { BillingModule } from './modules/billing/billing.module';
+import { EmployerInvitationsModule } from './modules/employer-invitations/employer-invitations.module';
 
 config();
 
@@ -56,6 +58,8 @@ config();
     AlertsModule,
     ManualAttendanceModule,
     SubUsersModule,
+    BillingModule,
+    EmployerInvitationsModule,
   ],
 })
 export class AppModule { }

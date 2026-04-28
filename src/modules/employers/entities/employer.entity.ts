@@ -223,6 +223,25 @@ export class Employer {
   @Column({ nullable: true })
   accessAccountStatus: 'postpone' | 'request';
 
+  // --- Billing snapshot (Wave 1) ---
+  @Column({ name: 'rate_plan_id', nullable: true })
+  ratePlanId: number | null;
+
+  @Column({ name: 'monthly_fixed_rate', type: 'decimal', precision: 8, scale: 2, default: 0 })
+  monthlyFixedRate: number;
+
+  @Column({ name: 'per_workcenter_rate', type: 'decimal', precision: 8, scale: 2, default: 0 })
+  perWorkCenterRate: number;
+
+  @Column({ name: 'per_worker_rate', type: 'decimal', precision: 8, scale: 2, default: 0 })
+  perWorkerRate: number;
+
+  @Column({ name: 'trial_ends_at', type: 'timestamp', nullable: true })
+  trialEndsAt: Date | null;
+
+  @Column({ name: 'billing_status', length: 20, default: 'ACTIVE' })
+  billingStatus: 'TRIAL' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED';
+
   @OneToMany(() => EmployerUser, (employerUser) => employerUser.employer)
   employerUsers: EmployerUser[];
 
