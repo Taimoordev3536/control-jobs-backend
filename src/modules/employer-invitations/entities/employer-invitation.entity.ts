@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
+  OneToMany,
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
@@ -10,6 +11,7 @@ import {
 import { Partner } from '../../partners/entities/partner.entity';
 import { User } from '../../users/entities/user.entity';
 import { Employer } from '../../employers/entities/employer.entity';
+import { EmployerInvitationRedemption } from './employer-invitation-redemption.entity';
 
 export type InvitationStatus =
   | 'PENDING'
@@ -25,8 +27,11 @@ export class EmployerInvitation {
   @Column({ name: 'public_id', type: 'uuid', unique: true, default: () => 'uuid_generate_v4()' })
   publicId: string;
 
-  @Column({ length: 255 })
-  email: string;
+  @Column({ length: 255, default: '' })
+  description: string;
+
+  @Column({ length: 255, nullable: true })
+  email: string | null;
 
   @ManyToOne(() => Partner, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'partner_id' })
@@ -35,8 +40,24 @@ export class EmployerInvitation {
   @Column({ name: 'partner_id' })
   partnerId: number;
 
+  @Column({
+    name: 'discount_percent',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    default: 0,
+    transformer: {
+      to: (v: number | string | null | undefined) => v ?? 0,
+      from: (v: string | number | null) => (v == null ? 0 : Number(v)),
+    },
+  })
+  discountPercent: number;
+
   @Column({ name: 'trial_days', default: 15 })
   trialDays: number;
+
+  @Column({ name: 'max_redemptions', type: 'int', nullable: true })
+  maxRedemptions: number | null;
 
   @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'issued_by_user_id' })
@@ -58,12 +79,18 @@ export class EmployerInvitation {
   @Column({ name: 'accepted_employer_id', nullable: true })
   acceptedEmployerId: number | null;
 
-  @Column({ name: 'expires_at', type: 'timestamp' })
-  expiresAt: Date;
+  @Column({ name: 'expires_at', type: 'timestamp', nullable: true })
+  expiresAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  @OneToMany(
+    () => EmployerInvitationRedemption,
+    (redemption) => redemption.invitation,
+  )
+  redemptions: EmployerInvitationRedemption[];
 }

@@ -9,27 +9,33 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThanOrEqual, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { EmployerInvitation, InvitationStatus } from '../entities/employer-invitation.entity';
+import { EmployerInvitationRedemption } from '../entities/employer-invitation-redemption.entity';
 import { Partner } from '../../partners/entities/partner.entity';
 import { PartnerUser } from '../../partners/entities/partner-user.entity';
 import { User } from '../../users/entities/user.entity';
+import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { EmployersService } from '../../employers/employers.service';
-import { EmailService } from '../../../common/services/email.service';
 import { CreateInvitationDto } from '../dto/create-invitation.dto';
 import { AcceptInvitationDto } from '../dto/accept-invitation.dto';
 
 const TOKEN_TYPE = 'employer-invite';
-const TOKEN_TTL = '7d';
 
 interface TokenPayload {
   type: typeof TOKEN_TYPE;
   invitationId: number;
-  email: string;
   partnerId: number;
   trialDays: number;
+  discountPercent: number;
+  description: string;
   issuedByUserId: number;
+}
+
+export interface InvitationWithMeta extends EmployerInvitation {
+  inviteLink?: string;
+  acceptedCount?: number;
 }
 
 @Injectable()
@@ -39,15 +45,18 @@ export class EmployerInvitationService {
   constructor(
     @InjectRepository(EmployerInvitation)
     private readonly invitationRepo: Repository<EmployerInvitation>,
+    @InjectRepository(EmployerInvitationRedemption)
+    private readonly redemptionRepo: Repository<EmployerInvitationRedemption>,
     @InjectRepository(Partner)
     private readonly partnerRepo: Repository<Partner>,
     @InjectRepository(PartnerUser)
     private readonly partnerUserRepo: Repository<PartnerUser>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(EmployerUser)
+    private readonly employerUserRepo: Repository<EmployerUser>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly emailService: EmailService,
     private readonly employersService: EmployersService,
   ) {}
 
@@ -56,8 +65,8 @@ export class EmployerInvitationService {
   // ============================================================
 
   /**
-   * Issue a new invitation. Resolves partnerId from request user when the
-   * caller is a partner role; admin must supply partnerId explicitly.
+   * Issue a new bulk invitation link. The same link can be redeemed by
+   * many users until it expires or is revoked.
    */
   async create(
     requester: any,
@@ -85,110 +94,131 @@ export class EmployerInvitationService {
     const partner = await this.partnerRepo.findOne({ where: { id: partnerId } });
     if (!partner) throw new NotFoundException('Partner not found');
 
-    // Prevent duplicate active invites for same email — supersede the previous.
-    await this.invitationRepo.update(
-      { email: dto.email, status: 'PENDING' as InvitationStatus },
-      { status: 'REVOKED' as InvitationStatus },
-    );
+    const expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
 
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     const invitation = this.invitationRepo.create({
-      email: dto.email,
+      description: dto.description,
       partnerId,
+      discountPercent: dto.discountPercent,
       trialDays: dto.trialDays,
+      maxRedemptions: dto.maxRedemptions ?? null,
       issuedByUserId: requester.id,
       status: 'PENDING' as InvitationStatus,
       expiresAt,
     });
     const saved = await this.invitationRepo.save(invitation);
 
-    const token = this.signToken({
-      type: TOKEN_TYPE,
-      invitationId: saved.id,
-      email: dto.email,
-      partnerId,
-      trialDays: dto.trialDays,
-      issuedByUserId: requester.id,
-    });
+    const token = this.signToken(
+      {
+        type: TOKEN_TYPE,
+        invitationId: saved.id,
+        partnerId,
+        trialDays: dto.trialDays,
+        discountPercent: dto.discountPercent,
+        description: dto.description,
+        issuedByUserId: requester.id,
+      },
+      expiresAt,
+    );
     const inviteLink = this.buildLink(token);
-
-    try {
-      await this.emailService.sendEmployerInvitation(
-        dto.email,
-        partner.name,
-        inviteLink,
-        dto.trialDays,
-      );
-    } catch (err: any) {
-      this.logger.warn(`Email send failed (invitation ${saved.id}): ${err?.message || err}`);
-      // Email failures don't roll back the invitation — admin can copy the link manually.
-    }
 
     return { invitation: saved, inviteLink };
   }
 
   /**
    * List invitations sent by the current user (or all, for admin).
-   * For PENDING rows, attaches a freshly-signed token + invite link so the
-   * caller can copy/resend without us persisting the original JWT anywhere.
+   * Each row carries an `acceptedCount` aggregated from the redemption
+   * table and — for still-active rows — a freshly-signed inviteLink.
    */
-  async list(requester: any): Promise<Array<EmployerInvitation & { inviteLink?: string }>> {
+  async list(requester: any): Promise<InvitationWithMeta[]> {
     const role = String(requester?.role?.name || '').toLowerCase();
-    let rows: EmployerInvitation[];
+
+    const qb = this.invitationRepo
+      .createQueryBuilder('inv')
+      .leftJoinAndSelect('inv.partner', 'partner')
+      .loadRelationCountAndMap('inv.acceptedCount', 'inv.redemptions')
+      .orderBy('inv.createdAt', 'DESC');
+
     if (role === 'admin') {
-      rows = await this.invitationRepo.find({
-        order: { createdAt: 'DESC' },
-        relations: ['partner'],
-      });
+      // sees all
     } else if (role === 'partner') {
       const link = await this.partnerUserRepo.findOne({
         where: { userId: requester.id },
       });
       if (!link?.partnerId) return [];
-      rows = await this.invitationRepo.find({
-        where: { partnerId: link.partnerId },
-        order: { createdAt: 'DESC' },
-        relations: ['partner'],
-      });
+      qb.where('inv.partnerId = :pid', { pid: link.partnerId });
     } else {
       throw new ForbiddenException('Only admin or partner can view invitations');
     }
 
+    const rows = (await qb.getMany()) as InvitationWithMeta[];
+
     return rows.map((inv) => {
-      if (inv.status !== 'PENDING' || inv.expiresAt.getTime() < Date.now()) {
-        return inv;
-      }
-      // Re-mint a token with the same expiry as the row so links remain stable.
-      // Tokens are stateless — anyone with this row can sign one with the same payload.
-      const expiresInSec = Math.max(
-        60,
-        Math.floor((inv.expiresAt.getTime() - Date.now()) / 1000),
-      );
+      const isActive =
+        inv.status === 'PENDING' &&
+        (!inv.expiresAt || inv.expiresAt.getTime() > Date.now());
+      if (!isActive) return inv;
+
+      const expiresInSec = inv.expiresAt
+        ? Math.max(60, Math.floor((inv.expiresAt.getTime() - Date.now()) / 1000))
+        : undefined;
+
       const token = this.jwtService.sign(
         {
           type: TOKEN_TYPE,
           invitationId: inv.id,
-          email: inv.email,
           partnerId: inv.partnerId,
           trialDays: inv.trialDays,
+          discountPercent: Number(inv.discountPercent),
+          description: inv.description,
           issuedByUserId: inv.issuedByUserId,
         },
-        { expiresIn: expiresInSec },
+        expiresInSec ? { expiresIn: expiresInSec } : {},
       );
-      return Object.assign({}, inv, { inviteLink: this.buildLink(token) });
+      return Object.assign(inv, { inviteLink: this.buildLink(token) });
+    });
+  }
+
+  /**
+   * List redemptions for one invitation — used by the "Aceptadas"
+   * drawer in the admin UI.
+   */
+  async listRedemptions(
+    requester: any,
+    publicId: string,
+  ): Promise<EmployerInvitationRedemption[]> {
+    const role = String(requester?.role?.name || '').toLowerCase();
+    const inv = await this.invitationRepo.findOne({ where: { publicId } });
+    if (!inv) throw new NotFoundException('Invitation not found');
+
+    if (role === 'partner') {
+      const link = await this.partnerUserRepo.findOne({
+        where: { userId: requester.id },
+      });
+      if (!link?.partnerId || link.partnerId !== inv.partnerId) {
+        throw new ForbiddenException('Not your invitation');
+      }
+    } else if (role !== 'admin') {
+      throw new ForbiddenException('Only admin or partner can view redemptions');
+    }
+
+    return this.redemptionRepo.find({
+      where: { invitationId: inv.id },
+      order: { redeemedAt: 'DESC' },
     });
   }
 
   /**
    * Verify a token without consuming it. Used by the accept page to
-   * pre-fill the form with the partner name, email, trial days.
+   * pre-fill the partner name, description, discount, trial.
    */
   async verify(token: string): Promise<{
     valid: boolean;
     reason?: string;
-    email?: string;
+    description?: string;
     partnerId?: number;
     partnerName?: string;
+    discountPercent?: number;
     trialDays?: number;
   }> {
     const payload = this.verifyToken(token);
@@ -198,13 +228,20 @@ export class EmployerInvitationService {
       where: { id: payload.invitationId },
     });
     if (!invitation) return { valid: false, reason: 'not_found' };
-    if (invitation.status === 'ACCEPTED') return { valid: false, reason: 'already_used' };
     if (invitation.status === 'REVOKED') return { valid: false, reason: 'revoked' };
-    if (invitation.expiresAt.getTime() < Date.now()) {
-      // Lazy-expire on read.
+    if (invitation.expiresAt && invitation.expiresAt.getTime() < Date.now()) {
       invitation.status = 'EXPIRED' as InvitationStatus;
       await this.invitationRepo.save(invitation);
       return { valid: false, reason: 'expired' };
+    }
+
+    if (invitation.maxRedemptions !== null) {
+      const used = await this.redemptionRepo.count({
+        where: { invitationId: invitation.id },
+      });
+      if (used >= invitation.maxRedemptions) {
+        return { valid: false, reason: 'max_reached' };
+      }
     }
 
     const partner = await this.partnerRepo.findOne({ where: { id: payload.partnerId } });
@@ -212,16 +249,18 @@ export class EmployerInvitationService {
 
     return {
       valid: true,
-      email: invitation.email,
+      description: invitation.description,
       partnerId: invitation.partnerId,
       partnerName: partner.name,
+      discountPercent: Number(invitation.discountPercent),
       trialDays: invitation.trialDays,
     };
   }
 
   /**
-   * Accept the invitation: create User, Employer, EmployerUser link in
-   * one transaction, mark the invitation ACCEPTED.
+   * Redeem the invitation: create User + Employer + EmployerUser link
+   * and record a redemption row. The invitation itself stays ACTIVE so
+   * other recipients can also redeem.
    */
   async accept(dto: AcceptInvitationDto): Promise<{ employerId: number; userId: number }> {
     const payload = this.verifyToken(dto.token);
@@ -231,17 +270,13 @@ export class EmployerInvitationService {
       where: { id: payload.invitationId },
     });
     if (!invitation) throw new NotFoundException('Invitation not found');
-    if (invitation.status !== 'PENDING') {
-      throw new BadRequestException(`Invitation is ${invitation.status.toLowerCase()}`);
+    if (invitation.status === 'REVOKED') {
+      throw new BadRequestException('Invitation revoked');
     }
-    if (invitation.expiresAt.getTime() < Date.now()) {
+    if (invitation.expiresAt && invitation.expiresAt.getTime() < Date.now()) {
       invitation.status = 'EXPIRED' as InvitationStatus;
       await this.invitationRepo.save(invitation);
       throw new BadRequestException('Invitation expired');
-    }
-    // Strict email match — token is bound to the address it was issued to.
-    if (invitation.email.toLowerCase() !== dto.email.toLowerCase()) {
-      throw new BadRequestException('Email does not match invitation');
     }
     // Defence in depth: cross-check partner & trial against the token.
     if (invitation.partnerId !== payload.partnerId) {
@@ -250,16 +285,35 @@ export class EmployerInvitationService {
     if (invitation.trialDays !== payload.trialDays) {
       throw new BadRequestException('Trial mismatch');
     }
-    // Reject if a user already exists with that email.
-    const existingUser = await this.userRepo.findOne({ where: { email: dto.email } });
-    if (existingUser) {
-      throw new BadRequestException('An account already exists with this email');
+
+    if (invitation.maxRedemptions !== null) {
+      const used = await this.redemptionRepo.count({
+        where: { invitationId: invitation.id },
+      });
+      if (used >= invitation.maxRedemptions) {
+        throw new BadRequestException('Invitation has reached its redemption limit');
+      }
     }
 
-    // Reuse the existing EmployersService.create — it handles rate snapshot,
-    // trial start, EmployerUser link, password hashing, etc.
+    const emailLower = dto.email.trim().toLowerCase();
+
+    const dup = await this.redemptionRepo.findOne({
+      where: { invitationId: invitation.id, redeemedEmail: emailLower },
+    });
+    if (dup) {
+      throw new BadRequestException(
+        'This email already redeemed this invitation. Please log in instead.',
+      );
+    }
+
+    const existingUser = await this.userRepo.findOne({ where: { email: emailLower } });
+    if (existingUser) {
+      throw new BadRequestException(
+        'An account already exists with this email. Please log in.',
+      );
+    }
+
     const result = await this.employersService.create({
-      // employer fields
       name: dto.name,
       taxId: dto.taxId,
       address: dto.address,
@@ -279,28 +333,56 @@ export class EmployerInvitationService {
       typeId: dto.typeId,
       subTypeId: dto.subTypeId,
       fee: dto.fee ?? 0,
-      discount: dto.discount,
+      // Discount comes from the token, not the form — clients can't
+      // tamper with the offer terms.
+      discount: Number(invitation.discountPercent),
       paymentMethodId: dto.paymentMethodId ?? 5,
       accountIban: dto.accountIban,
       bicSwift: dto.bicSwift,
       probationPeriod: String(payload.trialDays),
       responsible: dto.responsible,
       accessAccountStatus: 'request',
-      accessEmail: dto.email,
-      // user fields — forwarded inside the same call
+      accessEmail: emailLower,
       user: {
-        email: dto.email,
+        email: emailLower,
         password: dto.password,
       },
     } as any);
 
     const employerId = (result?.data as any)?.id;
-    const userId = (result?.data as any)?.userId || (result?.data as any)?.user?.id;
+    if (!employerId) {
+      throw new BadRequestException('Failed to create employer');
+    }
 
-    invitation.status = 'ACCEPTED' as InvitationStatus;
-    invitation.acceptedAt = new Date();
-    invitation.acceptedEmployerId = employerId ?? null;
-    await this.invitationRepo.save(invitation);
+    // EmployersService.create returns the saved Employer but not the user
+    // id, so look up the default EmployerUser link to get it. The entity
+    // has no explicit FK column, so we go through the relation.
+    const link = await this.employerUserRepo.findOne({
+      where: { employer: { id: employerId }, isDefault: true },
+      relations: ['user'],
+    });
+    const userId = link?.user?.id;
+    if (!userId) {
+      throw new BadRequestException(
+        'Failed to resolve user for created employer',
+      );
+    }
+
+    await this.redemptionRepo.save({
+      invitationId: invitation.id,
+      redeemedEmployerId: employerId,
+      redeemedUserId: userId,
+      redeemedEmail: emailLower,
+    });
+
+    // Touch first-redemption metadata for backwards-compat with old code
+    // that still reads acceptedAt / acceptedEmployerId. Status stays
+    // PENDING because the link is still usable.
+    if (!invitation.acceptedAt) {
+      invitation.acceptedAt = new Date();
+      invitation.acceptedEmployerId = employerId ?? null;
+      await this.invitationRepo.save(invitation);
+    }
 
     return { employerId, userId };
   }
@@ -312,8 +394,10 @@ export class EmployerInvitationService {
     if (role !== 'admin' && invitation.issuedByUserId !== requester.id) {
       throw new ForbiddenException('Cannot revoke an invitation you did not issue');
     }
-    if (invitation.status !== 'PENDING') {
-      throw new BadRequestException(`Invitation is already ${invitation.status.toLowerCase()}`);
+    if (invitation.status === 'REVOKED' || invitation.status === 'EXPIRED') {
+      throw new BadRequestException(
+        `Invitation is already ${invitation.status.toLowerCase()}`,
+      );
     }
     invitation.status = 'REVOKED' as InvitationStatus;
     await this.invitationRepo.save(invitation);
@@ -323,8 +407,16 @@ export class EmployerInvitationService {
   // Token helpers
   // ============================================================
 
-  private signToken(payload: TokenPayload): string {
-    return this.jwtService.sign(payload, { expiresIn: TOKEN_TTL });
+  private signToken(payload: TokenPayload, expiresAt: Date | null): string {
+    if (!expiresAt) {
+      // No caducidad → 10-year token. Revoke is the kill-switch.
+      return this.jwtService.sign(payload, { expiresIn: '3650d' });
+    }
+    const expiresInSec = Math.max(
+      60,
+      Math.floor((expiresAt.getTime() - Date.now()) / 1000),
+    );
+    return this.jwtService.sign(payload, { expiresIn: expiresInSec });
   }
 
   private verifyToken(token: string): TokenPayload | null {
@@ -351,7 +443,7 @@ export class EmployerInvitationService {
       .createQueryBuilder()
       .update()
       .set({ status: 'EXPIRED' as InvitationStatus })
-      .where('status = :status AND expires_at <= :now', {
+      .where('status = :status AND expires_at IS NOT NULL AND expires_at <= :now', {
         status: 'PENDING',
         now: new Date(),
       })

@@ -3,9 +3,11 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { EmployerInvitation } from './entities/employer-invitation.entity';
+import { EmployerInvitationRedemption } from './entities/employer-invitation-redemption.entity';
 import { Partner } from '../partners/entities/partner.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
 import { User } from '../users/entities/user.entity';
+import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { EmployerInvitationService } from './services/employer-invitation.service';
 import { SelfRegistrationService } from './services/self-registration.service';
 import { EmployerInvitationsController } from './controllers/employer-invitations.controller';
@@ -14,7 +16,14 @@ import { CommonModule } from '../../common/common.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmployerInvitation, Partner, PartnerUser, User]),
+    TypeOrmModule.forFeature([
+      EmployerInvitation,
+      EmployerInvitationRedemption,
+      Partner,
+      PartnerUser,
+      User,
+      EmployerUser,
+    ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({

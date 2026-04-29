@@ -45,6 +45,13 @@ export class EmployerInvitationsController {
     return { data: { revoked: true } };
   }
 
+  @Get(':publicId/redemptions')
+  @UseGuards(JwtAuthGuard)
+  async redemptions(@Req() req: any, @Param('publicId') publicId: string) {
+    const data = await this.service.listRedemptions(req.user, publicId);
+    return { data };
+  }
+
   // ---- Public endpoints (token-based) ----
 
   @Get('verify')
