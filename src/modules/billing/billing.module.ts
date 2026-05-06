@@ -3,13 +3,17 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { RatePlan } from './entities/rate-plan.entity';
 import { Invoice } from './entities/invoice.entity';
+import { InvoiceWorkCenter } from './entities/invoice-workcenter.entity';
+import { InvoiceWorker } from './entities/invoice-worker.entity';
 import { EmployerSubType } from '../employers/entities/employer-sub-type.entity';
 import { EmployerType } from '../employers/entities/employer-type.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { EmployerWorker } from '../employers/entities/employer-worker.entity';
 import { EmployerWorkCenter } from '../employers/entities/employer-work-center.entity';
+import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
+import { PartnerTier } from '../partners/entities/partner-type.entity';
 import { AdminConfig } from '../admin/entities/admin-config.entity';
 import { PricingService } from './services/pricing.service';
 import { RatePlanService } from './services/rate-plan.service';
@@ -28,13 +32,17 @@ import { EmployersModule } from '../employers/employers.module';
     TypeOrmModule.forFeature([
       RatePlan,
       Invoice,
+      InvoiceWorkCenter,
+      InvoiceWorker,
       EmployerSubType,
       EmployerType,
       Employer,
       EmployerWorker,
       EmployerWorkCenter,
+      WorkerUser,
       EmployerUser,
       PartnerUser,
+      PartnerTier,
       AdminConfig,
     ]),
     ScheduleModule.forRoot(),

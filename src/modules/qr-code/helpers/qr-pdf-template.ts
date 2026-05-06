@@ -29,6 +29,10 @@ export interface QrPdfTemplateData {
   workCenterName: string;
   clientName: string;
   employer?: QrPdfEmployer;
+  // Pre-fetched logo bytes. When present, the bottom-left footer slot
+  // renders the logo at 35% of A5 page width instead of the employer text.
+  // The renderer is pure and doesn't fetch from the network itself.
+  logoBuffer?: Buffer;
 }
 
 const MM_TO_PT = 2.8346456693;
@@ -213,11 +217,26 @@ export function generateQrPdfBuffer(data: QrPdfTemplateData): Promise<Buffer> {
       const footerBottom = footerY + footerH;
       const emp = data.employer;
 
-      // Employer text block, bottom-aligned to footer
-      if (emp) {
+      // Bottom-left slot: employer LOGO when uploaded (35% of A5 page width,
+      // bottom-aligned, vertically aligned with the ControlJobs brand block on
+      // the right). Falls back to the italic employer text block when no logo
+      // is set; renders nothing if neither is present.
+      const logoSlotW = pageW * 0.35;
+      const logoSlotX = innerX + innerW * 0.005;
+      if (data.logoBuffer) {
+        try {
+          // pdfkit's `align` only supports center/right; left is the default
+          // (the image is drawn at the given x,y), so we pin x at logoSlotX.
+          doc.image(data.logoBuffer, logoSlotX, footerY, {
+            fit: [logoSlotW, footerH],
+            valign: 'bottom',
+          });
+        } catch (err) {
+          // Decode failure shouldn't break the rest of the PDF.
+        }
+      } else if (emp) {
         const empFs = 10;
         const empLineH = empFs * 1.3;
-        const empX = innerX + innerW * 0.005;
         const empLines: Array<{ text: string; font: string }> = [
           { text: emp.name || '', font: 'Helvetica-BoldOblique' },
           { text: emp.address || '', font: 'Helvetica-Oblique' },
@@ -234,7 +253,7 @@ export function generateQrPdfBuffer(data: QrPdfTemplateData): Promise<Buffer> {
         doc.fillColor('#ffffff');
         empLines.forEach((line, i) => {
           doc.font(line.font).fontSize(empFs);
-          doc.text(line.text, empX, startY + i * empLineH, {
+          doc.text(line.text, logoSlotX, startY + i * empLineH, {
             width: empMaxW,
             lineBreak: false,
             ellipsis: true,
@@ -242,16 +261,27 @@ export function generateQrPdfBuffer(data: QrPdfTemplateData): Promise<Buffer> {
         });
       }
 
-      // ControlJobs brand block (right side, bottom-aligned)
-      const cjLogoH = footerH * 0.5;
-      const cjLogoW = cjLogoH * (290.1 / 55.3); // original SVG aspect
+      // ControlJobs brand block (right side, bottom-aligned). Width is pinned
+      // to 35% of the A5 page width per spec; height follows the original SVG
+      // aspect ratio (290.1 × 55.3) so the wordmark never distorts. The result
+      // is then clamped to the footer height so it can never overflow into
+      // the QR panel above on tighter layouts.
+      const SVG_ASPECT = 290.1 / 55.3;
+      let cjLogoW = pageW * 0.35;
+      let cjLogoH = cjLogoW / SVG_ASPECT;
+      if (cjLogoH > footerH) {
+        cjLogoH = footerH;
+        cjLogoW = cjLogoH * SVG_ASPECT;
+      }
       const brandRight = innerX + innerW - innerW * 0.005;
       const cjLogoX = brandRight - cjLogoW;
       const cjLogoY = footerBottom - cjLogoH;
 
-      // "Powered by" text above logo (18pt italic black)
+      // "Powered by" text above logo (italic black). pwGap is the breathing
+      // room between the bottom of the text and the top of the logo — kept
+      // generous so the line doesn't visually merge with the wordmark.
       const pwFs = 14;
-      const pwGap = 6;
+      const pwGap = 22;
       doc.font('Helvetica-Oblique').fontSize(pwFs).fillColor('#000000');
       const pwW = doc.widthOfString('Powered by');
       const pwH = doc.currentLineHeight();

@@ -336,7 +336,11 @@ export class EmployerInvitationService {
       // Discount comes from the token, not the form — clients can't
       // tamper with the offer terms.
       discount: Number(invitation.discountPercent),
-      paymentMethodId: dto.paymentMethodId ?? 5,
+      // Spec §6: invitation-link signups defer payment-method collection
+      // until the trial ends. If the form genuinely captured one, honor it;
+      // otherwise leave NULL so the AWAITING_PAYMENT_METHOD banner prompts
+      // the employer to pick their first method post-trial.
+      paymentMethodId: dto.paymentMethodId ?? null,
       accountIban: dto.accountIban,
       bicSwift: dto.bicSwift,
       probationPeriod: String(payload.trialDays),

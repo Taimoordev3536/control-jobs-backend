@@ -8,8 +8,13 @@ import {
   Body,
   Request,
   Put,
+  Post,
+  Delete,
   ParseIntPipe,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -71,5 +76,29 @@ export class UsersController {
   ) {
     const numericId = await this.usersService.resolvePublicId(id);
     return this.usersService.updateRole(numericId, updateRoleDto.role);
+  }
+
+  // Admin self-service: read own profile (so the dropdown can fetch logoUrl).
+  @Get('admin/me')
+  @Roles(UserRole.Admin)
+  async getAdminMe(@Request() req) {
+    return this.usersService.getAdminMe(req.user.id);
+  }
+
+  // Admin self-service: upload/remove personal photo.
+  @Post('admin/me/logo')
+  @Roles(UserRole.Admin)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadAdminLogo(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.usersService.setAdminLogo(req.user.id, file);
+  }
+
+  @Delete('admin/me/logo')
+  @Roles(UserRole.Admin)
+  async deleteAdminLogo(@Request() req) {
+    return this.usersService.clearAdminLogo(req.user.id);
   }
 }

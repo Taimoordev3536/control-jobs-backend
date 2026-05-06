@@ -2,9 +2,12 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, EntityManager } from 'typeorm';
 import { Invoice, InvoiceStatus } from '../entities/invoice.entity';
+import { InvoiceWorkCenter } from '../entities/invoice-workcenter.entity';
+import { InvoiceWorker } from '../entities/invoice-worker.entity';
 import { Employer } from '../../employers/entities/employer.entity';
 import { EmployerWorker } from '../../employers/entities/employer-worker.entity';
 import { EmployerWorkCenter } from '../../employers/entities/employer-work-center.entity';
+import { WorkerUser } from '../../workers/entities/worker-user.entity';
 import { AdminConfig } from '../../admin/entities/admin-config.entity';
 import { PricingService } from './pricing.service';
 
@@ -35,6 +38,8 @@ export class InvoiceService {
     private readonly employerWorkerRepo: Repository<EmployerWorker>,
     @InjectRepository(EmployerWorkCenter)
     private readonly employerWorkCenterRepo: Repository<EmployerWorkCenter>,
+    @InjectRepository(WorkerUser)
+    private readonly workerUserRepo: Repository<WorkerUser>,
     @InjectRepository(AdminConfig)
     private readonly adminConfigRepo: Repository<AdminConfig>,
     private readonly pricing: PricingService,
@@ -83,6 +88,37 @@ export class InvoiceService {
       daysInMonth: isProrated ? options.daysInMonth : undefined,
     });
 
+    // "Page 2" snapshot prep — pull the active work-center + worker rows
+    // that the count above was computed from, so we can store their NAMES
+    // on the invoice. Loaded outside the transaction (read-only) and
+    // persisted inside it so a partial failure doesn't leave the invoice
+    // missing its detail rows.
+    const wcLinks = await this.employerWorkCenterRepo.find({
+      where: { employer: { id: employer.id }, isActive: true },
+      relations: ['workCenter'],
+    });
+    const wkLinks = await this.employerWorkerRepo.find({
+      where: { employer: { id: employer.id }, isActive: true },
+      relations: ['worker'],
+    });
+    const workerIds = wkLinks.map((l) => l.worker?.id).filter(Boolean) as number[];
+    const workerUserLinks = workerIds.length
+      ? await this.workerUserRepo.find({
+          where: workerIds.map((id) => ({ workerId: id })),
+          relations: ['user'],
+        })
+      : [];
+    const workerIdToName = new Map<number, string>();
+    for (const link of workerUserLinks) {
+      const u = link.user as any;
+      if (!u) continue;
+      const composed =
+        (u.name && String(u.name).trim()) ||
+        [u.firstName, u.lastName].filter(Boolean).join(' ').trim() ||
+        u.email;
+      if (link.workerId && composed) workerIdToName.set(link.workerId, composed);
+    }
+
     return await this.invoiceRepo.manager.transaction(async (manager) => {
       const invoiceNumber = await this.generateInvoiceNumber(
         manager,
@@ -118,16 +154,56 @@ export class InvoiceService {
       });
 
       const saved = await manager.save(Invoice, invoice);
+
+      // Persist the snapshots in the same transaction. If anything fails
+      // here, the invoice insert rolls back too — no half-saved invoices.
+      const wcSnapshots = wcLinks
+        .filter((l) => !!l.workCenter)
+        .map((l) =>
+          manager.create(InvoiceWorkCenter, {
+            invoiceId: saved.id,
+            workCenterId: l.workCenter.id,
+            name: l.workCenter.name || `Work center #${l.workCenter.id}`,
+          }),
+        );
+      if (wcSnapshots.length) await manager.save(InvoiceWorkCenter, wcSnapshots);
+
+      const wkSnapshots = wkLinks
+        .filter((l) => !!l.worker)
+        .map((l) => {
+          const id = l.worker.id;
+          const name =
+            workerIdToName.get(id) ||
+            (l.worker as any).code ||
+            `Worker #${id}`;
+          return manager.create(InvoiceWorker, {
+            invoiceId: saved.id,
+            workerId: id,
+            name,
+          });
+        });
+      if (wkSnapshots.length) await manager.save(InvoiceWorker, wkSnapshots);
+
       this.logger.log(
-        `Invoice ${saved.invoiceNumber} created for employer ${employer.id} (${breakdown.total} EUR)`,
+        `Invoice ${saved.invoiceNumber} created for employer ${employer.id} ` +
+          `(${breakdown.total} EUR, ${wcSnapshots.length} wc + ${wkSnapshots.length} workers snapshot)`,
       );
       return saved;
     });
   }
 
   /**
-   * Build the next invoice number for a (series, year, month) bucket.
-   * Format: SERIES-YYYY-MM-NNNNNN. Resets each month.
+   * Build the next invoice number for a (series, year) bucket.
+   * Format: SERIES-YYYY-NNNNNN. Sequential per calendar year, starting at 1
+   * each January — Spanish accounting law requires invoices to be numbered
+   * without gaps within a series, but a per-year reset (or carry-over from
+   * the previous year) is permitted. We chose per-year reset to match the
+   * client's requested format ("CJ-YYYY-NNNNNN").
+   *
+   * NOTE: invoices issued under the previous "SERIES-YYYY-MM-NNNNNN" format
+   * (created before this change) are still in the table. The LIKE filter
+   * scopes only to the new format so the per-year counter starts cleanly
+   * at 1 instead of being skewed by old per-month numbers.
    */
   private async generateInvoiceNumber(
     manager: EntityManager,
@@ -135,17 +211,19 @@ export class InvoiceService {
     issueDate: Date,
   ): Promise<string> {
     const yyyy = issueDate.getFullYear();
-    const mm = String(issueDate.getMonth() + 1).padStart(2, '0');
-    const prefix = `${series}-${yyyy}-${mm}-`;
+    const prefix = `${series}-${yyyy}-`;
 
-    // Largest existing sequence in this bucket (lock the row range with FOR UPDATE).
+    // The new format has exactly one '-' between the year and the counter
+    // (no month segment). Match `SERIES-YYYY-NNNNNN` strictly and exclude
+    // the legacy `SERIES-YYYY-MM-NNNNNN` rows that share the same prefix.
     const result = await manager.query(
       `SELECT invoice_number FROM cjobs_invoices
         WHERE invoice_number LIKE $1
+          AND invoice_number !~ $2
         ORDER BY invoice_number DESC
         LIMIT 1
         FOR UPDATE`,
-      [`${prefix}%`],
+      [`${prefix}%`, `^${series}-${yyyy}-\\d{2}-`],
     );
 
     let next = 1;
@@ -157,9 +235,16 @@ export class InvoiceService {
     return `${prefix}${String(next).padStart(6, '0')}`;
   }
 
-  /** Look up an invoice by publicId or fail. */
+  /**
+   * Look up an invoice by publicId or fail. Loads the page-2 snapshots
+   * (work centers + workers) so the detail endpoint and PDF renderer
+   * can decide what to show based on the caller's access level.
+   */
   async findByPublicId(publicId: string): Promise<Invoice> {
-    const invoice = await this.invoiceRepo.findOne({ where: { publicId } });
+    const invoice = await this.invoiceRepo.findOne({
+      where: { publicId },
+      relations: ['workCenters', 'workers'],
+    });
     if (!invoice) throw new NotFoundException('Invoice not found');
     return invoice;
   }

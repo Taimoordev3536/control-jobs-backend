@@ -22,6 +22,15 @@ const fmtEur = (n: number | string) => {
   return `${(num || 0).toFixed(2).replace('.', ',')} €`;
 };
 
+// ISO ("2026-04-28") → dd/mm/aaaa for Spanish legal documents.
+const fmtDateEs = (iso: string | Date | null | undefined): string => {
+  if (!iso) return '';
+  const s = iso instanceof Date ? iso.toISOString() : String(iso);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return s;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+};
+
 const STATUS_LABELS: Record<string, string> = {
   PENDING: 'Pendiente',
   PAID: 'Pagada',
@@ -74,8 +83,22 @@ export class InvoicePdfService {
    * All glyphs stay within WinAnsi (Latin-1) — PDFKit's default Helvetica
    * font cannot render U+2192 (→) etc.
    */
-  async render(publicId: string): Promise<Buffer> {
-    const invoice = await this.invoiceRepo.findOne({ where: { publicId } });
+  /**
+   * Render an invoice PDF.
+   *
+   * `level` gates the page-2 content (worksites + workers). Bronze partners
+   * and any caller passing 'page1Only' get the financial breakdown only;
+   * Affiliates never reach this code path (controller throws 403 first).
+   */
+  async render(
+    publicId: string,
+    opts?: { level?: 'full' | 'page1Only' },
+  ): Promise<Buffer> {
+    const level = opts?.level ?? 'full';
+    const invoice = await this.invoiceRepo.findOne({
+      where: { publicId },
+      relations: ['workCenters', 'workers'],
+    });
     if (!invoice) throw new Error('Invoice not found');
     const employer = await this.employerRepo.findOne({ where: { id: invoice.employerId } });
     const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
@@ -146,19 +169,25 @@ export class InvoicePdfService {
       rightY += 12;
     };
     metaRow('Nº', invoice.invoiceNumber);
-    metaRow('Fecha', invoice.issueDate);
-    metaRow('Vencimiento', invoice.dueDate);
-    metaRow('Periodo', `${invoice.periodStart} a ${invoice.periodEnd}`);
-    if (invoice.isProrated && invoice.proratedDays && invoice.daysInMonth) {
-      doc.fillColor('#a04').text(
-        `Prorrateado: ${invoice.proratedDays}/${invoice.daysInMonth} dias`,
-        MARGIN,
-        rightY,
-        { width: CONTENT_WIDTH, align: 'right' },
-      );
-      rightY += 12;
-      doc.fillColor(TEXT_DARK);
-    }
+    metaRow('Fecha', fmtDateEs(invoice.issueDate));
+    metaRow('Vencimiento', fmtDateEs(invoice.dueDate));
+    // Per spec §8: always show calendar-day count in parens, prorated or not.
+    // Use the persisted `proratedDays` when available, fall back to a
+    // computed inclusive day count from the period boundaries.
+    const periodDays =
+      invoice.proratedDays ??
+      Math.round(
+        (new Date(invoice.periodEnd).getTime() -
+          new Date(invoice.periodStart).getTime()) /
+          86_400_000,
+      ) + 1;
+    metaRow(
+      'Periodo',
+      `${fmtDateEs(invoice.periodStart)} - ${fmtDateEs(invoice.periodEnd)} (${periodDays} días)`,
+    );
+    // The standalone "Prorrateado: N/M dias" line was retired now that the
+    // calendar-day count lives directly in the Periodo line — same info,
+    // one less row, no clash with the rest of the header's neutral colors.
 
     let y = Math.max(leftY, rightY) + 24;
 
@@ -329,6 +358,72 @@ export class InvoicePdfService {
       doc.text(config.paymentDetails, MARGIN, fy, {
         width: CONTENT_WIDTH,
       });
+    }
+
+    // ============================================================
+    // PAGE 2 — worksites + workers detail (Gold/Silver/Admin/Employer only).
+    // Skipped entirely for level === 'page1Only' (Bronze partners).
+    // ============================================================
+    const wcRows = (invoice as any).workCenters as Array<{ name: string }> | undefined;
+    const wkRows = (invoice as any).workers as Array<{ name: string }> | undefined;
+    const hasDetail =
+      level === 'full' && ((wcRows?.length ?? 0) > 0 || (wkRows?.length ?? 0) > 0);
+
+    if (hasDetail) {
+      doc.addPage();
+      let py = MARGIN;
+
+      doc.fontSize(14).fillColor(PURPLE).font('Helvetica-Bold');
+      doc.text('Detalle de servicios', MARGIN, py);
+      py += 22;
+
+      doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica');
+      doc.text(
+        'Centros de trabajo y trabajadores incluidos en el cálculo de esta factura.',
+        MARGIN,
+        py,
+        { width: CONTENT_WIDTH },
+      );
+      py += 24;
+
+      // --- Centros de trabajo ---
+      if (wcRows && wcRows.length) {
+        doc.fontSize(11).fillColor(TEXT_DARK).font('Helvetica-Bold');
+        doc.text(`Centros de trabajo (${wcRows.length})`, MARGIN, py);
+        py += 16;
+
+        doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica');
+        for (const row of wcRows) {
+          if (py > doc.page.height - MARGIN - 20) {
+            doc.addPage();
+            py = MARGIN;
+          }
+          doc.text(`• ${row.name}`, MARGIN + 8, py, { width: CONTENT_WIDTH - 8 });
+          py += 14;
+        }
+        py += 12;
+      }
+
+      // --- Trabajadores ---
+      if (wkRows && wkRows.length) {
+        if (py > doc.page.height - MARGIN - 60) {
+          doc.addPage();
+          py = MARGIN;
+        }
+        doc.fontSize(11).fillColor(TEXT_DARK).font('Helvetica-Bold');
+        doc.text(`Trabajadores (${wkRows.length})`, MARGIN, py);
+        py += 16;
+
+        doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica');
+        for (const row of wkRows) {
+          if (py > doc.page.height - MARGIN - 20) {
+            doc.addPage();
+            py = MARGIN;
+          }
+          doc.text(`• ${row.name}`, MARGIN + 8, py, { width: CONTENT_WIDTH - 8 });
+          py += 14;
+        }
+      }
     }
 
     doc.end();

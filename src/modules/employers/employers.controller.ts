@@ -10,7 +10,10 @@ import {
   Request,
   Query,
   ParseUUIDPipe,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { EmployersService } from './employers.service';
 import { CreateEmployerDto } from './dto/create-employer.dto';
 import { UpdateEmployerDto } from './dto/update-employer.dto';
@@ -48,14 +51,16 @@ export class EmployersController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async getMe(@Request() req) {
-    return this.employersService.findOne(req.user.sub);
+    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
+    return this.employersService.findOne(employerId);
   }
 
   // Employer: Update own data (must be before :id to avoid conflict)
   @Patch('me')
   @UseGuards(JwtAuthGuard)
   async updateMe(@Request() req, @Body() updateEmployerDto: UpdateEmployerDto) {
-    return this.employersService.update(req.user.sub, updateEmployerDto);
+    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
+    return this.employersService.update(employerId, updateEmployerDto);
   }
 
   // Admin/Partner: Get employer by UUID
@@ -85,5 +90,63 @@ export class EmployersController {
   async remove(@Param('id', ParseUUIDPipe) id: string) {
     const numericId = await this.employersService.resolvePublicId(id);
     return this.employersService.remove(numericId);
+  }
+
+  // Employer self-service: upload/remove own company logo. The avatar
+  // dropdown ("Mis Datos") routes here for employer-role users.
+  @Post('me/logo')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadMyLogo(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
+    return this.employersService.setLogo(employerId, file);
+  }
+
+  @Delete('me/logo')
+  @UseGuards(JwtAuthGuard)
+  async deleteMyLogo(@Request() req) {
+    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
+    return this.employersService.clearLogo(employerId);
+  }
+
+  // Employer self-service: capture (or change) the payment method. Triggered
+  // by the AWAITING_PAYMENT_METHOD banner on the employer dashboard once
+  // the trial ends. Stamps `paymentMethodAddedAt` and (if applicable) flips
+  // billing_status from AWAITING_PAYMENT_METHOD → ACTIVE.
+  @Post('me/payment-method')
+  @UseGuards(JwtAuthGuard)
+  async setMyPaymentMethod(
+    @Request() req,
+    @Body() body: { paymentMethodId: number },
+  ) {
+    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
+    return this.employersService.recordPaymentMethod(
+      employerId,
+      Number(body?.paymentMethodId),
+    );
+  }
+
+  // Admin/Partner: upload/remove a logo on behalf of any employer.
+  @Post(':id/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1, 2)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadLogo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const numericId = await this.employersService.resolvePublicId(id);
+    return this.employersService.setLogo(numericId, file);
+  }
+
+  @Delete(':id/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1, 2)
+  async deleteLogo(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.employersService.resolvePublicId(id);
+    return this.employersService.clearLogo(numericId);
   }
 }

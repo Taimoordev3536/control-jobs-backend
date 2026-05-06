@@ -10,7 +10,10 @@ import {
   Request,
   Logger,
   ParseUUIDPipe,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import { PartnersService } from './partners.service';
 import { CreatePartnerDto } from './dto/create-partner.dto';
@@ -59,6 +62,42 @@ export class PartnersController {
     return this.partnersService.findAll();
   }
 
+  // Partner self-service: declared before the :id catch-alls so ParseUUIDPipe
+  // doesn't reject the literal 'me'. This also relocates the original
+  // @Get('me')/@Patch('me') (which were buggy below :id) — and switches them
+  // to resolve via PartnerUser instead of trusting req.user.sub == partner.id.
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  async getMe(@Request() req) {
+    const partnerId = await this.partnersService.findPartnerIdByUserId(req.user.id);
+    return this.partnersService.findOne(partnerId);
+  }
+
+  @Patch('me')
+  @UseGuards(JwtAuthGuard)
+  async updateMe(@Request() req, @Body() updatePartnerDto: UpdatePartnerDto) {
+    const partnerId = await this.partnersService.findPartnerIdByUserId(req.user.id);
+    return this.partnersService.update(partnerId, updatePartnerDto);
+  }
+
+  @Post('me/logo')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadMyLogo(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const partnerId = await this.partnersService.findPartnerIdByUserId(req.user.id);
+    return this.partnersService.setLogo(partnerId, file);
+  }
+
+  @Delete('me/logo')
+  @UseGuards(JwtAuthGuard)
+  async deleteMyLogo(@Request() req) {
+    const partnerId = await this.partnersService.findPartnerIdByUserId(req.user.id);
+    return this.partnersService.clearLogo(partnerId);
+  }
+
   @Get(':id')
   @Roles(1)
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -80,20 +119,6 @@ export class PartnersController {
   async remove(@Param('id', ParseUUIDPipe) id: string) {
     const numericId = await this.partnersService.resolvePublicId(id);
     return this.partnersService.remove(numericId);
-  }
-
-  // Partner: Get own data
-  @Get('me')
-  @UseGuards(JwtAuthGuard)
-  async getMe(@Request() req) {
-    return this.partnersService.findOne(req.user.sub);
-  }
-
-  // Partner: Update own data
-  @Patch('me')
-  @UseGuards(JwtAuthGuard)
-  async updateMe(@Request() req, @Body() updatePartnerDto: UpdatePartnerDto) {
-    return this.partnersService.update(req.user.sub, updatePartnerDto);
   }
 
   @Get('tiers')

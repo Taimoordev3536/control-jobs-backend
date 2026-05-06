@@ -91,4 +91,10 @@ export class Client {
 
   @Column({ default: true })
   active: boolean;
+
+  @Column({ name: 'logo_public_id', length: 255, nullable: true })
+  logoPublicId: string | null;
+
+  @Column({ name: 'logo_url', length: 500, nullable: true })
+  logoUrl: string | null;
 }

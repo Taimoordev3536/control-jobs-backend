@@ -3,12 +3,15 @@ import {
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
+  OneToMany,
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
   Index,
 } from 'typeorm';
 import { Employer } from '../../employers/entities/employer.entity';
+import { InvoiceWorkCenter } from './invoice-workcenter.entity';
+import { InvoiceWorker } from './invoice-worker.entity';
 
 export type InvoiceStatus =
   | 'PENDING'
@@ -110,4 +113,13 @@ export class Invoice {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  // "Page 2" snapshots — populated by InvoiceService.createForEmployer at
+  // the moment the invoice is issued. Historical: a later removal of a work
+  // center or worker doesn't erase what was billed for.
+  @OneToMany(() => InvoiceWorkCenter, (row) => row.invoice)
+  workCenters: InvoiceWorkCenter[];
+
+  @OneToMany(() => InvoiceWorker, (row) => row.invoice)
+  workers: InvoiceWorker[];
 }

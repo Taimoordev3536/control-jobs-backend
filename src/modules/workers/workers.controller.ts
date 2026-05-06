@@ -10,7 +10,11 @@ import {
   ParseUUIDPipe,
   UseGuards,
   Req,
+  UseInterceptors,
+  UploadedFile,
+  Request,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { WorkersService } from './workers.service';
 import { CreateWorkerDto } from './dto/create-worker.dto';
 import { UpdateWorkerDto } from './dto/update-worker.dto';
@@ -47,6 +51,48 @@ export class WorkersController {
   @Roles(UserRole.Employer)
   async findAllByEmployer(@Req() req) {
     return this.workersService.findAllByEmployer(req.user);
+  }
+
+  // Worker self-service: upload/remove personal photo. Declared before :id so
+  // ParseUUIDPipe doesn't reject "me".
+  @Post('me/logo')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadMyLogo(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const workerId = await this.workersService.findWorkerIdByUserId(req.user.id);
+    return this.workersService.setLogo(workerId, file);
+  }
+
+  @Delete('me/logo')
+  @UseGuards(JwtAuthGuard)
+  async deleteMyLogo(@Request() req) {
+    const workerId = await this.workersService.findWorkerIdByUserId(req.user.id);
+    return this.workersService.clearLogo(workerId);
+  }
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  async getMe(@Request() req) {
+    const workerId = await this.workersService.findWorkerIdByUserId(req.user.id);
+    const data = await this.workersService.findOne(workerId);
+    return {
+      message: 'Worker retrieved',
+      data,
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  // Read-only: workers reachable through this client's jobs. Used by the
+  // Clients > Workers tab to show "who works for this client" without making
+  // it a real ownership relation.
+  @Get('by-client/:publicId')
+  @UseGuards(JwtAuthGuard)
+  async getWorkersByClient(@Param('publicId', ParseUUIDPipe) publicId: string) {
+    return this.workersService.getWorkersByClientPublicId(publicId);
   }
 
   @Get(':id')

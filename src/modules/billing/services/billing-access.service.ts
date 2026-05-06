@@ -3,7 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { PartnerUser } from '../../partners/entities/partner-user.entity';
+import { PartnerTier } from '../../partners/entities/partner-type.entity';
+import { Partner } from '../../partners/entities/partner.entity';
 import { Employer } from '../../employers/entities/employer.entity';
+
+export type PartnerTierName = 'Gold' | 'Silver' | 'Bronze' | 'Affiliate';
 
 export interface BillingScope {
   /** "all" → admin, "partner" → only their employers, "employer" → only own. */
@@ -12,7 +16,16 @@ export interface BillingScope {
   partnerId?: number;
   /** Set when kind === "employer" */
   employerId?: number;
+  /** Set when kind === "partner" — gates how much of an invoice they can see. */
+  partnerTier?: PartnerTierName;
 }
+
+/**
+ * How much of an invoice the caller is allowed to see.
+ *  - 'full'      → page 1 + page 2 (worksite & worker names)
+ *  - 'page1Only' → only the financial breakdown; snapshots stripped
+ */
+export type InvoiceDetailLevel = 'full' | 'page1Only';
 
 /**
  * Resolves which invoices/employers an authenticated user is allowed to see
@@ -27,6 +40,8 @@ export class BillingAccessService {
     private readonly employerUserRepo: Repository<EmployerUser>,
     @InjectRepository(PartnerUser)
     private readonly partnerUserRepo: Repository<PartnerUser>,
+    @InjectRepository(PartnerTier)
+    private readonly partnerTierRepo: Repository<PartnerTier>,
     @InjectRepository(Employer)
     private readonly employerRepo: Repository<Employer>,
   ) {}
@@ -52,6 +67,7 @@ export class BillingAccessService {
       // Find any PartnerUser link for this user (default OR sub-user).
       const link = await this.partnerUserRepo.findOne({
         where: { userId },
+        relations: ['partner'],
       });
       if (!link?.partnerId) {
         this.logger.warn(
@@ -59,7 +75,29 @@ export class BillingAccessService {
         );
         throw new ForbiddenException('Partner account not linked');
       }
-      return { kind: 'partner', partnerId: link.partnerId };
+      // Resolve tier name (Gold / Silver / Bronze / Affiliate). Drives
+      // invoice-detail visibility per spec §3.
+      const partner = (link as any).partner as Partner | undefined;
+      let tierName: PartnerTierName | undefined;
+      if (partner?.partnerTierId) {
+        const tier = await this.partnerTierRepo.findOne({
+          where: { id: partner.partnerTierId },
+        });
+        const raw = (tier?.name || '').trim();
+        if (
+          raw === 'Gold' ||
+          raw === 'Silver' ||
+          raw === 'Bronze' ||
+          raw === 'Affiliate'
+        ) {
+          tierName = raw;
+        }
+      }
+      return {
+        kind: 'partner',
+        partnerId: link.partnerId,
+        partnerTier: tierName,
+      };
     }
 
     if (roleName === 'employer') {
@@ -111,5 +149,30 @@ export class BillingAccessService {
 
   isAdmin(user: any): boolean {
     return String(user?.role?.name || '').toLowerCase() === 'admin';
+  }
+
+  /**
+   * Tier-aware gate for the invoice DETAIL surface (web page + PDF).
+   * Layered on top of the basic employer-scoping check:
+   *   - admin / employer (own) → full
+   *   - partner Gold | Silver  → full
+   *   - partner Bronze         → page 1 only (snapshots stripped from response)
+   *   - partner Affiliate      → 403, can only see the listing
+   */
+  async assertInvoiceDetailAccess(
+    scope: BillingScope,
+    employerId: number,
+  ): Promise<InvoiceDetailLevel> {
+    await this.assertCanViewEmployer(scope, employerId);
+
+    if (scope.kind === 'partner') {
+      if (scope.partnerTier === 'Affiliate') {
+        throw new ForbiddenException(
+          'Affiliate partners cannot open invoice details',
+        );
+      }
+      if (scope.partnerTier === 'Bronze') return 'page1Only';
+    }
+    return 'full';
   }
 }

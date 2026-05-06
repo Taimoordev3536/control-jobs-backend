@@ -98,6 +98,9 @@ export class Partner {
   @Column({ nullable: true })
   logoUrl: string;
 
+  @Column({ name: 'logo_public_id', length: 255, nullable: true })
+  logoPublicId: string | null;
+
   @Column({ name: 'partner_tier_id' })
   partnerTierId: number;
 

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThanOrEqual, Repository } from 'typeorm';
 import { Employer } from '../../employers/entities/employer.entity';
@@ -27,16 +27,19 @@ export class BillingCronService {
   }
 
   /**
-   * Daily promotion: every employer whose trial has ended is flipped to
-   * ACTIVE, and their first (prorated) invoice for the current month is
-   * generated covering trial_ends_at → end-of-month.
+   * Daily trial-end handler: every TRIAL employer whose trial has ended is
+   * flipped to AWAITING_PAYMENT_METHOD. The system does NOT auto-issue an
+   * invoice or auto-activate them — per spec §6, the employer must add a
+   * payment method first. Until then, service is paused. The eventual
+   * monthly cron will prorate the first real invoice from the date the
+   * card was actually added (`paymentMethodAddedAt`).
    *
    * Runs at 04:00 every day.
    */
   @Cron('0 4 * * *', { name: 'billing-promote-trials' })
   async promoteTrialsToActive() {
     if (!this.enabled) return;
-    this.logger.log('🔄 Trial promotion job starting');
+    this.logger.log('🔄 Trial-end job starting');
 
     const now = new Date();
     const ended = await this.employerRepo.find({
@@ -46,51 +49,37 @@ export class BillingCronService {
 
     for (const employer of ended) {
       try {
-        await this.promoteOne(employer, now);
+        await this.flagForPaymentMethod(employer);
       } catch (err: any) {
         this.logger.error(
-          `Failed to promote employer ${employer.id}: ${err.message}`,
+          `Failed to flag employer ${employer.id}: ${err.message}`,
           err.stack,
         );
       }
     }
-    this.logger.log('✅ Trial promotion job done');
+    this.logger.log('✅ Trial-end job done');
   }
 
-  private async promoteOne(employer: Employer, now: Date) {
-    // Effective billing start = the moment the trial ended.
-    const effectiveStart = employer.trialEndsAt ? new Date(employer.trialEndsAt) : now;
-
-    // Determine the period this first invoice covers (current calendar month).
-    const periodStart = effectiveStart;
-    const monthEnd = endOfMonth(effectiveStart);
-    const daysInMonth = monthEnd.getDate();
-    const proratedDays = monthEnd.getDate() - effectiveStart.getDate() + 1;
-
-    // Idempotency: invoice may already exist (re-runs).
-    const existing = await this.invoices.findByEmployer(employer.id);
-    const alreadyHasFor = existing.find(
-      (i) => i.periodStart === toIsoDate(periodStart),
-    );
-    if (!alreadyHasFor) {
-      await this.invoices.createForEmployer(employer, {
-        periodStart,
-        periodEnd: monthEnd,
-        proratedDays,
-        daysInMonth,
-      });
-    }
-
-    employer.billingStatus = 'ACTIVE';
+  private async flagForPaymentMethod(employer: Employer) {
+    employer.billingStatus = 'AWAITING_PAYMENT_METHOD';
     await this.employerRepo.save(employer);
-    this.logger.log(`Employer ${employer.id} promoted TRIAL → ACTIVE`);
+    this.logger.log(
+      `Employer ${employer.id} TRIAL → AWAITING_PAYMENT_METHOD (no invoice issued)`,
+    );
+    // TODO: send a transactional email here once the email service has a
+    // template for "trial ended, please add a payment method." For now the
+    // employer is alerted by the in-app banner only.
   }
 
   /**
    * Monthly billing: on day 1 of each month at 00:01, create an invoice
    * for every ACTIVE employer covering the previous full calendar month.
-   * Cron spec breakdown: minute=1, hour=0, day-of-month=1 → midnight + 1 min
-   * on the FIRST of every month. (Not the 3rd — common misread of "0 3 1".)
+   * Employers in TRIAL or AWAITING_PAYMENT_METHOD are skipped — they get
+   * billed only after they activate.
+   *
+   * Per spec §6, the invoice can be either full-month or partial: if the
+   * employer's reactivation date (`paymentMethodAddedAt`) falls inside
+   * the previous month, we prorate from that date instead of from day 1.
    */
   @Cron('1 0 1 * *', { name: 'billing-monthly-invoices' })
   async generateMonthlyInvoices() {
@@ -116,9 +105,32 @@ export class BillingCronService {
         );
         if (alreadyExists) continue;
 
+        // Default: full-month invoice covering periodStart → periodEnd.
+        let invoiceStart = periodStart;
+        let proratedDays: number | undefined;
+        let daysInMonth: number | undefined;
+
+        // If the employer activated mid-period (paymentMethodAddedAt sits
+        // inside the previous month), prorate from that date so we only
+        // bill for days the service was actually active.
+        const reactivation = employer.paymentMethodAddedAt
+          ? new Date(employer.paymentMethodAddedAt)
+          : null;
+        if (
+          reactivation &&
+          reactivation > periodStart &&
+          reactivation <= periodEnd
+        ) {
+          invoiceStart = reactivation;
+          daysInMonth = periodEnd.getDate();
+          proratedDays = daysInMonth - reactivation.getDate() + 1;
+        }
+
         await this.invoices.createForEmployer(employer, {
-          periodStart,
+          periodStart: invoiceStart,
           periodEnd,
+          proratedDays,
+          daysInMonth,
         });
       } catch (err: any) {
         this.logger.error(
@@ -129,10 +141,6 @@ export class BillingCronService {
     }
     this.logger.log('✅ Monthly billing job done');
   }
-}
-
-function endOfMonth(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
 }
 
 function toIsoDate(d: Date): string {

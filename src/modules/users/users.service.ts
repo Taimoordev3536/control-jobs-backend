@@ -1,12 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { isUUID } from 'class-validator';
 import { User } from './entities/user.entity';
 import { Role } from './entities/role.entity';
+import { AdminUser } from './entities/admin-user.entity';
 import { Partner } from '../partners/entities/partner.entity';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AwsService } from '../aws/aws.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { CreateUserDto } from './dto/create-user.dto';
 import * as bcrypt from 'bcrypt';
 
@@ -17,8 +20,81 @@ export class UsersService {
     private usersRepository: Repository<User>,
     @InjectRepository(Role)
     private rolesRepository: Repository<Role>,
+    @InjectRepository(AdminUser)
+    private adminUserRepository: Repository<AdminUser>,
     private readonly awsService: AwsService,
+    private readonly cloudinaryService: CloudinaryService,
   ) { }
+
+  // Find the AdminUser row for the given login user. Used by /users/admin/me/*
+  // endpoints to scope read/write to the active admin without trusting the
+  // payload's id directly.
+  private async findAdminUserByUserId(userId: number): Promise<AdminUser> {
+    const link = await this.adminUserRepository.findOne({ where: { userId } });
+    if (!link) {
+      throw new NotFoundException('No admin profile is linked to the current user');
+    }
+    return link;
+  }
+
+  async getAdminMe(userId: number): Promise<BaseResponse<AdminUser>> {
+    const admin = await this.findAdminUserByUserId(userId);
+    return {
+      message: 'Admin profile retrieved',
+      data: admin,
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async setAdminLogo(
+    userId: number,
+    file: Express.Multer.File,
+  ): Promise<BaseResponse<{ logoUrl: string; logoPublicId: string }>> {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+      throw new BadRequestException('Logo must be PNG or JPEG');
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('Logo must be 2 MB or smaller');
+    }
+
+    const admin = await this.findAdminUserByUserId(userId);
+    const oldPublicId = admin.logoPublicId;
+    const uploaded = await this.cloudinaryService.uploadImage(
+      file.buffer,
+      'controljobs/admin-photos',
+    );
+    admin.logoPublicId = uploaded.publicId;
+    admin.logoUrl = uploaded.secureUrl;
+    await this.adminUserRepository.save(admin);
+
+    if (oldPublicId && oldPublicId !== uploaded.publicId) {
+      await this.cloudinaryService.deleteImage(oldPublicId);
+    }
+
+    return {
+      message: 'Logo updated',
+      data: { logoUrl: uploaded.secureUrl, logoPublicId: uploaded.publicId },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async clearAdminLogo(userId: number): Promise<BaseResponse<null>> {
+    const admin = await this.findAdminUserByUserId(userId);
+    const oldPublicId = admin.logoPublicId;
+    admin.logoPublicId = null;
+    admin.logoUrl = null;
+    await this.adminUserRepository.save(admin);
+    if (oldPublicId) await this.cloudinaryService.deleteImage(oldPublicId);
+    return {
+      message: 'Logo removed',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
 
   async resolvePublicId(publicId: string): Promise<number> {
     const user = await this.usersRepository.findOne({ where: { publicId } });

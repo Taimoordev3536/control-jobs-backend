@@ -9,9 +9,14 @@ import { Role } from '../users/entities/role.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { EmployerClient } from '../employers/entities/employer-client.entity';
 import { CommonModule } from '../../common/common.module';
+import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Client, ClientUser, User, Role, Employer, EmployerClient]), CommonModule],
+  imports: [
+    TypeOrmModule.forFeature([Client, ClientUser, User, Role, Employer, EmployerClient]),
+    CommonModule,
+    CloudinaryModule,
+  ],
   controllers: [ClientsController],
   providers: [ClientsService],
 })

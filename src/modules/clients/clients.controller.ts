@@ -9,7 +9,11 @@ import {
   ParseUUIDPipe,
   UseGuards,
   Req,
+  UseInterceptors,
+  UploadedFile,
+  Request,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ClientsService } from './clients.service';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AssignClientUserDto } from './dto/assign-client-user.dto';
@@ -52,6 +56,40 @@ export class ClientsController {
   @Roles(UserRole.Employer)
   async findClientsForAddJob(@Req() req) {
     return this.clientsService.findClientsForAddJob(req.user);
+  }
+
+  // Client self-service: upload/remove company logo. Declared before :id so
+  // ParseUUIDPipe doesn't reject "me".
+  @Post('me/logo')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadMyLogo(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const clientId = await this.clientsService.findClientIdByUserId(req.user.id);
+    return this.clientsService.setLogo(clientId, file);
+  }
+
+  @Delete('me/logo')
+  @UseGuards(JwtAuthGuard)
+  async deleteMyLogo(@Request() req) {
+    const clientId = await this.clientsService.findClientIdByUserId(req.user.id);
+    return this.clientsService.clearLogo(clientId);
+  }
+
+  // Client self-service: read own row (so the dropdown can fetch logoUrl).
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  async getMe(@Request() req) {
+    const clientId = await this.clientsService.findClientIdByUserId(req.user.id);
+    const data = await this.clientsService.findOne(clientId);
+    return {
+      message: 'Client retrieved',
+      data,
+      isSuccess: true,
+      statusCode: 200,
+    };
   }
 
   @Get(':id')

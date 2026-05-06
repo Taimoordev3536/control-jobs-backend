@@ -47,8 +47,19 @@ export class InvoicesController {
   async getOne(@Req() req: any, @Param('publicId') publicId: string) {
     const invoice = await this.invoices.findByPublicId(publicId);
     const scope = await this.access.resolveScope(req.user);
-    await this.access.assertCanViewEmployer(scope, invoice.employerId);
-    return { data: invoice };
+    // Throws 403 for Affiliate partners; returns 'page1Only' for Bronze.
+    const level = await this.access.assertInvoiceDetailAccess(
+      scope,
+      invoice.employerId,
+    );
+
+    if (level === 'page1Only') {
+      // Strip the page-2 snapshots so Bronze partners can't see worksite
+      // / worker names. The financial breakdown stays.
+      const { workCenters: _wc, workers: _wk, ...page1 } = invoice as any;
+      return { data: { ...page1, accessLevel: 'page1Only' } };
+    }
+    return { data: { ...invoice, accessLevel: 'full' } };
   }
 
   @Post(':publicId/mark-paid')
@@ -77,8 +88,11 @@ export class InvoicesController {
   ) {
     const invoice = await this.invoices.findByPublicId(publicId);
     const scope = await this.access.resolveScope(req.user);
-    await this.access.assertCanViewEmployer(scope, invoice.employerId);
-    const buffer = await this.pdf.render(publicId);
+    const level = await this.access.assertInvoiceDetailAccess(
+      scope,
+      invoice.employerId,
+    );
+    const buffer = await this.pdf.render(publicId, { level });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',

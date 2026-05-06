@@ -13,6 +13,7 @@ import { PartnerUser } from './entities/partner-user.entity';
 import { User } from '../users/entities/user.entity';
 import { PartnerTier } from './entities/partner-type.entity';
 import { EmailService } from '../../common/services/email.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 
@@ -28,6 +29,7 @@ export class PartnersService {
     @InjectRepository(PartnerTier)
     private readonly partnerTierRepository: Repository<PartnerTier>,
     private readonly emailService: EmailService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   /**
@@ -39,6 +41,74 @@ export class PartnersService {
     const partner = await this.partnerRepository.findOne({ where: { publicId } });
     if (!partner) throw new NotFoundException('Partner not found');
     return partner.id;
+  }
+
+  // Resolve Partner.id from a User.id via PartnerUser junction. JWT payload
+  // carries User.id as `sub`/`id`, so all me-scoped partner endpoints must go
+  // through this helper to avoid landing on the wrong row by id collision.
+  async findPartnerIdByUserId(userId: number): Promise<number> {
+    const link = await this.partnerUserRepository.findOne({
+      where: { userId },
+      relations: ['partner'],
+    });
+    if (!link?.partner?.id) {
+      throw new NotFoundException('No partner is linked to the current user');
+    }
+    return link.partner.id;
+  }
+
+  async setLogo(
+    id: number,
+    file: Express.Multer.File,
+  ): Promise<BaseResponse<{ logoUrl: string; logoPublicId: string }>> {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+      throw new BadRequestException('Logo must be PNG or JPEG');
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('Logo must be 2 MB or smaller');
+    }
+
+    const partner = await this.partnerRepository.findOne({ where: { id } });
+    if (!partner) throw new NotFoundException(`Partner ${id} not found`);
+
+    const oldPublicId = partner.logoPublicId;
+    const uploaded = await this.cloudinaryService.uploadImage(
+      file.buffer,
+      'controljobs/partner-logos',
+    );
+    partner.logoPublicId = uploaded.publicId;
+    partner.logoUrl = uploaded.secureUrl;
+    await this.partnerRepository.save(partner);
+
+    if (oldPublicId && oldPublicId !== uploaded.publicId) {
+      await this.cloudinaryService.deleteImage(oldPublicId);
+    }
+
+    return {
+      message: 'Logo updated',
+      data: { logoUrl: uploaded.secureUrl, logoPublicId: uploaded.publicId },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async clearLogo(id: number): Promise<BaseResponse<null>> {
+    const partner = await this.partnerRepository.findOne({ where: { id } });
+    if (!partner) throw new NotFoundException(`Partner ${id} not found`);
+
+    const oldPublicId = partner.logoPublicId;
+    partner.logoPublicId = null;
+    partner.logoUrl = null as any;
+    await this.partnerRepository.save(partner);
+    if (oldPublicId) await this.cloudinaryService.deleteImage(oldPublicId);
+
+    return {
+      message: 'Logo removed',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+    };
   }
 
   async create(

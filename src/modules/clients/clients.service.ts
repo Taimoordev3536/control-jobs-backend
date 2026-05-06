@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { BaseResponse } from '../../common/interfaces/base-response.interface';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Client } from './entities/client.entity';
@@ -32,12 +34,77 @@ export class ClientsService {
     private employerClientRepo: Repository<EmployerClient>,
     private dataSource: DataSource,
   private readonly emailService: EmailService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   async resolvePublicId(publicId: string): Promise<number> {
     const client = await this.clientRepo.findOne({ where: { publicId } });
     if (!client) throw new NotFoundException('Client not found');
     return client.id;
+  }
+
+  async findClientIdByUserId(userId: number): Promise<number> {
+    const link = await this.clientUserRepo.findOne({ where: { userId } });
+    if (link?.clientId) return link.clientId;
+    // Fallback: some legacy clients store the primary user via Client.userId
+    // directly without a clients_users row.
+    const direct = await this.clientRepo.findOne({ where: { userId } });
+    if (direct?.id) return direct.id;
+    throw new NotFoundException('No client is linked to the current user');
+  }
+
+  async setLogo(
+    id: number,
+    file: Express.Multer.File,
+  ): Promise<BaseResponse<{ logoUrl: string; logoPublicId: string }>> {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+      throw new BadRequestException('Logo must be PNG or JPEG');
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('Logo must be 2 MB or smaller');
+    }
+
+    const client = await this.clientRepo.findOne({ where: { id } });
+    if (!client) throw new NotFoundException(`Client ${id} not found`);
+
+    const oldPublicId = client.logoPublicId;
+    const uploaded = await this.cloudinaryService.uploadImage(
+      file.buffer,
+      'controljobs/client-logos',
+    );
+    client.logoPublicId = uploaded.publicId;
+    client.logoUrl = uploaded.secureUrl;
+    await this.clientRepo.save(client);
+
+    if (oldPublicId && oldPublicId !== uploaded.publicId) {
+      await this.cloudinaryService.deleteImage(oldPublicId);
+    }
+
+    return {
+      message: 'Logo updated',
+      data: { logoUrl: uploaded.secureUrl, logoPublicId: uploaded.publicId },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async clearLogo(id: number): Promise<BaseResponse<null>> {
+    const client = await this.clientRepo.findOne({ where: { id } });
+    if (!client) throw new NotFoundException(`Client ${id} not found`);
+
+    const oldPublicId = client.logoPublicId;
+    client.logoPublicId = null;
+    client.logoUrl = null;
+    await this.clientRepo.save(client);
+    if (oldPublicId) await this.cloudinaryService.deleteImage(oldPublicId);
+
+    return {
+      message: 'Logo removed',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+    };
   }
 
   findAll() {

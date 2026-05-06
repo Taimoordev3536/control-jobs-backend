@@ -13,6 +13,7 @@ import {
   generateQrPdfBuffer,
   QrPdfTemplateData,
 } from '../helpers/qr-pdf-template';
+import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 
 /**
  * Generates the A5 QR-code PDF for a work center via a pure-JS renderer
@@ -27,6 +28,7 @@ export class QrPdfService {
     @InjectRepository(EmployerClient)
     private readonly employerClientRepo: Repository<EmployerClient>,
     private readonly qrCodeService: QrCodeService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   async generatePdfForWorkCenter(workCenterId: number): Promise<Buffer> {
@@ -55,6 +57,11 @@ export class QrPdfService {
       );
     }
 
+    const logoBuffer = employer?.logoPublicId
+      ? (await this.cloudinaryService.fetchPdfBuffer(employer.logoPublicId)) ??
+        undefined
+      : undefined;
+
     const templateData: QrPdfTemplateData = {
       qrImage: selected.qrImage,
       workCenterName: workCenter.name ?? '',
@@ -66,8 +73,10 @@ export class QrPdfService {
             postalCode: employer.postalCode,
             city: employer.city,
             province: employer.province,
+            logoUrl: employer.logoUrl ?? undefined,
           }
         : undefined,
+      logoBuffer,
     };
 
     return generateQrPdfBuffer(templateData);

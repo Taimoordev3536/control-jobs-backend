@@ -115,9 +115,12 @@ export class CreateEmployerDto {
   @IsOptional()
   discount?: number;
 
+  // Optional: invitation-link signups don't collect a payment method up
+  // front — the employer picks one at trial-end via the new banner/modal.
+  // Admin/partner creates and self-signup still pass a real id.
   @IsNumber()
-  @IsNotEmpty()
-  paymentMethodId: number;
+  @IsOptional()
+  paymentMethodId?: number;
 
   @IsString()
   @IsOptional()

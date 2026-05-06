@@ -72,13 +72,18 @@ export class BillingPreviewService {
     const vatPct = adminConfig.length ? Number(adminConfig[0].vatRate) || 0 : 0;
 
     // Proration: only if the employer's billing-effective start is mid-month.
-    // Effective start = max(trialEndsAt, periodStart) if employer is past trial
-    // or in the middle of one that ends this month.
+    // Priority order matches the cron-side logic — `paymentMethodAddedAt`
+    // (the reactivation date the employer added their card after trial)
+    // wins over the trial-end date so we don't bill for the limbo days
+    // between trial-end and card-add. Falls back to `trialEndsAt` for
+    // legacy data, then `createdAt` for brand-new employers.
     let proratedDays = daysInMonth;
     let isProrated = false;
-    const effectiveStartCandidate = employer.trialEndsAt
-      ? new Date(employer.trialEndsAt)
-      : new Date(employer.createdAt);
+    const effectiveStartCandidate = employer.paymentMethodAddedAt
+      ? new Date(employer.paymentMethodAddedAt)
+      : employer.trialEndsAt
+        ? new Date(employer.trialEndsAt)
+        : new Date(employer.createdAt);
     if (
       effectiveStartCandidate > periodStart &&
       effectiveStartCandidate <= periodEnd

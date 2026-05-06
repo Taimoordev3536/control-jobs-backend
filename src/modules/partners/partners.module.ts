@@ -9,6 +9,7 @@ import { User } from '../users/entities/user.entity';
 import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { AuthModule } from '../auth/auth.module';
 import { CommonModule } from '../../common/common.module';
+import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { CommonModule } from '../../common/common.module';
     ]),
     AuthModule,
     CommonModule,
+    CloudinaryModule,
   ],
   controllers: [PartnersController],
   providers: [PartnersService],

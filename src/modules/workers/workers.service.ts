@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { BaseResponse } from '../../common/interfaces/base-response.interface';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Worker } from './entities/worker.entity';
@@ -11,6 +13,9 @@ import { Role } from '../users/entities/role.entity';
 import { Employer } from '../../modules/employers/entities/employer.entity';
 import { EmployerWorker } from '../../modules/employers/entities/employer-worker.entity';
 import { EmployerUser } from '../../modules/employers/entities/employer-user.entity';
+import { Client } from '../clients/entities/client.entity';
+import { Job } from '../job/entities/job.entity';
+import { In } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { EmailService } from '../../common/services/email.service';
 
@@ -31,12 +36,161 @@ export class WorkersService {
     private employerWorkerRepo: Repository<EmployerWorker>,
     private dataSource: DataSource,
     private readonly emailService: EmailService,
+    private readonly cloudinaryService: CloudinaryService,
+    @InjectRepository(Client)
+    private clientRepo: Repository<Client>,
+    @InjectRepository(Job)
+    private jobRepo: Repository<Job>,
   ) {}
+
+  // Workers connected to a client *via the jobs they are assigned to*. This
+  // is read-only / informational — the same worker may legitimately appear
+  // under several clients if their jobs span multiple clients. Deduped by
+  // worker.id, with full row fields for the Workers tab table.
+  async getWorkersByClientPublicId(publicId: string) {
+    const client = await this.clientRepo.findOne({ where: { publicId } });
+    if (!client) {
+      return {
+        message: 'Client not found',
+        data: [],
+        isSuccess: false,
+        statusCode: 404,
+        developerError: `Client with publicId ${publicId} not found`,
+      };
+    }
+
+    const jobs = await this.jobRepo.find({
+      where: { client: { id: client.id } },
+      relations: ['workers'],
+    });
+
+    const workerIds = [
+      ...new Set(jobs.flatMap((j) => (j.workers || []).map((w) => w.id))),
+    ];
+    if (workerIds.length === 0) {
+      return {
+        message: 'No workers connected to this client',
+        data: [],
+        isSuccess: true,
+        statusCode: 200,
+      };
+    }
+
+    const workers = await this.workerRepo.find({ where: { id: In(workerIds) } });
+
+    // The Worker→User link in this codebase is the `workers_users` junction
+    // table — Worker.user_id is null on production rows. Pull the linked
+    // user via the junction so we can compose a display name.
+    const links = await this.workerUserRepo.find({
+      where: { workerId: In(workerIds) },
+      relations: ['user'],
+    });
+    const workerIdToUser = new Map<number, User>();
+    for (const link of links) {
+      if (link.workerId && link.user) workerIdToUser.set(link.workerId, link.user);
+    }
+
+    const composeName = (u?: User | null): string | null => {
+      if (!u) return null;
+      const trimmed = (u.name || '').trim();
+      if (trimmed) return trimmed;
+      const fn = (u.firstName || '').trim();
+      const ln = (u.lastName || '').trim();
+      const joined = [fn, ln].filter(Boolean).join(' ');
+      if (joined) return joined;
+      return u.email || null;
+    };
+
+    const data = workers.map((w) => ({
+      id: w.id,
+      publicId: w.publicId,
+      code: w.code,
+      name: composeName(workerIdToUser.get(w.id)),
+      occupation: w.occupation || null,
+      mobile: w.mobile || null,
+      city: w.city || null,
+      postalCode: w.postalCode || null,
+      logoUrl: w.logoUrl || null,
+    }));
+
+    return {
+      message: 'Workers connected via jobs',
+      data,
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
 
   async resolvePublicId(publicId: string): Promise<number> {
     const worker = await this.workerRepo.findOne({ where: { publicId } });
     if (!worker) throw new NotFoundException('Worker not found');
     return worker.id;
+  }
+
+  async findWorkerIdByUserId(userId: number): Promise<number> {
+    const link = await this.workerUserRepo.findOne({ where: { userId } });
+    if (link?.workerId) return link.workerId;
+    // Fallback: legacy workers may be linked directly via Worker.user.id.
+    const direct = await this.workerRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['user'],
+    });
+    if (direct?.id) return direct.id;
+    throw new NotFoundException('No worker is linked to the current user');
+  }
+
+  async setLogo(
+    id: number,
+    file: Express.Multer.File,
+  ): Promise<BaseResponse<{ logoUrl: string; logoPublicId: string }>> {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+      throw new BadRequestException('Logo must be PNG or JPEG');
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('Logo must be 2 MB or smaller');
+    }
+
+    const worker = await this.workerRepo.findOne({ where: { id } });
+    if (!worker) throw new NotFoundException(`Worker ${id} not found`);
+
+    const oldPublicId = worker.logoPublicId;
+    const uploaded = await this.cloudinaryService.uploadImage(
+      file.buffer,
+      'controljobs/worker-photos',
+    );
+    worker.logoPublicId = uploaded.publicId;
+    worker.logoUrl = uploaded.secureUrl;
+    await this.workerRepo.save(worker);
+
+    if (oldPublicId && oldPublicId !== uploaded.publicId) {
+      await this.cloudinaryService.deleteImage(oldPublicId);
+    }
+
+    return {
+      message: 'Logo updated',
+      data: { logoUrl: uploaded.secureUrl, logoPublicId: uploaded.publicId },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async clearLogo(id: number): Promise<BaseResponse<null>> {
+    const worker = await this.workerRepo.findOne({ where: { id } });
+    if (!worker) throw new NotFoundException(`Worker ${id} not found`);
+
+    const oldPublicId = worker.logoPublicId;
+    worker.logoPublicId = null;
+    worker.logoUrl = null;
+    await this.workerRepo.save(worker);
+    if (oldPublicId) await this.cloudinaryService.deleteImage(oldPublicId);
+
+    return {
+      message: 'Logo removed',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+    };
   }
 
   findAll() {

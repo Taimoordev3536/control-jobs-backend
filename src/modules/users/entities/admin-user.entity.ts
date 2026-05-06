@@ -40,6 +40,12 @@ export class AdminUser {
   @JoinColumn({ name: 'parent_user_id' })
   parentUser: User | null;
 
+  @Column({ name: 'logo_public_id', length: 255, nullable: true })
+  logoPublicId: string | null;
+
+  @Column({ name: 'logo_url', length: 500, nullable: true })
+  logoUrl: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

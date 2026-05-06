@@ -14,6 +14,7 @@ import { CommonModule } from '../../common/common.module';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { BillingModule } from '../billing/billing.module';
+import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { BillingModule } from '../billing/billing.module';
     AuthModule,
     UsersModule,
     forwardRef(() => BillingModule),
+    CloudinaryModule,
   ],
   controllers: [EmployersController],
   providers: [EmployersService],

@@ -82,7 +82,13 @@ user: User;
   asset: string;
 
   @Column({ name: 'access_account_status', default: 'postpone' })
-  accessAccountStatus: 'postpone' | 'request'; 
+  accessAccountStatus: 'postpone' | 'request';
+
+  @Column({ name: 'logo_public_id', length: 255, nullable: true })
+  logoPublicId: string | null;
+
+  @Column({ name: 'logo_url', length: 500, nullable: true })
+  logoUrl: string | null;
 
   // Relations
   @OneToMany(() => ScanLog, scanLog => scanLog.worker)

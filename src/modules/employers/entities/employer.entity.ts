@@ -201,12 +201,15 @@ export class Employer {
   @Column('decimal', { precision: 5, scale: 2, nullable: true })
   discount: number;
 
-  @ManyToOne(() => PaymentMethod)
+  @ManyToOne(() => PaymentMethod, { nullable: true })
   @JoinColumn({ name: 'paymentMethodId' })
-  paymentMethod: PaymentMethod;
+  paymentMethod: PaymentMethod | null;
 
-  @Column()
-  paymentMethodId: number;
+  // Nullable because invitation-link signups intentionally defer collecting
+  // a payment method until trial-end (set via POST /employers/me/payment-method).
+  // Admin/partner-created and self-signup employers still always set this.
+  @Column({ nullable: true })
+  paymentMethodId: number | null;
 
   @Column({ nullable: true })
   accountIban: string;
@@ -222,6 +225,12 @@ export class Employer {
 
   @Column({ nullable: true })
   accessAccountStatus: 'postpone' | 'request';
+
+  @Column({ name: 'logo_public_id', length: 255, nullable: true })
+  logoPublicId: string | null;
+
+  @Column({ name: 'logo_url', length: 500, nullable: true })
+  logoUrl: string | null;
 
   // --- Billing snapshot (Wave 1) ---
   @Column({ name: 'rate_plan_id', nullable: true })
@@ -239,8 +248,20 @@ export class Employer {
   @Column({ name: 'trial_ends_at', type: 'timestamp', nullable: true })
   trialEndsAt: Date | null;
 
-  @Column({ name: 'billing_status', length: 20, default: 'ACTIVE' })
-  billingStatus: 'TRIAL' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED';
+  // Captured by POST /employers/me/payment-method when an employer who's in
+  // AWAITING_PAYMENT_METHOD state actually picks a payment method. The
+  // monthly billing cron prorates from this date — days between trial-end
+  // and this date are intentionally NOT billed (per spec §6).
+  @Column({ name: 'payment_method_added_at', type: 'timestamp', nullable: true })
+  paymentMethodAddedAt: Date | null;
+
+  @Column({ name: 'billing_status', length: 40, default: 'ACTIVE' })
+  billingStatus:
+    | 'TRIAL'
+    | 'AWAITING_PAYMENT_METHOD'
+    | 'ACTIVE'
+    | 'SUSPENDED'
+    | 'CANCELLED';
 
   @OneToMany(() => EmployerUser, (employerUser) => employerUser.employer)
   employerUsers: EmployerUser[];

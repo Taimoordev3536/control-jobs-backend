@@ -24,6 +24,7 @@ import { isUUID } from 'class-validator';
 import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
 import { RatePlanService } from '../billing/services/rate-plan.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 
 @Injectable()
 export class EmployersService {
@@ -45,7 +46,112 @@ export class EmployersService {
     private readonly emailService: EmailService,
     @Inject(forwardRef(() => RatePlanService))
     private readonly ratePlanService: RatePlanService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
+
+  // Resolve the Employer.id linked to a given User.id via the EmployerUser
+  // junction. JWT's `sub`/`id` is the User.id — `findOne` and `update` operate
+  // on Employer.id, so all "me"-scoped employer endpoints must go through
+  // this helper. (Without it, looking up `Employer where id = user.id` only
+  // finds the right row by accident when the two numeric ids coincide.)
+  async findEmployerIdByUserId(userId: number): Promise<number> {
+    const link = await this.employerUserRepository.findOne({
+      where: { user: { id: userId } },
+      relations: ['employer'],
+    });
+    if (!link?.employer?.id) {
+      throw new NotFoundException('No employer is linked to the current user');
+    }
+    return link.employer.id;
+  }
+
+  async setLogo(
+    id: number,
+    file: Express.Multer.File,
+  ): Promise<BaseResponse<{ logoUrl: string; logoPublicId: string }>> {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+      throw new BadRequestException('Logo must be PNG or JPEG');
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('Logo must be 2 MB or smaller');
+    }
+
+    const employer = await this.employerRepository.findOne({ where: { id } });
+    if (!employer) throw new NotFoundException(`Employer ${id} not found`);
+
+    const oldPublicId = employer.logoPublicId;
+    const uploaded = await this.cloudinaryService.uploadImage(
+      file.buffer,
+      'controljobs/employer-logos',
+    );
+    employer.logoPublicId = uploaded.publicId;
+    employer.logoUrl = uploaded.secureUrl;
+    await this.employerRepository.save(employer);
+
+    if (oldPublicId && oldPublicId !== uploaded.publicId) {
+      await this.cloudinaryService.deleteImage(oldPublicId);
+    }
+
+    return {
+      message: 'Logo updated',
+      data: { logoUrl: uploaded.secureUrl, logoPublicId: uploaded.publicId },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  // Records the moment an employer adds (or changes) their payment method.
+  // If they were sitting in AWAITING_PAYMENT_METHOD after a trial-end, this
+  // also flips them to ACTIVE so the next monthly cron picks them up. The
+  // captured timestamp is what the cron + preview prorate from.
+  async recordPaymentMethod(
+    employerId: number,
+    paymentMethodId: number,
+  ): Promise<BaseResponse<{ paymentMethodAddedAt: string; billingStatus: string }>> {
+    const employer = await this.employerRepository.findOne({
+      where: { id: employerId },
+    });
+    if (!employer) throw new NotFoundException(`Employer ${employerId} not found`);
+
+    const pm = await this.paymentMethodRepository.findOneBy({ id: paymentMethodId });
+    if (!pm) throw new BadRequestException('Invalid payment method');
+
+    employer.paymentMethodId = paymentMethodId;
+    employer.paymentMethodAddedAt = new Date();
+    if (employer.billingStatus === 'AWAITING_PAYMENT_METHOD') {
+      employer.billingStatus = 'ACTIVE';
+    }
+    await this.employerRepository.save(employer);
+
+    return {
+      message: 'Payment method recorded',
+      data: {
+        paymentMethodAddedAt: employer.paymentMethodAddedAt.toISOString(),
+        billingStatus: employer.billingStatus,
+      },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async clearLogo(id: number): Promise<BaseResponse<null>> {
+    const employer = await this.employerRepository.findOne({ where: { id } });
+    if (!employer) throw new NotFoundException(`Employer ${id} not found`);
+
+    const oldPublicId = employer.logoPublicId;
+    employer.logoPublicId = null;
+    employer.logoUrl = null;
+    await this.employerRepository.save(employer);
+    if (oldPublicId) await this.cloudinaryService.deleteImage(oldPublicId);
+
+    return {
+      message: 'Logo removed',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
 
   async resolvePublicId(publicId: string): Promise<number> {
     const employer = await this.employerRepository.findOne({ where: { publicId } });
@@ -67,20 +173,27 @@ export class EmployersService {
   async create(
     createEmployerDto: CreateEmployerDto,
   ): Promise<BaseResponse<Employer>> {
-    // Validate all relationships exist
+    // Validate all relationships exist. paymentMethodId is now optional —
+    // invitation-link signups intentionally leave it null (collected later
+    // via the AWAITING_PAYMENT_METHOD flow). When the caller does pass an
+    // id, we still verify it points at a real row.
     const [type, subType, paymentMethod] = await Promise.all([
       this.employerTypeRepository.findOneBy({ id: createEmployerDto.typeId }),
       this.employerSubTypeRepository.findOneBy({
         id: createEmployerDto.subTypeId,
       }),
-      this.paymentMethodRepository.findOneBy({
-        id: createEmployerDto.paymentMethodId,
-      }),
+      createEmployerDto.paymentMethodId
+        ? this.paymentMethodRepository.findOneBy({
+            id: createEmployerDto.paymentMethodId,
+          })
+        : Promise.resolve(null),
     ]);
 
     if (!type) throw new BadRequestException('Invalid employer type');
     if (!subType) throw new BadRequestException('Invalid employer sub-type');
-    if (!paymentMethod) throw new BadRequestException('Invalid payment method');
+    if (createEmployerDto.paymentMethodId && !paymentMethod) {
+      throw new BadRequestException('Invalid payment method');
+    }
 
     // Resolve the matching rate plan so we can snapshot the rates onto the
     // new employer. Future price changes won't retroactively affect them.
@@ -121,7 +234,7 @@ export class EmployersService {
             subTypeId: createEmployerDto.subTypeId,
             fee: createEmployerDto.fee,
             discount: createEmployerDto.discount,
-            paymentMethodId: createEmployerDto.paymentMethodId,
+            paymentMethodId: createEmployerDto.paymentMethodId ?? null,
             accountIban: createEmployerDto.accountIban,
             bicSwift: createEmployerDto.bicSwift,
             probationPeriod: createEmployerDto.probationPeriod,
