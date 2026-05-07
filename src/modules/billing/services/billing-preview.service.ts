@@ -5,7 +5,9 @@ import { Employer } from '../../employers/entities/employer.entity';
 import { EmployerWorker } from '../../employers/entities/employer-worker.entity';
 import { EmployerWorkCenter } from '../../employers/entities/employer-work-center.entity';
 import { AdminConfig } from '../../admin/entities/admin-config.entity';
+import { RatePlan } from '../entities/rate-plan.entity';
 import { PricingService, PricingBreakdown } from './pricing.service';
+import { RatePlanService } from './rate-plan.service';
 
 export interface BillingPreviewResult {
   employerId: number;
@@ -26,6 +28,12 @@ export interface BillingPreviewResult {
   breakdown: PricingBreakdown;
   billingStatus: string;
   trialEndsAt: string | null;
+  pendingChange: {
+    effectiveAt: string;
+    monthlyFixed: number;
+    perWorkCenter: number;
+    perWorker: number;
+  } | null;
 }
 
 @Injectable()
@@ -39,7 +47,10 @@ export class BillingPreviewService {
     private readonly employerWorkCenterRepo: Repository<EmployerWorkCenter>,
     @InjectRepository(AdminConfig)
     private readonly adminConfigRepo: Repository<AdminConfig>,
+    @InjectRepository(RatePlan)
+    private readonly ratePlanRepo: Repository<RatePlan>,
     private readonly pricing: PricingService,
+    private readonly ratePlanService: RatePlanService,
   ) {}
 
   /**
@@ -71,6 +82,16 @@ export class BillingPreviewService {
     const adminConfig = await this.adminConfigRepo.find({ take: 1 });
     const vatPct = adminConfig.length ? Number(adminConfig[0].vatRate) || 0 : 0;
 
+    // Live rates from the employer's rate plan. The 3 snapshot columns on
+    // the employer (monthlyFixedRate / perWorkCenterRate / perWorkerRate)
+    // are kept for rollback only and are NOT read for billing.
+    const ratePlan = employer.ratePlanId
+      ? await this.ratePlanRepo.findOne({ where: { id: employer.ratePlanId } })
+      : null;
+    const rates = ratePlan
+      ? this.ratePlanService.getEffectiveRates(ratePlan)
+      : { monthlyFixed: 0, perWorkCenter: 0, perWorker: 0 };
+
     // Proration: only if the employer's billing-effective start is mid-month.
     // Priority order matches the cron-side logic — `paymentMethodAddedAt`
     // (the reactivation date the employer added their card after trial)
@@ -94,9 +115,9 @@ export class BillingPreviewService {
     }
 
     const breakdown = this.pricing.calculate({
-      monthlyFixed: Number(employer.monthlyFixedRate) || 0,
-      perWorkCenter: Number(employer.perWorkCenterRate) || 0,
-      perWorker: Number(employer.perWorkerRate) || 0,
+      monthlyFixed: rates.monthlyFixed,
+      perWorkCenter: rates.perWorkCenter,
+      perWorker: rates.perWorker,
       workCenters: workCenterCount,
       workers: workerCount,
       discountPct: Number(employer.discount) || 0,
@@ -104,6 +125,16 @@ export class BillingPreviewService {
       proratedDays: isProrated ? proratedDays : undefined,
       daysInMonth: isProrated ? daysInMonth : undefined,
     });
+
+    const pendingChange =
+      ratePlan?.pendingEffectiveAt && ratePlan.pendingEffectiveAt.getTime() > Date.now()
+        ? {
+            effectiveAt: toIsoDate(new Date(ratePlan.pendingEffectiveAt)),
+            monthlyFixed: Number(ratePlan.pendingMonthlyFixed),
+            perWorkCenter: Number(ratePlan.pendingPerWorkCenter),
+            perWorker: Number(ratePlan.pendingPerWorker),
+          }
+        : null;
 
     return {
       employerId: employer.id,
@@ -114,17 +145,14 @@ export class BillingPreviewService {
       daysInMonth: isProrated ? daysInMonth : undefined,
       workCenterCount,
       workerCount,
-      rates: {
-        monthlyFixed: Number(employer.monthlyFixedRate) || 0,
-        perWorkCenter: Number(employer.perWorkCenterRate) || 0,
-        perWorker: Number(employer.perWorkerRate) || 0,
-      },
+      rates,
       discountPct: Number(employer.discount) || 0,
       vatPct,
       breakdown,
       billingStatus: employer.billingStatus || 'ACTIVE',
       trialEndsAt: employer.trialEndsAt ? toIsoDate(new Date(employer.trialEndsAt)) : null,
-    };
+      pendingChange,
+    } as any;
   }
 }
 

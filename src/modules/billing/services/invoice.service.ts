@@ -4,12 +4,14 @@ import { Repository, EntityManager } from 'typeorm';
 import { Invoice, InvoiceStatus } from '../entities/invoice.entity';
 import { InvoiceWorkCenter } from '../entities/invoice-workcenter.entity';
 import { InvoiceWorker } from '../entities/invoice-worker.entity';
+import { RatePlan } from '../entities/rate-plan.entity';
 import { Employer } from '../../employers/entities/employer.entity';
 import { EmployerWorker } from '../../employers/entities/employer-worker.entity';
 import { EmployerWorkCenter } from '../../employers/entities/employer-work-center.entity';
 import { WorkerUser } from '../../workers/entities/worker-user.entity';
 import { AdminConfig } from '../../admin/entities/admin-config.entity';
 import { PricingService } from './pricing.service';
+import { RatePlanService } from './rate-plan.service';
 
 interface CreateInvoiceOptions {
   /** Period start date — first day this invoice covers. */
@@ -42,7 +44,10 @@ export class InvoiceService {
     private readonly workerUserRepo: Repository<WorkerUser>,
     @InjectRepository(AdminConfig)
     private readonly adminConfigRepo: Repository<AdminConfig>,
+    @InjectRepository(RatePlan)
+    private readonly ratePlanRepo: Repository<RatePlan>,
     private readonly pricing: PricingService,
+    private readonly ratePlanService: RatePlanService,
   ) {}
 
   /**
@@ -71,15 +76,22 @@ export class InvoiceService {
     const adminConfig = await this.adminConfigRepo.find({ take: 1 });
     const vatPct = adminConfig.length ? Number(adminConfig[0].vatRate) || 0 : 0;
 
+    const ratePlan = employer.ratePlanId
+      ? await this.ratePlanRepo.findOne({ where: { id: employer.ratePlanId } })
+      : null;
+    const rates = ratePlan
+      ? this.ratePlanService.getEffectiveRates(ratePlan, options.issueDate ?? new Date())
+      : { monthlyFixed: 0, perWorkCenter: 0, perWorker: 0 };
+
     const isProrated =
       typeof options.proratedDays === 'number' &&
       typeof options.daysInMonth === 'number' &&
       options.proratedDays !== options.daysInMonth;
 
     const breakdown = this.pricing.calculate({
-      monthlyFixed: Number(employer.monthlyFixedRate) || 0,
-      perWorkCenter: Number(employer.perWorkCenterRate) || 0,
-      perWorker: Number(employer.perWorkerRate) || 0,
+      monthlyFixed: rates.monthlyFixed,
+      perWorkCenter: rates.perWorkCenter,
+      perWorker: rates.perWorker,
       workCenters: workCenterCount,
       workers: workerCount,
       discountPct: Number(employer.discount) || 0,
@@ -136,9 +148,9 @@ export class InvoiceService {
         isProrated,
         proratedDays: isProrated ? (options.proratedDays as number) : null,
         daysInMonth: isProrated ? (options.daysInMonth as number) : null,
-        monthlyFixedRate: Number(employer.monthlyFixedRate) || 0,
-        perWorkCenterRate: Number(employer.perWorkCenterRate) || 0,
-        perWorkerRate: Number(employer.perWorkerRate) || 0,
+        monthlyFixedRate: rates.monthlyFixed,
+        perWorkCenterRate: rates.perWorkCenter,
+        perWorkerRate: rates.perWorker,
         fixedAmount: breakdown.fixedAmount,
         workcenterCount: workCenterCount,
         workcenterAmount: breakdown.workcenterAmount,

@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { LessThanOrEqual, Repository } from 'typeorm';
 import { Employer } from '../../employers/entities/employer.entity';
 import { InvoiceService } from './invoice.service';
+import { RatePlanService } from './rate-plan.service';
 
 /**
  * Scheduled jobs for the billing system.
@@ -20,6 +21,7 @@ export class BillingCronService {
     @InjectRepository(Employer)
     private readonly employerRepo: Repository<Employer>,
     private readonly invoices: InvoiceService,
+    private readonly ratePlans: RatePlanService,
   ) {}
 
   private get enabled(): boolean {
@@ -36,6 +38,15 @@ export class BillingCronService {
    *
    * Runs at 04:00 every day.
    */
+  @Cron('0 3 * * *', { name: 'billing-promote-rate-plans' })
+  async promotePendingRatePlans() {
+    if (!this.enabled) return;
+    const promoted = await this.ratePlans.promoteDuePending();
+    if (promoted > 0) {
+      this.logger.log(`Promoted ${promoted} rate plan(s) from pending → live`);
+    }
+  }
+
   @Cron('0 4 * * *', { name: 'billing-promote-trials' })
   async promoteTrialsToActive() {
     if (!this.enabled) return;
@@ -49,10 +60,10 @@ export class BillingCronService {
 
     for (const employer of ended) {
       try {
-        await this.flagForPaymentMethod(employer);
+        await this.handleTrialEnd(employer);
       } catch (err: any) {
         this.logger.error(
-          `Failed to flag employer ${employer.id}: ${err.message}`,
+          `Failed to handle trial end for employer ${employer.id}: ${err.message}`,
           err.stack,
         );
       }
@@ -60,7 +71,20 @@ export class BillingCronService {
     this.logger.log('✅ Trial-end job done');
   }
 
-  private async flagForPaymentMethod(employer: Employer) {
+  private async handleTrialEnd(employer: Employer) {
+    if (employer.paymentMethodId) {
+      employer.billingStatus = 'ACTIVE';
+      if (!employer.paymentMethodAddedAt) {
+        // Anchor to trial-end (not now) so the monthly cron prorates the
+        // first invoice from the post-trial portion only.
+        employer.paymentMethodAddedAt = employer.trialEndsAt ?? new Date();
+      }
+      await this.employerRepo.save(employer);
+      this.logger.log(
+        `Employer ${employer.id} TRIAL → ACTIVE (payment method already on file)`,
+      );
+      return;
+    }
     employer.billingStatus = 'AWAITING_PAYMENT_METHOD';
     await this.employerRepo.save(employer);
     this.logger.log(

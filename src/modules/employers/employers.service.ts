@@ -135,6 +135,24 @@ export class EmployersService {
     };
   }
 
+  async cancelSubscription(
+    employerId: number,
+  ): Promise<BaseResponse<{ billingStatus: string; cancelledAt: string }>> {
+    const employer = await this.employerRepository.findOne({ where: { id: employerId } });
+    if (!employer) throw new NotFoundException(`Employer ${employerId} not found`);
+    if (employer.billingStatus === 'CANCELLED') {
+      throw new BadRequestException('Subscription already cancelled');
+    }
+    employer.billingStatus = 'CANCELLED';
+    await this.employerRepository.save(employer);
+    return {
+      message: 'Subscription cancelled',
+      data: { billingStatus: 'CANCELLED', cancelledAt: new Date().toISOString() },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
   async clearLogo(id: number): Promise<BaseResponse<null>> {
     const employer = await this.employerRepository.findOne({ where: { id } });
     if (!employer) throw new NotFoundException(`Employer ${id} not found`);
@@ -240,11 +258,10 @@ export class EmployersService {
             probationPeriod: createEmployerDto.probationPeriod,
             responsible: createEmployerDto.responsible,
             accessAccountStatus: createEmployerDto.accessAccountStatus,
-            // Billing snapshot
+            // Plan binding only — actual rates are read live from
+            // cjobs_rate_plans at billing time so admin price changes apply
+            // simultaneously to all customers (after the 30-day notice).
             ratePlanId: ratePlan?.id ?? null,
-            monthlyFixedRate: ratePlan ? Number(ratePlan.monthlyFixed) : 0,
-            perWorkCenterRate: ratePlan ? Number(ratePlan.perWorkCenter) : 0,
-            perWorkerRate: ratePlan ? Number(ratePlan.perWorker) : 0,
             trialEndsAt,
             billingStatus,
           });

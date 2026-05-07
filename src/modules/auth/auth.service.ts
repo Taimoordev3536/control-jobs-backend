@@ -29,6 +29,9 @@ import { ImpersonateDto } from './dto/impersonate.dto';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { EmailCheckerService } from '../../common/services/email-checker.service';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
+import { RefreshTokenService } from './services/refresh-token.service';
+
+const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 
 @Injectable()
 export class AuthService {
@@ -61,6 +64,7 @@ export class AuthService {
     private workerUserRepository: Repository<WorkerUser>,
     @InjectRepository(ImpersonationLog)
     private impersonationLogRepository: Repository<ImpersonationLog>,
+    private readonly refreshTokenService: RefreshTokenService,
   ) { }
 
   /**
@@ -113,7 +117,11 @@ export class AuthService {
    * @param loginDto - Login credentials
    * @returns User data with token
    */
-  async login(loginDto: LoginDto): Promise<BaseResponse> {
+  async login(
+    loginDto: LoginDto,
+    deviceInfo?: string | null,
+    ipAddress?: string | null,
+  ): Promise<BaseResponse> {
     try {
       const user = await this.usersService.findByEmail(loginDto.email);
 
@@ -160,7 +168,8 @@ export class AuthService {
         entityId = user.id;
       } // Add more roles as needed
 
-      const token = this.generateToken(user, { employerId: employerInfo?.id, employerSubTypeId: employerInfo?.subTypeId });
+      const accessToken = this.generateToken(user, { employerId: employerInfo?.id, employerSubTypeId: employerInfo?.subTypeId });
+      const refresh = await this.refreshTokenService.issue(user.id, deviceInfo, ipAddress);
 
       // Remove sensitive data
       const { password, ...userWithoutPassword } = user;
@@ -179,7 +188,15 @@ export class AuthService {
 
       return {
         message: 'Login successful',
-        data: { user: returnedUser, token },
+        data: {
+          user: returnedUser,
+          accessToken,
+          refreshToken: refresh.raw,
+          accessExpiresIn: ACCESS_TOKEN_TTL_SECONDS,
+          // Backwards-compat alias for callers still reading data.token. Remove
+          // once the frontend has migrated to data.accessToken.
+          token: accessToken,
+        },
         isSuccess: true,
         statusCode: 200,
         developerError: '',
@@ -190,6 +207,59 @@ export class AuthService {
       }
       throw new Error(`Login failed: ${error.message}`);
     }
+  }
+
+  async refresh(
+    refreshToken: string,
+    deviceInfo?: string | null,
+    ipAddress?: string | null,
+  ): Promise<BaseResponse> {
+    const { userId, next } = await this.refreshTokenService.rotate(
+      refreshToken,
+      deviceInfo,
+      ipAddress,
+    );
+    const user = await this.usersService.findById(userId, ['role']);
+    if (!user) throw new UnauthorizedException('User not found');
+
+    let employerInfo: any = null;
+    if (user.roleId === 3) {
+      const eu = await this.employerUserRepository.findOne({
+        where: { user: { id: user.id } },
+        relations: ['employer'],
+      });
+      if (eu?.employer) employerInfo = eu.employer;
+    }
+
+    const accessToken = this.generateToken(user, {
+      employerId: employerInfo?.id,
+      employerSubTypeId: employerInfo?.subTypeId,
+    });
+
+    return {
+      message: 'Refreshed',
+      data: {
+        accessToken,
+        refreshToken: next.raw,
+        accessExpiresIn: ACCESS_TOKEN_TTL_SECONDS,
+      },
+      isSuccess: true,
+      statusCode: 200,
+      developerError: '',
+    };
+  }
+
+  async logout(refreshToken: string | null): Promise<BaseResponse> {
+    if (refreshToken) {
+      await this.refreshTokenService.revoke(refreshToken);
+    }
+    return {
+      message: 'Logged out',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+      developerError: '',
+    };
   }
 
   async validateUser(email: string, password: string) {

@@ -11,6 +11,15 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import { ViewOnlyBlockerInterceptor } from './modules/auth/guards/view-only-blocker.guard';
+import { types as pgTypes } from 'pg';
+
+// Postgres `timestamp without time zone` columns return as a tz-naive string;
+// node-postgres parses them in the Node process's local timezone by default,
+// which silently shifts the value when the server runs outside UTC. Force
+// every tz-naive timestamp to be read as UTC so dates round-trip correctly
+// regardless of where the backend or developer runs.
+// OID 1114 = timestamp without time zone.
+pgTypes.setTypeParser(1114, (str: string) => new Date(`${str}Z`));
 
 async function bootstrap() {
   const server = express();

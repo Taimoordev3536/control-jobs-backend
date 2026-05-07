@@ -13,6 +13,7 @@ import { SelfRegistrationService } from './services/self-registration.service';
 import { EmployerInvitationsController } from './controllers/employer-invitations.controller';
 import { EmployersModule } from '../employers/employers.module';
 import { CommonModule } from '../../common/common.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { CommonModule } from '../../common/common.module';
     }),
     EmployersModule,
     CommonModule,
+    AuthModule,
   ],
   controllers: [EmployerInvitationsController],
   providers: [EmployerInvitationService, SelfRegistrationService],

@@ -12,6 +12,7 @@ import { EmployerWorker } from '../employers/entities/employer-worker.entity';
 import { EmployerWorkCenter } from '../employers/entities/employer-work-center.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
+import { Partner } from '../partners/entities/partner.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
 import { PartnerTier } from '../partners/entities/partner-type.entity';
 import { AdminConfig } from '../admin/entities/admin-config.entity';
@@ -26,6 +27,8 @@ import { RatePlansController } from './controllers/rate-plans.controller';
 import { BillingController } from './controllers/billing.controller';
 import { InvoicesController } from './controllers/invoices.controller';
 import { EmployersModule } from '../employers/employers.module';
+import { CommonModule } from '../../common/common.module';
+import { AlertsModule } from '../realtime/alerts.module';
 
 @Module({
   imports: [
@@ -41,12 +44,15 @@ import { EmployersModule } from '../employers/employers.module';
       EmployerWorkCenter,
       WorkerUser,
       EmployerUser,
+      Partner,
       PartnerUser,
       PartnerTier,
       AdminConfig,
     ]),
     ScheduleModule.forRoot(),
     forwardRef(() => EmployersModule),
+    CommonModule,
+    AlertsModule,
   ],
   controllers: [RatePlansController, BillingController, InvoicesController],
   providers: [

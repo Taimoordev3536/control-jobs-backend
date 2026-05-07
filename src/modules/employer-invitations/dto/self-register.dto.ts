@@ -4,8 +4,6 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  Max,
-  Min,
   MinLength,
 } from 'class-validator';
 
@@ -38,9 +36,6 @@ export class SelfRegisterEmployerDto {
   // Plan
   @IsInt() typeId: number;
   @IsInt() subTypeId: number;
-
-  // Trial — capped server-side regardless of input.
-  @IsInt() @Min(0) @Max(15) trialDays: number;
 
   // User account
   @IsEmail() email: string;

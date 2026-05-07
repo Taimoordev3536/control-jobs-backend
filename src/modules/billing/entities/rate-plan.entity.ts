@@ -40,6 +40,21 @@ export class RatePlan {
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 
+  @Column({ name: 'pending_monthly_fixed', type: 'decimal', precision: 8, scale: 2, nullable: true })
+  pendingMonthlyFixed: number | null;
+
+  @Column({ name: 'pending_per_workcenter', type: 'decimal', precision: 8, scale: 2, nullable: true })
+  pendingPerWorkCenter: number | null;
+
+  @Column({ name: 'pending_per_worker', type: 'decimal', precision: 8, scale: 2, nullable: true })
+  pendingPerWorker: number | null;
+
+  @Column({ name: 'pending_effective_at', type: 'timestamp', nullable: true })
+  pendingEffectiveAt: Date | null;
+
+  @Column({ name: 'pending_notified_at', type: 'timestamp', nullable: true })
+  pendingNotifiedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

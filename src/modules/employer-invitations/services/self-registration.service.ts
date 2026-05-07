@@ -11,6 +11,9 @@ import { User } from '../../users/entities/user.entity';
 import { Partner } from '../../partners/entities/partner.entity';
 import { EmployersService } from '../../employers/employers.service';
 import { SelfRegisterEmployerDto } from '../dto/self-register.dto';
+import { RefreshTokenService } from '../../auth/services/refresh-token.service';
+
+const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 
 @Injectable()
 export class SelfRegistrationService {
@@ -24,6 +27,7 @@ export class SelfRegistrationService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly employersService: EmployersService,
+    private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
   /**
@@ -31,7 +35,14 @@ export class SelfRegistrationService {
    * platform's "system" partner (configured via SYSTEM_PARTNER_ID) and
    * returns a JWT so the user can be logged in immediately.
    */
-  async register(dto: SelfRegisterEmployerDto): Promise<{
+  async register(
+    dto: SelfRegisterEmployerDto,
+    deviceInfo?: string | null,
+    ipAddress?: string | null,
+  ): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    accessExpiresIn: number;
     token: string;
     user: { id: number; email: string; role: string };
     employerId: number;
@@ -62,9 +73,6 @@ export class SelfRegistrationService {
       throw new BadRequestException('An account already exists with this email');
     }
 
-    // Cap trial days defensively (DTO already does it).
-    const trialDays = Math.min(15, Math.max(0, dto.trialDays || 15));
-
     // ---- Delegate to EmployersService.create (snapshots rates, sets trial) ----
     const result = await this.employersService.create({
       name: dto.name,
@@ -90,7 +98,7 @@ export class SelfRegistrationService {
       paymentMethodId: 5,                   // "Others" — payment captured later
       accountIban: '',
       bicSwift: '',
-      probationPeriod: String(trialDays),
+      probationPeriod: '15',
       responsible: dto.responsible || dto.name,
       accessAccountStatus: 'request',
       accessEmail: dto.email,
@@ -121,10 +129,14 @@ export class SelfRegistrationService {
       lastName: newUser.lastName,
       employerId,
     };
-    const token = this.jwtService.sign(payload);
+    const accessToken = this.jwtService.sign(payload);
+    const refresh = await this.refreshTokenService.issue(newUser.id, deviceInfo, ipAddress);
 
     return {
-      token,
+      accessToken,
+      refreshToken: refresh.raw,
+      accessExpiresIn: ACCESS_TOKEN_TTL_SECONDS,
+      token: accessToken,
       user: {
         id: newUser.id,
         email: newUser.email,

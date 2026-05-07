@@ -29,11 +29,13 @@ import { Worker } from '../workers/entities/worker.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { AdminUser } from '../users/entities/admin-user.entity';
 import { ImpersonationLog } from './entities/impersonation-log.entity';
+import { RefreshToken } from './entities/refresh-token.entity';
+import { RefreshTokenService } from './services/refresh-token.service';
 
 @Module({
   imports: [
     ConfigModule,
-  TypeOrmModule.forFeature([Role, Partner, Employer, AdminUser, PartnerUser, EmployerUser, EmployerClient, EmployerWorker, Client, ClientUser, Worker, WorkerUser, ImpersonationLog]),
+  TypeOrmModule.forFeature([Role, Partner, Employer, AdminUser, PartnerUser, EmployerUser, EmployerClient, EmployerWorker, Client, ClientUser, Worker, WorkerUser, ImpersonationLog, RefreshToken]),
     OTPModule,
     PassportModule,
     JwtModule.registerAsync({
@@ -46,7 +48,7 @@ import { ImpersonationLog } from './entities/impersonation-log.entity';
         console.log('JwtModule initialized with secret:', secret ? '***' : 'default');
         return {
           secret: secret || 'your-secret-key',
-          signOptions: { expiresIn: '7d' },
+          signOptions: { expiresIn: '15m' },
         };
       },
       inject: [ConfigService],
@@ -58,6 +60,7 @@ import { ImpersonationLog } from './entities/impersonation-log.entity';
   controllers: [AuthController],
   providers: [
     AuthService,
+    RefreshTokenService,
     LocalStrategy,
     LocalHelperStrategy,
     JwtStrategy,
@@ -66,6 +69,6 @@ import { ImpersonationLog } from './entities/impersonation-log.entity';
     ViewOnlyBlockerInterceptor,
     AbilityFactory,
   ],
-  exports: [AuthService, RolesGuard, CaslGuard, ViewOnlyBlockerInterceptor, AbilityFactory, CaslModule],
+  exports: [AuthService, RefreshTokenService, RolesGuard, CaslGuard, ViewOnlyBlockerInterceptor, AbilityFactory, CaslModule],
 })
 export class AuthModule { }

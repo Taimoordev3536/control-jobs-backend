@@ -10,7 +10,9 @@ export type AlertType =
   | 'MANUAL_ATTENDANCE_REQUESTED'
   | 'MANUAL_ATTENDANCE_APPROVED'
   | 'MANUAL_ATTENDANCE_REJECTED'
-  | 'MANUAL_ATTENDANCE_CANCELLED';
+  | 'MANUAL_ATTENDANCE_CANCELLED'
+  | 'RATE_CHANGE_SCHEDULED'
+  | 'RATE_CHANGE_CANCELLED';
 export interface AlertPayload {
   type: AlertType;
   jobId: number;
@@ -53,7 +55,7 @@ export class AlertsService {
         ...payload.meta,
       },
     });
-    await this.notifRepo.save(notifEmployer);
+    const savedEmployer = await this.notifRepo.save(notifEmployer);
 
     // Persist for client
     const notifClient = this.notifRepo.create({
@@ -71,11 +73,52 @@ export class AlertsService {
         ...payload.meta,
       },
     });
-    await this.notifRepo.save(notifClient);
+    const savedClient = await this.notifRepo.save(notifClient);
 
-    const event = { ...payload, createdAt };
-    this.gateway.emitAlertToEmployer(payload.employerUserId, event);
-    this.gateway.emitAlertToClient(payload.clientUserId, event);
+    // Each recipient gets their OWN row's publicId so client-side dismiss
+    // hits the right notification (the same alert is two DB rows, one per
+    // recipient).
+    this.gateway.emitAlertToEmployer(payload.employerUserId, {
+      ...payload,
+      id: savedEmployer.id,
+      publicId: savedEmployer.publicId,
+      createdAt,
+    });
+    this.gateway.emitAlertToClient(payload.clientUserId, {
+      ...payload,
+      id: savedClient.id,
+      publicId: savedClient.publicId,
+      createdAt,
+    });
+  }
+
+  /**
+   * Drop an alert on a single user — for events that aren't tied to a job
+   * (e.g. billing notices). Persists + WS pushes to that user's room.
+   */
+  async createAndEmitForUser(args: {
+    userId: number;
+    role: 'EMPLOYER' | 'CLIENT' | 'WORKER' | 'PARTNER' | 'ADMIN';
+    type: AlertType;
+    message: string;
+    meta?: Record<string, any>;
+  }) {
+    const notif = this.notifRepo.create({
+      role: args.role,
+      recipientId: args.userId,
+      type: args.type,
+      message: args.message,
+      meta: args.meta ?? null,
+    });
+    const saved = await this.notifRepo.save(notif);
+    this.gateway.emitAlertToUser(args.userId, {
+      id: saved.id,
+      publicId: saved.publicId,
+      type: args.type,
+      message: args.message,
+      createdAt: saved.createdAt?.toISOString() ?? new Date().toISOString(),
+      meta: args.meta ?? null,
+    });
   }
 
   async getRecentForRecipient(role: string, userId: number, days: number) {

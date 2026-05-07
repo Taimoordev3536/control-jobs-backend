@@ -129,6 +129,16 @@ export class EmployersController {
     );
   }
 
+  // Employer self-service: cancel the subscription. Required by the EU
+  // non-binding-services rule cited by the client — customers must be able
+  // to opt out before any pending rate change takes effect.
+  @Post('me/cancel')
+  @UseGuards(JwtAuthGuard)
+  async cancelMySubscription(@Request() req) {
+    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
+    return this.employersService.cancelSubscription(employerId);
+  }
+
   // Admin/Partner: upload/remove a logo on behalf of any employer.
   @Post(':id/logo')
   @UseGuards(JwtAuthGuard, RolesGuard)

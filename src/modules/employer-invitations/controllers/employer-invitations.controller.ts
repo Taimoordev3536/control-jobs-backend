@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
+  Ip,
   Param,
   Post,
   Query,
@@ -72,8 +74,12 @@ export class EmployerInvitationsController {
    * platform's system partner (SYSTEM_PARTNER_ID env var).
    */
   @Post('self-register')
-  async selfRegister(@Body() dto: SelfRegisterEmployerDto) {
-    const result = await this.selfRegistration.register(dto);
+  async selfRegister(
+    @Body() dto: SelfRegisterEmployerDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    const result = await this.selfRegistration.register(dto, userAgent ?? null, ip ?? null);
     return { data: result };
   }
 }

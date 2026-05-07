@@ -195,4 +195,96 @@ export class EmailService {
       throw error;
     }
   }
+
+  async sendRateChangeNotice(args: {
+    to: string;
+    name: string;
+    planLabel: string;
+    effectiveDate: string;
+    oldPrices: { fixed: number; perWorkCenter: number; perWorker: number };
+    newPrices: { fixed: number; perWorkCenter: number; perWorker: number };
+  }): Promise<any> {
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
+    const billingUrl = `${this.configService.get<string>('FRONTEND_URL', 'https://controlajobs.com').replace(/\/$/, '')}/billing`;
+    const fmt = (n: number) => `${n.toFixed(2).replace('.', ',')} €`;
+    const subject = `Tu tarifa cambia el ${args.effectiveDate}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #662D91;">Cambio de tarifa programado</h2>
+        <p>Hola ${args.name},</p>
+        <p>Te informamos de que la tarifa <strong>${args.planLabel}</strong> de ControlJobs cambiará a partir del <strong>${args.effectiveDate}</strong>.</p>
+        <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;">
+          <thead>
+            <tr style="background:#f5f0fa;">
+              <th style="text-align:left;padding:8px;border:1px solid #e2d4f0;">Concepto</th>
+              <th style="text-align:right;padding:8px;border:1px solid #e2d4f0;">Actual</th>
+              <th style="text-align:right;padding:8px;border:1px solid #e2d4f0;">Nuevo</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td style="padding:8px;border:1px solid #e2d4f0;">Cuota fija</td><td style="text-align:right;padding:8px;border:1px solid #e2d4f0;">${fmt(args.oldPrices.fixed)}</td><td style="text-align:right;padding:8px;border:1px solid #e2d4f0;"><strong>${fmt(args.newPrices.fixed)}</strong></td></tr>
+            <tr><td style="padding:8px;border:1px solid #e2d4f0;">Por centro de trabajo</td><td style="text-align:right;padding:8px;border:1px solid #e2d4f0;">${fmt(args.oldPrices.perWorkCenter)}</td><td style="text-align:right;padding:8px;border:1px solid #e2d4f0;"><strong>${fmt(args.newPrices.perWorkCenter)}</strong></td></tr>
+            <tr><td style="padding:8px;border:1px solid #e2d4f0;">Por trabajador</td><td style="text-align:right;padding:8px;border:1px solid #e2d4f0;">${fmt(args.oldPrices.perWorker)}</td><td style="text-align:right;padding:8px;border:1px solid #e2d4f0;"><strong>${fmt(args.newPrices.perWorker)}</strong></td></tr>
+          </tbody>
+        </table>
+        <p>Si no estás de acuerdo, puedes cancelar tu suscripción antes del ${args.effectiveDate} desde tu panel de facturación.</p>
+        <p style="margin: 28px 0;">
+          <a href="${billingUrl}" style="background:#662D91;color:#fff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:600;">Ver mi facturación</a>
+        </p>
+        <hr style="border:none;border-top:1px solid #eee;margin:24px 0;" />
+        <p style="color:#888;font-size:12px;">— Equipo ControlJobs</p>
+      </div>
+    `;
+    return this.deliver({ to: args.to, subject, html, fromEmail, kind: 'rate-change-notice' });
+  }
+
+  async sendRateChangeCancelled(args: {
+    to: string;
+    name: string;
+    planLabel: string;
+  }): Promise<any> {
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
+    const subject = `Cambio de tarifa cancelado`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #662D91;">Cambio de tarifa cancelado</h2>
+        <p>Hola ${args.name},</p>
+        <p>El cambio de tarifa programado para <strong>${args.planLabel}</strong> ha sido cancelado. Tu tarifa actual se mantiene sin cambios.</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:24px 0;" />
+        <p style="color:#888;font-size:12px;">— Equipo ControlJobs</p>
+      </div>
+    `;
+    return this.deliver({ to: args.to, subject, html, fromEmail, kind: 'rate-change-cancelled' });
+  }
+
+  private async deliver(args: {
+    to: string;
+    subject: string;
+    html: string;
+    fromEmail: string | undefined;
+    kind: string;
+  }): Promise<any> {
+    try {
+      if (args.fromEmail && this.resendClient && this.resendClient.emails) {
+        const overrideTo = this.configService.get<string>('RESEND_TO_EMAIL');
+        const finalTo = overrideTo || args.to;
+        const response = await this.resendClient.emails.send({
+          from: args.fromEmail,
+          to: finalTo,
+          subject: args.subject,
+          html: args.html,
+        });
+        console.log(`[Email] ${args.kind} sent to`, args.to, response);
+        return response;
+      }
+      console.log(`=== ${args.kind.toUpperCase()} (no email provider configured) ===`);
+      console.log(`To: ${args.to}`);
+      console.log(`Subject: ${args.subject}`);
+      console.log('=== END ===');
+      return { statusCode: 200, body: 'Email not sent - logged to console' };
+    } catch (error) {
+      console.error(`Failed to send ${args.kind}:`, error);
+      throw error;
+    }
+  }
 }

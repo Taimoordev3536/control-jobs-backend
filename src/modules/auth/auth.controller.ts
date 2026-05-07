@@ -6,6 +6,7 @@ import {
   Get,
   Request,
   Ip,
+  Headers,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -15,10 +16,18 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
+import { RefreshTokenService } from './services/refresh-token.service';
+
+interface RefreshDto {
+  refreshToken: string;
+}
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  constructor(
+    private readonly authService: AuthService,
+    private readonly refreshTokenService: RefreshTokenService,
+  ) { }
 
   /**
    * Register a new user
@@ -36,8 +45,39 @@ export class AuthController {
    * @returns User data with token
    */
   @Post('login')
-  async login(@Body() loginDto: LoginDto): Promise<BaseResponse> {
-    return this.authService.login(loginDto);
+  async login(
+    @Body() loginDto: LoginDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<BaseResponse> {
+    return this.authService.login(loginDto, userAgent ?? null, ip ?? null);
+  }
+
+  @Post('refresh')
+  async refresh(
+    @Body() body: RefreshDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<BaseResponse> {
+    return this.authService.refresh(body.refreshToken, userAgent ?? null, ip ?? null);
+  }
+
+  @Post('logout')
+  async logout(@Body() body: RefreshDto): Promise<BaseResponse> {
+    return this.authService.logout(body?.refreshToken || null);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  async logoutAll(@Request() req): Promise<BaseResponse> {
+    await this.refreshTokenService.revokeAllForUser(req.user.id);
+    return {
+      message: 'All sessions revoked',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+      developerError: '',
+    };
   }
 
   /**
