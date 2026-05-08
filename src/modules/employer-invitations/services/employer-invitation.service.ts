@@ -19,6 +19,7 @@ import { User } from '../../users/entities/user.entity';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { EmployersService } from '../../employers/employers.service';
 import { CreateInvitationDto } from '../dto/create-invitation.dto';
+import { UpdateInvitationDto } from '../dto/update-invitation.dto';
 import { AcceptInvitationDto } from '../dto/accept-invitation.dto';
 
 const TOKEN_TYPE = 'employer-invite';
@@ -94,12 +95,27 @@ export class EmployerInvitationService {
     const partner = await this.partnerRepo.findOne({ where: { id: partnerId } });
     if (!partner) throw new NotFoundException('Partner not found');
 
+    const discountPercent = dto.discountPercent ?? 0;
+    // System partner (ControlJobs) is exempt from the commission cap; everyone
+    // else can't issue a discount larger than their own commission %.
+    const systemPartnerId = Number(
+      this.configService.get<string>('SYSTEM_PARTNER_ID'),
+    );
+    if (partner.id !== systemPartnerId) {
+      const cap = Number(partner.commission ?? 0);
+      if (discountPercent > cap) {
+        throw new BadRequestException(
+          `Discount cannot exceed partner commission (${cap}%)`,
+        );
+      }
+    }
+
     const expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
 
     const invitation = this.invitationRepo.create({
       description: dto.description,
       partnerId,
-      discountPercent: dto.discountPercent,
+      discountPercent,
       trialDays: dto.trialDays,
       maxRedemptions: dto.maxRedemptions ?? null,
       issuedByUserId: requester.id,
@@ -114,7 +130,7 @@ export class EmployerInvitationService {
         invitationId: saved.id,
         partnerId,
         trialDays: dto.trialDays,
-        discountPercent: dto.discountPercent,
+        discountPercent,
         description: dto.description,
         issuedByUserId: requester.id,
       },
@@ -204,6 +220,7 @@ export class EmployerInvitationService {
 
     return this.redemptionRepo.find({
       where: { invitationId: inv.id },
+      relations: ['redeemedEmployer'],
       order: { redeemedAt: 'DESC' },
     });
   }
@@ -389,6 +406,69 @@ export class EmployerInvitationService {
     }
 
     return { employerId, userId };
+  }
+
+  async update(
+    requester: any,
+    publicId: string,
+    dto: UpdateInvitationDto,
+  ): Promise<EmployerInvitation> {
+    const role = String(requester?.role?.name || '').toLowerCase();
+    const invitation = await this.invitationRepo.findOne({ where: { publicId } });
+    if (!invitation) throw new NotFoundException('Invitation not found');
+    if (role !== 'admin' && invitation.issuedByUserId !== requester.id) {
+      throw new ForbiddenException('Cannot edit an invitation you did not issue');
+    }
+    if (invitation.status !== 'PENDING') {
+      throw new BadRequestException(
+        `Cannot edit a ${invitation.status.toLowerCase()} invitation`,
+      );
+    }
+
+    if (dto.discountPercent !== undefined) {
+      const partner = await this.partnerRepo.findOne({
+        where: { id: invitation.partnerId },
+      });
+      if (!partner) throw new NotFoundException('Partner not found');
+      const systemPartnerId = Number(
+        this.configService.get<string>('SYSTEM_PARTNER_ID'),
+      );
+      if (partner.id !== systemPartnerId) {
+        const cap = Number(partner.commission ?? 0);
+        if (dto.discountPercent > cap) {
+          throw new BadRequestException(
+            `Discount cannot exceed partner commission (${cap}%)`,
+          );
+        }
+      }
+      invitation.discountPercent = dto.discountPercent;
+    }
+    if (dto.description !== undefined) {
+      invitation.description = dto.description;
+    }
+    if (dto.expiresAt !== undefined) {
+      invitation.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+    }
+
+    return this.invitationRepo.save(invitation);
+  }
+
+  async remove(requester: any, publicId: string): Promise<void> {
+    const role = String(requester?.role?.name || '').toLowerCase();
+    const invitation = await this.invitationRepo.findOne({ where: { publicId } });
+    if (!invitation) throw new NotFoundException('Invitation not found');
+    if (role !== 'admin' && invitation.issuedByUserId !== requester.id) {
+      throw new ForbiddenException('Cannot delete an invitation you did not issue');
+    }
+    const used = await this.redemptionRepo.count({
+      where: { invitationId: invitation.id },
+    });
+    if (used > 0) {
+      throw new BadRequestException(
+        'Cannot delete an invitation that has been redeemed; revoke it instead',
+      );
+    }
+    await this.invitationRepo.remove(invitation);
   }
 
   async revoke(requester: any, publicId: string): Promise<void> {

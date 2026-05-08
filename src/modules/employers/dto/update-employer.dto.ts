@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsOptional, IsNumber, ValidateNested } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsNumber, Max, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class UpdateEmployerUserDto {
@@ -96,6 +96,8 @@ export class UpdateEmployerDto {
 
     @IsNumber()
     @IsOptional()
+    @Min(0)
+    @Max(100)
     discount?: number;
 
     @IsNumber()

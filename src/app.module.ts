@@ -17,6 +17,8 @@ import { ManualAttendanceModule } from './modules/manual-attendance/manual-atten
 import { SubUsersModule } from './modules/sub-users/sub-users.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { EmployerInvitationsModule } from './modules/employer-invitations/employer-invitations.module';
+import { WorkerInvitationsModule } from './modules/worker-invitations/worker-invitations.module';
+import { ClientInvitationsModule } from './modules/client-invitations/client-invitations.module';
 
 config();
 
@@ -60,6 +62,8 @@ config();
     SubUsersModule,
     BillingModule,
     EmployerInvitationsModule,
+    WorkerInvitationsModule,
+    ClientInvitationsModule,
   ],
 })
 export class AppModule { }

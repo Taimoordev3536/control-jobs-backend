@@ -28,10 +28,11 @@ export class CreateInvitationDto {
   @IsInt()
   partnerId?: number;
 
+  @IsOptional()
   @IsNumber()
   @Min(0)
   @Max(100)
-  discountPercent: number;
+  discountPercent?: number;
 
   @IsInt()
   @Min(0)

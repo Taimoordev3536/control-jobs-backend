@@ -188,6 +188,26 @@ export class EmployersService {
     return num;
   }
 
+  // ControlJobs (taxId='SYSTEM') is exempt and accepts 0–100. Any other
+  // partner caps the discount at their own commission %.
+  private async assertDiscountWithinCap(
+    partnerId: number,
+    discount: number | undefined | null,
+  ): Promise<void> {
+    if (discount === undefined || discount === null) return;
+    const partner = await this.employerRepository.manager.findOne(Partner, {
+      where: { id: partnerId },
+    });
+    if (!partner) throw new NotFoundException(`Partner ${partnerId} not found`);
+    if (partner.taxId === 'SYSTEM') return;
+    const cap = Number(partner.commission ?? 0);
+    if (Number(discount) > cap) {
+      throw new BadRequestException(
+        `Discount cannot exceed partner commission (${cap}%)`,
+      );
+    }
+  }
+
   async create(
     createEmployerDto: CreateEmployerDto,
   ): Promise<BaseResponse<Employer>> {
@@ -227,6 +247,14 @@ export class EmployersService {
     const billingStatus = trialDays > 0 ? 'TRIAL' : 'ACTIVE';
 
     try {
+      const resolvedPartnerId = await this.resolvePartnerIdFromPublicId(
+        createEmployerDto.partnerId,
+      );
+      await this.assertDiscountWithinCap(
+        resolvedPartnerId,
+        createEmployerDto.discount,
+      );
+
       // Start a transaction
       return await this.employerRepository.manager.transaction(
         async (manager) => {
@@ -244,7 +272,7 @@ export class EmployersService {
             country: createEmployerDto.country,
             latitude: createEmployerDto.latitude,
             longitude: createEmployerDto.longitude,
-            partnerId: await this.resolvePartnerIdFromPublicId(createEmployerDto.partnerId),
+            partnerId: resolvedPartnerId,
             phone: createEmployerDto.phone,
             mobile: createEmployerDto.mobile,
             landline: createEmployerDto.landline,
@@ -476,6 +504,23 @@ export class EmployersService {
           const resolvedData: any = { ...employerData };
           if (partnerIdRaw !== undefined) {
             resolvedData.partnerId = await this.resolvePartnerIdFromPublicId(String(partnerIdRaw));
+          }
+          // If discount or partner is changing, re-validate against the
+          // (possibly new) partner's commission cap.
+          if (
+            resolvedData.discount !== undefined ||
+            resolvedData.partnerId !== undefined
+          ) {
+            const effectivePartnerId =
+              resolvedData.partnerId ?? employer.partnerId;
+            const effectiveDiscount =
+              resolvedData.discount !== undefined
+                ? resolvedData.discount
+                : employer.discount;
+            await this.assertDiscountWithinCap(
+              effectivePartnerId,
+              effectiveDiscount,
+            );
           }
           const updatedEmployer = await manager.save(Employer, {
             ...employer,

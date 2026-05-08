@@ -5,6 +5,8 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  Max,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -113,6 +115,8 @@ export class CreateEmployerDto {
 
   @IsNumber()
   @IsOptional()
+  @Min(0)
+  @Max(100)
   discount?: number;
 
   // Optional: invitation-link signups don't collect a payment method up

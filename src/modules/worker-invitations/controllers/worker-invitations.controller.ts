@@ -3,8 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
-  Ip,
   Param,
   Patch,
   Post,
@@ -13,25 +11,20 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { EmployerInvitationService } from '../services/employer-invitation.service';
-import { SelfRegistrationService } from '../services/self-registration.service';
-import { CreateInvitationDto } from '../dto/create-invitation.dto';
-import { UpdateInvitationDto } from '../dto/update-invitation.dto';
-import { AcceptInvitationDto } from '../dto/accept-invitation.dto';
-import { SelfRegisterEmployerDto } from '../dto/self-register.dto';
+import { WorkerInvitationService } from '../services/worker-invitation.service';
+import { CreateWorkerInvitationDto } from '../dto/create-worker-invitation.dto';
+import { UpdateWorkerInvitationDto } from '../dto/update-worker-invitation.dto';
+import { AcceptWorkerInvitationDto } from '../dto/accept-worker-invitation.dto';
 
-@Controller('employer-invitations')
-export class EmployerInvitationsController {
-  constructor(
-    private readonly service: EmployerInvitationService,
-    private readonly selfRegistration: SelfRegistrationService,
-  ) {}
+@Controller('worker-invitations')
+export class WorkerInvitationsController {
+  constructor(private readonly service: WorkerInvitationService) {}
 
   // ---- Authenticated endpoints ----
 
   @Post()
   @UseGuards(JwtAuthGuard)
-  async create(@Req() req: any, @Body() dto: CreateInvitationDto) {
+  async create(@Req() req: any, @Body() dto: CreateWorkerInvitationDto) {
     const result = await this.service.create(req.user, dto);
     return { data: result };
   }
@@ -48,7 +41,7 @@ export class EmployerInvitationsController {
   async update(
     @Req() req: any,
     @Param('publicId') publicId: string,
-    @Body() dto: UpdateInvitationDto,
+    @Body() dto: UpdateWorkerInvitationDto,
   ) {
     const data = await this.service.update(req.user, publicId, dto);
     return { data };
@@ -84,23 +77,8 @@ export class EmployerInvitationsController {
   }
 
   @Post('accept')
-  async accept(@Body() dto: AcceptInvitationDto) {
+  async accept(@Body() dto: AcceptWorkerInvitationDto) {
     const result = await this.service.accept(dto);
-    return { data: result };
-  }
-
-  /**
-   * Method 3 — public self-registration. No auth, no token. Anyone can
-   * sign up as an employer; the new account is associated with the
-   * platform's system partner (SYSTEM_PARTNER_ID env var).
-   */
-  @Post('self-register')
-  async selfRegister(
-    @Body() dto: SelfRegisterEmployerDto,
-    @Ip() ip: string,
-    @Headers('user-agent') userAgent?: string,
-  ) {
-    const result = await this.selfRegistration.register(dto, userAgent ?? null, ip ?? null);
     return { data: result };
   }
 }

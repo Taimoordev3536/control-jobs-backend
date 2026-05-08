@@ -243,6 +243,8 @@ export class PartnersService {
         .leftJoinAndSelect('partner.partnerUsers', 'partnerUsers')
         .leftJoinAndSelect('partnerUsers.user', 'user')
         .loadRelationCountAndMap('partner.employersCount', 'partner.employers')
+        .orderBy(`CASE WHEN partner.nif = 'SYSTEM' THEN 0 ELSE 1 END`, 'ASC')
+        .addOrderBy('partner.name', 'ASC')
         .getMany();
       return {
         message: 'Partners retrieved successfully',
