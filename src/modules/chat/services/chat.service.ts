@@ -45,6 +45,11 @@ export interface EntityRef {
   id: number;
   publicId: string | null;
   name: string;
+  // Identity image used by the chat contacts picker. Employers contribute
+  // profilePhotoUrl; every other role contributes logoUrl (their avatar).
+  // Optional because some internal lookups (resolveEntityByPublicId) only
+  // need name/id and don't bother fetching the photo.
+  imageUrl?: string | null;
   isSelf?: boolean;
 }
 
@@ -1073,28 +1078,50 @@ export class ChatService {
 
   private async allPartners(): Promise<EntityRef[]> {
     const rows = await this.partnerRepo.find({ order: { name: 'ASC' } });
-    return rows.map((r) => ({ id: r.id, publicId: r.publicId, name: r.name }));
+    return rows.map((r) => ({
+      id: r.id,
+      publicId: r.publicId,
+      name: r.name,
+      imageUrl: r.logoUrl ?? null,
+    }));
   }
 
   private async allEmployers(): Promise<EntityRef[]> {
     const rows = await this.employerRepo.find({ order: { name: 'ASC' } });
-    return rows.map((r) => ({ id: r.id, publicId: r.publicId, name: r.name }));
+    return rows.map((r) => ({
+      id: r.id,
+      publicId: r.publicId,
+      name: r.name,
+      imageUrl: r.profilePhotoUrl ?? null,
+    }));
   }
 
   private async adminContact(): Promise<EntityRef[]> {
-    return [{ id: ADMIN_ENTITY_ID, publicId: null, name: 'Admin' }];
+    return [{ id: ADMIN_ENTITY_ID, publicId: null, name: 'Admin', imageUrl: null }];
   }
 
   private async employersOfPartner(partnerId: number): Promise<EntityRef[]> {
     const rows = await this.employerRepo.find({ where: { partnerId }, order: { name: 'ASC' } });
-    return rows.map((r) => ({ id: r.id, publicId: r.publicId, name: r.name }));
+    return rows.map((r) => ({
+      id: r.id,
+      publicId: r.publicId,
+      name: r.name,
+      imageUrl: r.profilePhotoUrl ?? null,
+    }));
   }
 
   private async partnerOfEmployer(employerId: number): Promise<EntityRef | null> {
     const employer = await this.employerRepo.findOne({ where: { id: employerId } });
     if (!employer?.partnerId) return null;
     const partner = await this.partnerRepo.findOne({ where: { id: employer.partnerId } });
-    return partner ? { id: partner.id, publicId: partner.publicId, name: partner.name } : null;
+    return partner
+      ? {
+          id: partner.id,
+          publicId: partner.publicId,
+          name: partner.name,
+          imageUrl: partner.logoUrl ?? null,
+        }
+      : null;
   }
 
   private async clientsOfEmployer(employerId: number): Promise<EntityRef[]> {
@@ -1109,6 +1136,7 @@ export class ChatService {
       id: r.client.id,
       publicId: r.client.publicId,
       name: r.client.name || r.client.code,
+      imageUrl: r.client.logoUrl ?? null,
     }));
   }
 
@@ -1122,7 +1150,12 @@ export class ChatService {
     const out: EntityRef[] = [];
     for (const row of rows) {
       const name = await this.resolveWorkerName(row.worker.id, row.worker.code);
-      out.push({ id: row.worker.id, publicId: row.worker.publicId, name });
+      out.push({
+        id: row.worker.id,
+        publicId: row.worker.publicId,
+        name,
+        imageUrl: row.worker.logoUrl ?? null,
+      });
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
@@ -1136,7 +1169,12 @@ export class ChatService {
       .andWhere('ec.isActive = true')
       .orderBy('employer.name', 'ASC')
       .getMany();
-    return rows.map((r) => ({ id: r.employer.id, publicId: r.employer.publicId, name: r.employer.name }));
+    return rows.map((r) => ({
+      id: r.employer.id,
+      publicId: r.employer.publicId,
+      name: r.employer.name,
+      imageUrl: r.employer.profilePhotoUrl ?? null,
+    }));
   }
 
   private async employersOfWorker(workerId: number): Promise<EntityRef[]> {
@@ -1147,7 +1185,12 @@ export class ChatService {
       .andWhere('ew.isActive = true')
       .orderBy('employer.name', 'ASC')
       .getMany();
-    return rows.map((r) => ({ id: r.employer.id, publicId: r.employer.publicId, name: r.employer.name }));
+    return rows.map((r) => ({
+      id: r.employer.id,
+      publicId: r.employer.publicId,
+      name: r.employer.name,
+      imageUrl: r.employer.profilePhotoUrl ?? null,
+    }));
   }
 
   private formatContacts(grouped: Record<string, EntityRef[]>) {
