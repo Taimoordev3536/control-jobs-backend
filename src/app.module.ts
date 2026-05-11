@@ -19,6 +19,7 @@ import { BillingModule } from './modules/billing/billing.module';
 import { EmployerInvitationsModule } from './modules/employer-invitations/employer-invitations.module';
 import { WorkerInvitationsModule } from './modules/worker-invitations/worker-invitations.module';
 import { ClientInvitationsModule } from './modules/client-invitations/client-invitations.module';
+import { ChatModule } from './modules/chat/chat.module';
 
 config();
 
@@ -64,6 +65,7 @@ config();
     EmployerInvitationsModule,
     WorkerInvitationsModule,
     ClientInvitationsModule,
+    ChatModule,
   ],
 })
 export class AppModule { }

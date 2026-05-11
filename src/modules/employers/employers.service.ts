@@ -171,6 +171,65 @@ export class EmployersService {
     };
   }
 
+  async setProfilePhoto(
+    id: number,
+    file: Express.Multer.File,
+  ): Promise<
+    BaseResponse<{ profilePhotoUrl: string; profilePhotoPublicId: string }>
+  > {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+      throw new BadRequestException('Profile photo must be PNG or JPEG');
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('Profile photo must be 2 MB or smaller');
+    }
+
+    const employer = await this.employerRepository.findOne({ where: { id } });
+    if (!employer) throw new NotFoundException(`Employer ${id} not found`);
+
+    const oldPublicId = employer.profilePhotoPublicId;
+    const uploaded = await this.cloudinaryService.uploadImage(
+      file.buffer,
+      'controljobs/employer-profile-photos',
+    );
+    employer.profilePhotoPublicId = uploaded.publicId;
+    employer.profilePhotoUrl = uploaded.secureUrl;
+    await this.employerRepository.save(employer);
+
+    if (oldPublicId && oldPublicId !== uploaded.publicId) {
+      await this.cloudinaryService.deleteImage(oldPublicId);
+    }
+
+    return {
+      message: 'Profile photo updated',
+      data: {
+        profilePhotoUrl: uploaded.secureUrl,
+        profilePhotoPublicId: uploaded.publicId,
+      },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async clearProfilePhoto(id: number): Promise<BaseResponse<null>> {
+    const employer = await this.employerRepository.findOne({ where: { id } });
+    if (!employer) throw new NotFoundException(`Employer ${id} not found`);
+
+    const oldPublicId = employer.profilePhotoPublicId;
+    employer.profilePhotoPublicId = null;
+    employer.profilePhotoUrl = null;
+    await this.employerRepository.save(employer);
+    if (oldPublicId) await this.cloudinaryService.deleteImage(oldPublicId);
+
+    return {
+      message: 'Profile photo removed',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
   async resolvePublicId(publicId: string): Promise<number> {
     const employer = await this.employerRepository.findOne({ where: { publicId } });
     if (!employer) throw new NotFoundException('Employer not found');

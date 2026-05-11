@@ -112,6 +112,27 @@ export class EmployersController {
     return this.employersService.clearLogo(employerId);
   }
 
+  // Employer self-service: upload/remove the identity photo shown in the
+  // nav avatar and other "this is me" surfaces. Separate from /me/logo,
+  // which is the brand image printed on QR-code PDFs.
+  @Post('me/profile-photo')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadMyProfilePhoto(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
+    return this.employersService.setProfilePhoto(employerId, file);
+  }
+
+  @Delete('me/profile-photo')
+  @UseGuards(JwtAuthGuard)
+  async deleteMyProfilePhoto(@Request() req) {
+    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
+    return this.employersService.clearProfilePhoto(employerId);
+  }
+
   // Employer self-service: capture (or change) the payment method. Triggered
   // by the AWAITING_PAYMENT_METHOD banner on the employer dashboard once
   // the trial ends. Stamps `paymentMethodAddedAt` and (if applicable) flips
@@ -158,5 +179,26 @@ export class EmployersController {
   async deleteLogo(@Param('id', ParseUUIDPipe) id: string) {
     const numericId = await this.employersService.resolvePublicId(id);
     return this.employersService.clearLogo(numericId);
+  }
+
+  // Admin/Partner: manage an employer's identity photo on their behalf.
+  @Post(':id/profile-photo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1, 2)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadProfilePhoto(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const numericId = await this.employersService.resolvePublicId(id);
+    return this.employersService.setProfilePhoto(numericId, file);
+  }
+
+  @Delete(':id/profile-photo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1, 2)
+  async deleteProfilePhoto(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.employersService.resolvePublicId(id);
+    return this.employersService.clearProfilePhoto(numericId);
   }
 }

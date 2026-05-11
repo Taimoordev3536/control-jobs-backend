@@ -232,6 +232,15 @@ export class Employer {
   @Column({ name: 'logo_url', length: 500, nullable: true })
   logoUrl: string | null;
 
+  // Identity photo used across the app (nav avatar, future WhatsApp
+  // profile, etc.). Distinct from logo_* — the logo is brand artwork that
+  // only renders in the printed QR-code PDF.
+  @Column({ name: 'profile_photo_public_id', length: 255, nullable: true })
+  profilePhotoPublicId: string | null;
+
+  @Column({ name: 'profile_photo_url', length: 500, nullable: true })
+  profilePhotoUrl: string | null;
+
   // --- Billing snapshot (Wave 1) ---
   @Column({ name: 'rate_plan_id', nullable: true })
   ratePlanId: number | null;
