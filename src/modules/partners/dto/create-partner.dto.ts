@@ -8,7 +8,49 @@ import {
   IsEnum,
   IsNotEmpty,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+
+const PARTNER_TYPE_ALIASES: Record<string, string> = {
+  GOLD: 'Gold',
+  SILVER: 'Silver',
+  BRONZE: 'Bronze',
+  AFFILIATE: 'Affiliate',
+  gold: 'Gold',
+  silver: 'Silver',
+  bronze: 'Bronze',
+  affiliate: 'Affiliate',
+};
+
+const normalizePartnerType = ({ value }: { value: unknown }) => {
+  if (typeof value !== 'string') return value;
+  return PARTNER_TYPE_ALIASES[value] ?? value;
+};
+
+const PAYMENT_METHOD_ALIASES: Record<string, string> = {
+  TRANSFER: 'Transfer',
+  Transfer: 'Transfer',
+  transfer: 'Transfer',
+  DIRECT_DEBIT: 'Direct Debit',
+  'Direct Debit': 'Direct Debit',
+  'direct debit': 'Direct Debit',
+  Cash: 'Direct Debit',
+  CASH: 'Direct Debit',
+  CARD: 'Card',
+  Card: 'Card',
+  card: 'Card',
+  PAYPAL: 'PayPal',
+  PayPal: 'PayPal',
+  paypal: 'PayPal',
+  Paypal: 'PayPal',
+  OTHERS: 'Others',
+  Others: 'Others',
+  others: 'Others',
+};
+
+const normalizePaymentMethod = ({ value }: { value: unknown }) => {
+  if (typeof value !== 'string') return value;
+  return PAYMENT_METHOD_ALIASES[value] ?? value;
+};
 
 export enum PartnerType {
   GOLD = "Gold",
@@ -89,6 +131,7 @@ export class CreatePartnerDto {
   @IsNotEmpty()
   nif: string;
 
+  @Transform(normalizePartnerType)
   @IsEnum(PartnerType)
   @IsNotEmpty()
   typeOfPartner: PartnerType;
@@ -103,6 +146,7 @@ export class CreatePartnerDto {
   @Max(100)
   retention: number;
 
+  @Transform(normalizePaymentMethod)
   @IsEnum(PaymentMethodEnum)
   @IsNotEmpty()
   paymentMethod: PaymentMethodEnum;

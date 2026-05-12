@@ -9,9 +9,13 @@ import {
   Post,
   Query,
   Req,
+  UploadedFiles,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { MAX_ATTACHMENTS_PER_MESSAGE } from '../chat.constants';
 import { ChatService } from '../services/chat.service';
 import { CreateDirectConversationDto } from '../dto/create-direct-conversation.dto';
 import { CreateGroupConversationDto } from '../dto/create-group-conversation.dto';
@@ -25,6 +29,12 @@ import { ReactMessageDto } from '../dto/react-message.dto';
 @Controller('chat')
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
+
+  @Get('me')
+  async getMyScope(@Req() req: any) {
+    const data = await this.chatService.getMyScope(req.user);
+    return { data, isSuccess: true };
+  }
 
   @Get('conversations')
   async listConversations(@Req() req: any) {
@@ -72,6 +82,25 @@ export class ChatController {
       publicId,
       dto.body,
       dto.repliedToMessagePublicId,
+    );
+    return { data, isSuccess: true };
+  }
+
+  @Post('conversations/:publicId/messages/upload')
+  @UseInterceptors(FilesInterceptor('files', MAX_ATTACHMENTS_PER_MESSAGE))
+  async sendMessageWithAttachments(
+    @Req() req: any,
+    @Param('publicId', ParseUUIDPipe) publicId: string,
+    @UploadedFiles() files: Express.Multer.File[],
+    @Body('body') body?: string,
+    @Body('repliedToMessagePublicId') repliedToMessagePublicId?: string,
+  ) {
+    const data = await this.chatService.sendMessageWithAttachments(
+      req.user,
+      publicId,
+      files,
+      body,
+      repliedToMessagePublicId,
     );
     return { data, isSuccess: true };
   }

@@ -11,6 +11,7 @@ import { User } from '../../users/entities/user.entity';
 import { AdminUser } from '../../users/entities/admin-user.entity';
 import { PartnerUser } from '../../partners/entities/partner-user.entity';
 import { Partner } from '../../partners/entities/partner.entity';
+import { PartnerTier } from '../../partners/entities/partner-type.entity';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { Employer } from '../../employers/entities/employer.entity';
 import { EmployerClient } from '../../employers/entities/employer-client.entity';
@@ -25,15 +26,31 @@ import { ConversationParticipant } from '../entities/conversation-participant.en
 import { Message } from '../entities/message.entity';
 import { MessageRead } from '../entities/message-read.entity';
 import { MessageReaction } from '../entities/message-reaction.entity';
+import { MessageAttachment } from '../entities/message-attachment.entity';
+import { CloudinaryService } from '../../cloudinary/cloudinary.service';
+import { AttachmentKind } from '../enums/chat.enums';
 import { ConversationKind, ParticipantType } from '../enums/chat.enums';
-import { ADMIN_ENTITY_ID, MESSAGE_PAGE_SIZE, SEARCH_PAGE_SIZE } from '../chat.constants';
+import {
+  ADMIN_ENTITY_ID,
+  ALLOWED_IMAGE_MIME,
+  ALLOWED_PDF_MIME,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_IMAGE_BYTES,
+  MAX_PDF_BYTES,
+  MESSAGE_PAGE_SIZE,
+  SEARCH_PAGE_SIZE,
+} from '../chat.constants';
 import { ChatGateway } from '../gateway/chat.gateway';
+
+export type PartnerTierName = 'Gold' | 'Silver' | 'Bronze' | 'Affiliate';
 
 export interface RequesterScope {
   userId: number;
   participantType: ParticipantType;
   participantEntityId: number;
+  participantEntityPublicId: string | null;
   displayName: string;
+  partnerTier?: PartnerTierName | null;
 }
 
 interface ParticipantRef {
@@ -61,10 +78,13 @@ export class ChatService {
     @InjectRepository(Message) private readonly messageRepo: Repository<Message>,
     @InjectRepository(MessageRead) private readonly readRepo: Repository<MessageRead>,
     @InjectRepository(MessageReaction) private readonly reactionRepo: Repository<MessageReaction>,
+    @InjectRepository(MessageAttachment) private readonly attachmentRepo: Repository<MessageAttachment>,
+    private readonly cloudinary: CloudinaryService,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     @InjectRepository(AdminUser) private readonly adminUserRepo: Repository<AdminUser>,
     @InjectRepository(PartnerUser) private readonly partnerUserRepo: Repository<PartnerUser>,
     @InjectRepository(Partner) private readonly partnerRepo: Repository<Partner>,
+    @InjectRepository(PartnerTier) private readonly partnerTierRepo: Repository<PartnerTier>,
     @InjectRepository(EmployerUser) private readonly employerUserRepo: Repository<EmployerUser>,
     @InjectRepository(Employer) private readonly employerRepo: Repository<Employer>,
     @InjectRepository(EmployerClient) private readonly employerClientRepo: Repository<EmployerClient>,
@@ -87,6 +107,7 @@ export class ChatService {
         userId,
         participantType: ParticipantType.Admin,
         participantEntityId: ADMIN_ENTITY_ID,
+        participantEntityPublicId: null,
         displayName: requester.name || 'Admin',
       };
     }
@@ -97,11 +118,14 @@ export class ChatService {
         relations: ['partner'],
       });
       if (!link?.partner) throw new ForbiddenException('No partner linked to this user');
+      const partnerTier = await this.resolvePartnerTier(link.partner.partnerTierId);
       return {
         userId,
         participantType: ParticipantType.Partner,
         participantEntityId: link.partner.id,
+        participantEntityPublicId: link.partner.publicId,
         displayName: link.partner.name,
+        partnerTier,
       };
     }
 
@@ -115,6 +139,7 @@ export class ChatService {
         userId,
         participantType: ParticipantType.Employer,
         participantEntityId: link.employer.id,
+        participantEntityPublicId: link.employer.publicId,
         displayName: link.employer.name,
       };
     }
@@ -129,6 +154,7 @@ export class ChatService {
         userId,
         participantType: ParticipantType.Client,
         participantEntityId: link.client.id,
+        participantEntityPublicId: link.client.publicId,
         displayName: link.client.name || link.client.code,
       };
     }
@@ -144,11 +170,29 @@ export class ChatService {
         userId,
         participantType: ParticipantType.Worker,
         participantEntityId: link.worker.id,
+        participantEntityPublicId: link.worker.publicId,
         displayName,
       };
     }
 
     throw new ForbiddenException('Role not supported for chat');
+  }
+
+  private async resolvePartnerTier(tierId?: number | null): Promise<PartnerTierName | null> {
+    if (!tierId) return null;
+    const tier = await this.partnerTierRepo.findOne({ where: { id: tierId } });
+    const raw = (tier?.name || '').trim();
+    if (raw === 'Gold' || raw === 'Silver' || raw === 'Bronze' || raw === 'Affiliate') {
+      return raw;
+    }
+    return null;
+  }
+
+  private isHighTierPartner(scope: RequesterScope): boolean {
+    return (
+      scope.participantType === ParticipantType.Partner &&
+      (scope.partnerTier === 'Gold' || scope.partnerTier === 'Silver')
+    );
   }
 
   private roleNameToValue(name?: string): number | undefined {
@@ -161,6 +205,21 @@ export class ChatService {
       WORKER: UserRole.Worker,
     };
     return map[name.toUpperCase()];
+  }
+
+  async getMyScope(requester: any) {
+    const scope = await this.resolveRequesterScope(requester);
+    const canCreateGroup =
+      scope.participantType === ParticipantType.Admin ||
+      scope.participantType === ParticipantType.Employer ||
+      this.isHighTierPartner(scope);
+    return {
+      participantType: scope.participantType,
+      participantEntityPublicId: scope.participantEntityPublicId,
+      displayName: scope.displayName,
+      partnerTier: scope.partnerTier ?? null,
+      canCreateGroup,
+    };
   }
 
   async listConversations(requester: any) {
@@ -214,6 +273,13 @@ export class ChatService {
               senderUserId: last.senderUserId,
               createdAt: last.createdAt,
               deletedAt: last.deletedAt,
+              attachmentCount: last.deletedAt ? 0 : (last.attachments?.length || 0),
+              firstAttachmentKind: last.deletedAt
+                ? null
+                : (last.attachments?.[0]?.kind || null),
+              firstAttachmentName: last.deletedAt
+                ? null
+                : (last.attachments?.[0]?.originalName || null),
             }
           : null,
         lastMessageAt: conv.lastMessageAt,
@@ -247,18 +313,24 @@ export class ChatService {
       where,
       order: { id: 'DESC' },
       take: Math.min(limit, MESSAGE_PAGE_SIZE),
-      relations: ['senderUser', 'reads', 'reactions', 'repliedToMessage', 'repliedToMessage.senderUser'],
+      relations: ['senderUser', 'reads', 'reactions', 'attachments', 'repliedToMessage', 'repliedToMessage.senderUser', 'repliedToMessage.attachments'],
     });
 
     return rows.reverse().map((m) => this.toMessageDto(m, conversation.publicId));
   }
 
-  async createDirect(requester: any, targetType: ParticipantType, targetEntityPublicId: string) {
+  async createDirect(requester: any, targetType: ParticipantType, targetEntityPublicId?: string) {
     const scope = await this.resolveRequesterScope(requester);
     if (targetType === scope.participantType && targetType !== ParticipantType.Admin) {
       throw new BadRequestException('Cannot chat with the same entity');
     }
-    const target = await this.resolveEntityByPublicId(targetType, targetEntityPublicId);
+    if (targetType !== ParticipantType.Admin && !targetEntityPublicId) {
+      throw new BadRequestException('targetEntityPublicId is required');
+    }
+    const target =
+      targetType === ParticipantType.Admin
+        ? { id: ADMIN_ENTITY_ID, publicId: null, name: 'Admin' }
+        : await this.resolveEntityByPublicId(targetType, targetEntityPublicId!);
     await this.assertCanChatDirect(scope, { type: targetType, entityId: target.id });
 
     const existing = await this.findDirectConversation(scope, { type: targetType, entityId: target.id });
@@ -326,7 +398,108 @@ export class ChatService {
 
     const fullMessage = await this.messageRepo.findOne({
       where: { id: message.id },
-      relations: ['senderUser', 'reads', 'reactions', 'repliedToMessage', 'repliedToMessage.senderUser'],
+      relations: ['senderUser', 'reads', 'reactions', 'attachments', 'repliedToMessage', 'repliedToMessage.senderUser', 'repliedToMessage.attachments'],
+    });
+    const dto = this.toMessageDto(fullMessage!, conversation.publicId);
+
+    this.gateway.emitMessageNew(conversation.publicId, dto);
+    await this.notifyConversationUpsert(conversation.id);
+
+    return dto;
+  }
+
+  async sendMessageWithAttachments(
+    requester: any,
+    conversationPublicId: string,
+    files: Express.Multer.File[],
+    body?: string,
+    repliedToMessagePublicId?: string,
+  ) {
+    const scope = await this.resolveRequesterScope(requester);
+    const conversation = await this.findConversationOrThrow(conversationPublicId);
+    await this.assertParticipant(conversation.id, scope);
+
+    if (!files || files.length === 0) {
+      throw new BadRequestException('At least one file is required');
+    }
+    if (files.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+      throw new BadRequestException(`At most ${MAX_ATTACHMENTS_PER_MESSAGE} files per message`);
+    }
+
+    const classified = files.map((file) => {
+      if (ALLOWED_IMAGE_MIME.has(file.mimetype)) {
+        if (file.size > MAX_IMAGE_BYTES) {
+          throw new BadRequestException(`Image ${file.originalname} exceeds 10MB`);
+        }
+        return { file, kind: AttachmentKind.Image };
+      }
+      if (ALLOWED_PDF_MIME.has(file.mimetype)) {
+        if (file.size > MAX_PDF_BYTES) {
+          throw new BadRequestException(`PDF ${file.originalname} exceeds 25MB`);
+        }
+        return { file, kind: AttachmentKind.Pdf };
+      }
+      throw new BadRequestException(`Unsupported file type: ${file.mimetype}`);
+    });
+
+    let repliedToId: string | null = null;
+    if (repliedToMessagePublicId) {
+      const target = await this.messageRepo.findOne({
+        where: { publicId: repliedToMessagePublicId, conversationId: conversation.id },
+      });
+      if (!target) throw new NotFoundException('Replied message not found');
+      repliedToId = target.id;
+    }
+
+    const folder = `controljobs/chat-attachments/${conversation.publicId}`;
+    const uploaded = await Promise.all(
+      classified.map(({ file, kind }) =>
+        this.cloudinary.uploadAttachment(
+          file.buffer,
+          folder,
+          kind === AttachmentKind.Image ? 'image' : 'raw',
+        ),
+      ),
+    );
+
+    const now = new Date();
+    const result = await this.dataSource.transaction(async (manager) => {
+      const message = await manager.save(
+        manager.create(Message, {
+          conversationId: conversation.id,
+          senderUserId: scope.userId,
+          senderEntityType: scope.participantType,
+          senderEntityId: scope.participantEntityId,
+          body: body && body.trim() ? body.trim() : null,
+          repliedToMessageId: repliedToId,
+          createdAt: now,
+        }),
+      );
+
+      const rows = classified.map(({ file, kind }, idx) => {
+        const up = uploaded[idx];
+        return manager.create(MessageAttachment, {
+          messageId: message.id,
+          kind,
+          url: up.secureUrl,
+          cloudinaryId: up.publicId,
+          mimeType: file.mimetype,
+          sizeBytes: up.bytes ?? file.size,
+          width: up.width,
+          height: up.height,
+          originalName: file.originalname,
+          position: idx,
+        });
+      });
+      await manager.save(rows);
+
+      await manager.update(Conversation, conversation.id, { lastMessageAt: now });
+      return message.id;
+    });
+
+    const fullMessage = await this.messageRepo.findOne({
+      where: { id: result },
+      relations: ['senderUser', 'reads', 'reactions', 'attachments', 'repliedToMessage', 'repliedToMessage.senderUser', 'repliedToMessage.attachments'],
     });
     const dto = this.toMessageDto(fullMessage!, conversation.publicId);
 
@@ -348,7 +521,7 @@ export class ChatService {
 
     const message = await this.messageRepo.findOne({
       where: { publicId: messagePublicId, conversationId: conversation.id },
-      relations: ['senderUser', 'reads', 'reactions', 'repliedToMessage', 'repliedToMessage.senderUser'],
+      relations: ['senderUser', 'reads', 'reactions', 'attachments', 'repliedToMessage', 'repliedToMessage.senderUser', 'repliedToMessage.attachments'],
     });
     if (!message) throw new NotFoundException('Message not found');
     if (message.deletedAt) throw new BadRequestException('Cannot pin a deleted message');
@@ -369,7 +542,7 @@ export class ChatService {
     const rows = await this.messageRepo.find({
       where: { conversationId: conversation.id, pinnedAt: Not(IsNull()) },
       order: { pinnedAt: 'DESC' },
-      relations: ['senderUser', 'reads', 'reactions', 'repliedToMessage', 'repliedToMessage.senderUser'],
+      relations: ['senderUser', 'reads', 'reactions', 'attachments', 'repliedToMessage', 'repliedToMessage.senderUser', 'repliedToMessage.attachments'],
     });
     return rows.map((m) => this.toMessageDto(m, conversation.publicId));
   }
@@ -381,7 +554,7 @@ export class ChatService {
 
     const message = await this.messageRepo.findOne({
       where: { publicId: messagePublicId, conversationId: conversation.id },
-      relations: ['senderUser', 'reads', 'reactions', 'repliedToMessage', 'repliedToMessage.senderUser'],
+      relations: ['senderUser', 'reads', 'reactions', 'attachments', 'repliedToMessage', 'repliedToMessage.senderUser', 'repliedToMessage.attachments'],
     });
     if (!message) throw new NotFoundException('Message not found');
     if (message.senderUserId !== scope.userId) throw new ForbiddenException('Cannot edit others messages');
@@ -403,7 +576,7 @@ export class ChatService {
 
     const message = await this.messageRepo.findOne({
       where: { publicId: messagePublicId, conversationId: conversation.id },
-      relations: ['senderUser', 'reads', 'reactions', 'repliedToMessage', 'repliedToMessage.senderUser'],
+      relations: ['senderUser', 'reads', 'reactions', 'attachments', 'repliedToMessage', 'repliedToMessage.senderUser', 'repliedToMessage.attachments'],
     });
     if (!message) throw new NotFoundException('Message not found');
     if (message.senderUserId !== scope.userId) throw new ForbiddenException('Cannot delete others messages');
@@ -411,6 +584,14 @@ export class ChatService {
 
     message.deletedAt = new Date();
     await this.messageRepo.save(message);
+
+    for (const a of message.attachments || []) {
+      const resourceType = a.kind === AttachmentKind.Image ? 'image' : 'raw';
+      this.cloudinary.deleteAsset(a.cloudinaryId, resourceType).catch(() => undefined);
+    }
+    if (message.attachments?.length) {
+      await this.attachmentRepo.delete({ messageId: message.id });
+    }
 
     const dto = this.toMessageDto(message, conversation.publicId);
     this.gateway.emitMessageUpdate(conversation.publicId, dto);
@@ -488,7 +669,9 @@ export class ChatService {
 
     if (scope.participantType === ParticipantType.Partner) {
       result.ADMIN = await this.adminContact();
-      result.EMPLOYER = await this.employersOfPartner(scope.participantEntityId);
+      if (this.isHighTierPartner(scope)) {
+        result.EMPLOYER = await this.employersOfPartner(scope.participantEntityId);
+      }
       return this.formatContacts(result);
     }
 
@@ -692,14 +875,17 @@ export class ChatService {
         ];
       }
       case ParticipantType.Partner: {
-        const employers = await this.employerRepo.find({
-          where: { partnerId: scope.participantEntityId },
-          select: { id: true },
-        });
-        return [
-          { type: ParticipantType.Admin, entityId: ADMIN_ENTITY_ID },
-          ...employers.map((e) => ({ type: ParticipantType.Employer, entityId: e.id })),
-        ];
+        const targets: ParticipantRef[] = [{ type: ParticipantType.Admin, entityId: ADMIN_ENTITY_ID }];
+        if (this.isHighTierPartner(scope)) {
+          const employers = await this.employerRepo.find({
+            where: { partnerId: scope.participantEntityId },
+            select: { id: true },
+          });
+          targets.push(
+            ...employers.map((e) => ({ type: ParticipantType.Employer, entityId: e.id })),
+          );
+        }
+        return targets;
       }
       case ParticipantType.Employer: {
         const employer = await this.employerRepo.findOne({ where: { id: scope.participantEntityId } });
@@ -745,12 +931,22 @@ export class ChatService {
   }
 
   private async assertCanCreateGroup(scope: RequesterScope, employerId: number, clientId: number, workerId: number) {
-    if (
-      scope.participantType !== ParticipantType.Admin &&
-      !(scope.participantType === ParticipantType.Employer && scope.participantEntityId === employerId)
-    ) {
-      throw new ForbiddenException('Only the employer or admin can create this group');
+    const isAdmin = scope.participantType === ParticipantType.Admin;
+    const isOwnEmployer =
+      scope.participantType === ParticipantType.Employer && scope.participantEntityId === employerId;
+    const isHighPartner = this.isHighTierPartner(scope);
+
+    if (!isAdmin && !isOwnEmployer && !isHighPartner) {
+      throw new ForbiddenException('Tu plan no permite crear grupos');
     }
+
+    if (isHighPartner) {
+      const employer = await this.employerRepo.findOne({ where: { id: employerId } });
+      if (!employer || employer.partnerId !== scope.participantEntityId) {
+        throw new ForbiddenException('Empleador no pertenece a este partner');
+      }
+    }
+
     const hasClient = await this.employerClientRepo.findOne({
       where: { employer: { id: employerId }, client: { id: clientId }, isActive: true },
     });
@@ -866,6 +1062,7 @@ export class ChatService {
     if (conversationIds.length === 0) return {};
     const rows = await this.messageRepo
       .createQueryBuilder('m')
+      .leftJoinAndSelect('m.attachments', 'a')
       .where('m.conversation_id IN (:...ids)', { ids: conversationIds })
       .andWhere(
         `m.id = (SELECT MAX(m2.id) FROM chat_messages m2 WHERE m2.conversation_id = m.conversation_id)`,
@@ -936,6 +1133,19 @@ export class ChatService {
     };
   }
 
+  private toAttachmentDto(a: MessageAttachment) {
+    return {
+      publicId: a.publicId,
+      kind: a.kind,
+      url: a.url,
+      mimeType: a.mimeType,
+      sizeBytes: a.sizeBytes,
+      width: a.width,
+      height: a.height,
+      originalName: a.originalName,
+    };
+  }
+
   private toMessageDto(message: Message, conversationPublicId: string) {
     const repliedTo = message.repliedToMessage
       ? {
@@ -944,6 +1154,9 @@ export class ChatService {
           senderUserName: message.repliedToMessage.senderUser?.name || null,
           body: message.repliedToMessage.deletedAt ? null : message.repliedToMessage.body,
           deletedAt: message.repliedToMessage.deletedAt,
+          attachments: (message.repliedToMessage.attachments || [])
+            .sort((x, y) => x.position - y.position)
+            .map((a) => this.toAttachmentDto(a)),
         }
       : null;
 
@@ -959,6 +1172,12 @@ export class ChatService {
       userIds,
     }));
 
+    const attachments = message.deletedAt
+      ? []
+      : (message.attachments || [])
+          .sort((x, y) => x.position - y.position)
+          .map((a) => this.toAttachmentDto(a));
+
     return {
       publicId: message.publicId,
       conversationPublicId,
@@ -972,6 +1191,7 @@ export class ChatService {
       pinnedAt: message.pinnedAt,
       repliedTo,
       reactions,
+      attachments,
       createdAt: message.createdAt,
       readBy: (message.reads || []).map((r) => ({ userId: r.userId, readAt: r.readAt })),
     };
@@ -1020,7 +1240,7 @@ export class ChatService {
 
     const fresh = await this.messageRepo.findOne({
       where: { id: message.id },
-      relations: ['senderUser', 'reads', 'reactions', 'repliedToMessage', 'repliedToMessage.senderUser'],
+      relations: ['senderUser', 'reads', 'reactions', 'attachments', 'repliedToMessage', 'repliedToMessage.senderUser', 'repliedToMessage.attachments'],
     });
     const dto = this.toMessageDto(fresh!, conversation.publicId);
     this.gateway.emitMessageUpdate(conversation.publicId, dto);

@@ -7,6 +7,16 @@ export interface UploadedImage {
   secureUrl: string;
 }
 
+export interface UploadedAttachment {
+  publicId: string;
+  secureUrl: string;
+  resourceType: string;
+  format: string | null;
+  bytes: number | null;
+  width: number | null;
+  height: number | null;
+}
+
 @Injectable()
 export class CloudinaryService {
   private readonly logger = new Logger(CloudinaryService.name);
@@ -42,6 +52,46 @@ export class CloudinaryService {
       );
       stream.end(buffer);
     });
+  }
+
+  async uploadAttachment(
+    buffer: Buffer,
+    folder: string,
+    resourceType: 'image' | 'raw' | 'auto' = 'auto',
+  ): Promise<UploadedAttachment> {
+    return new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder, resource_type: resourceType, overwrite: true },
+        (err, result?: UploadApiResponse) => {
+          if (err || !result) {
+            return reject(err || new Error('Cloudinary upload failed'));
+          }
+          resolve({
+            publicId: result.public_id,
+            secureUrl: result.secure_url,
+            resourceType: result.resource_type,
+            format: result.format || null,
+            bytes: result.bytes ?? null,
+            width: result.width ?? null,
+            height: result.height ?? null,
+          });
+        },
+      );
+      stream.end(buffer);
+    });
+  }
+
+  async deleteAsset(publicId: string, resourceType: string): Promise<void> {
+    try {
+      await cloudinary.uploader.destroy(publicId, {
+        invalidate: true,
+        resource_type: resourceType as 'image' | 'raw' | 'video',
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed to delete Cloudinary ${resourceType} asset ${publicId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   async deleteImage(publicId: string): Promise<void> {

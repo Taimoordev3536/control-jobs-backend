@@ -6,6 +6,7 @@ import { AdminUser } from '../users/entities/admin-user.entity';
 import { User } from '../users/entities/user.entity';
 import { Partner } from '../partners/entities/partner.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
+import { PartnerTier } from '../partners/entities/partner-type.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { EmployerClient } from '../employers/entities/employer-client.entity';
@@ -19,9 +20,11 @@ import { ConversationParticipant } from './entities/conversation-participant.ent
 import { Message } from './entities/message.entity';
 import { MessageRead } from './entities/message-read.entity';
 import { MessageReaction } from './entities/message-reaction.entity';
+import { MessageAttachment } from './entities/message-attachment.entity';
 import { ChatService } from './services/chat.service';
 import { ChatController } from './controllers/chat.controller';
 import { ChatGateway } from './gateway/chat.gateway';
+import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
   imports: [
@@ -32,10 +35,12 @@ import { ChatGateway } from './gateway/chat.gateway';
       Message,
       MessageRead,
       MessageReaction,
+      MessageAttachment,
       User,
       AdminUser,
       Partner,
       PartnerUser,
+      PartnerTier,
       Employer,
       EmployerUser,
       EmployerClient,
@@ -53,6 +58,7 @@ import { ChatGateway } from './gateway/chat.gateway';
       }),
       inject: [ConfigService],
     }),
+    CloudinaryModule,
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway],

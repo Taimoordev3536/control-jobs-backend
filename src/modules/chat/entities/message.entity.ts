@@ -12,6 +12,7 @@ import { User } from '../../users/entities/user.entity';
 import { Conversation } from './conversation.entity';
 import { MessageRead } from './message-read.entity';
 import { MessageReaction } from './message-reaction.entity';
+import { MessageAttachment } from './message-attachment.entity';
 import { ParticipantType } from '../enums/chat.enums';
 
 @Entity('chat_messages')
@@ -43,8 +44,8 @@ export class Message {
   @Column({ name: 'sender_entity_id' })
   senderEntityId: number;
 
-  @Column({ type: 'text' })
-  body: string;
+  @Column({ type: 'text', nullable: true })
+  body: string | null;
 
   @Column({ name: 'edited_at', type: 'timestamp', nullable: true })
   editedAt: Date | null;
@@ -70,4 +71,7 @@ export class Message {
 
   @OneToMany(() => MessageReaction, (r) => r.message)
   reactions: MessageReaction[];
+
+  @OneToMany(() => MessageAttachment, (a) => a.message)
+  attachments: MessageAttachment[];
 }

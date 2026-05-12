@@ -10,3 +10,8 @@ export enum ParticipantType {
   Client = 'CLIENT',
   Worker = 'WORKER',
 }
+
+export enum AttachmentKind {
+  Image = 'IMAGE',
+  Pdf = 'PDF',
+}
