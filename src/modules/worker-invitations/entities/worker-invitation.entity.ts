@@ -29,6 +29,9 @@ export class WorkerInvitation {
   @Column({ length: 255, default: '' })
   description: string;
 
+  @Column({ length: 120, default: '' })
+  occupation: string;
+
   @ManyToOne(() => Employer, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'employer_id' })
   employer: Employer;

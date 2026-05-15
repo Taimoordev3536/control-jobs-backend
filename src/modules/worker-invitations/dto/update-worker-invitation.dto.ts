@@ -17,6 +17,11 @@ export class UpdateWorkerInvitationDto {
   description?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  occupation?: string;
+
+  @IsOptional()
   @IsDateString()
   expiresAt?: string | null;
 }

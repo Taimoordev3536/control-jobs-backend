@@ -32,6 +32,7 @@ import { AttachmentKind } from '../enums/chat.enums';
 import { ConversationKind, ParticipantType } from '../enums/chat.enums';
 import {
   ADMIN_ENTITY_ID,
+  ADMIN_PUBLIC_ID,
   ALLOWED_IMAGE_MIME,
   ALLOWED_PDF_MIME,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -241,20 +242,21 @@ export class ChatService {
       const others = convParticipants.filter(
         (p) => !(p.participantType === scope.participantType && p.participantEntityId === scope.participantEntityId),
       );
-      const displayName = others
+      const isGroup = conv.kind === ConversationKind.Group;
+      const computedName = others
         .map((p) => entityInfoMap[`${p.participantType}:${p.participantEntityId}`]?.name || 'Sin nombre')
         .join(' · ');
-      // For 1:1 DMs the avatar is the other participant's photo. For groups
-      // there's no single photo to pick — the list/header renders a group
-      // icon instead, so leave displayImageUrl null.
-      const displayImageUrl =
+      const displayName = isGroup && conv.name ? conv.name : computedName;
+      const computedImageUrl =
         others.length === 1
           ? entityInfoMap[`${others[0].participantType}:${others[0].participantEntityId}`]?.imageUrl ?? null
           : null;
+      const displayImageUrl = isGroup ? conv.imageUrl ?? null : computedImageUrl;
       const last = lastMessages[conv.id];
       return {
         publicId: conv.publicId,
         kind: conv.kind,
+        createdByUserId: conv.createdByUserId,
         displayName,
         displayImageUrl,
         participants: convParticipants.map((p) => {
@@ -343,9 +345,48 @@ export class ChatService {
     return this.buildConversationDetail(conv, scope);
   }
 
-  async createGroup(requester: any, employerPublicId: string, clientPublicId: string, workerPublicId: string) {
+  async createGroup(
+    requester: any,
+    employerPublicId: string,
+    clientPublicId?: string,
+    workerPublicId?: string,
+    adminPublicId?: string,
+    name?: string,
+  ) {
     const scope = await this.resolveRequesterScope(requester);
     const employer = await this.resolveEntityByPublicId(ParticipantType.Employer, employerPublicId);
+
+    if (scope.participantType === ParticipantType.Partner) {
+      await this.assertCanCreatePartnerGroup(scope, employer.id);
+
+      const admin = adminPublicId
+        ? await this.resolveEntityByPublicId(ParticipantType.Admin, adminPublicId)
+        : { id: ADMIN_ENTITY_ID, publicId: ADMIN_PUBLIC_ID, name: 'Admin' };
+
+      const existing = await this.findPartnerGroupConversation(
+        scope.participantEntityId,
+        admin.id,
+        employer.id,
+      );
+      if (existing) return this.buildConversationDetail(existing, scope);
+
+      const groupName = await this.resolveGroupName(scope.userId, name);
+      const conv = await this.createConversation(
+        scope.userId,
+        ConversationKind.Group,
+        [
+          { type: ParticipantType.Partner, entityId: scope.participantEntityId },
+          { type: ParticipantType.Admin, entityId: admin.id },
+          { type: ParticipantType.Employer, entityId: employer.id },
+        ],
+        groupName,
+      );
+      return this.buildConversationDetail(conv, scope);
+    }
+
+    if (!clientPublicId || !workerPublicId) {
+      throw new BadRequestException('clientPublicId and workerPublicId are required');
+    }
     const client = await this.resolveEntityByPublicId(ParticipantType.Client, clientPublicId);
     const worker = await this.resolveEntityByPublicId(ParticipantType.Worker, workerPublicId);
 
@@ -354,12 +395,118 @@ export class ChatService {
     const existing = await this.findGroupConversation(employer.id, client.id, worker.id);
     if (existing) return this.buildConversationDetail(existing, scope);
 
-    const conv = await this.createConversation(scope.userId, ConversationKind.Group, [
-      { type: ParticipantType.Employer, entityId: employer.id },
-      { type: ParticipantType.Client, entityId: client.id },
-      { type: ParticipantType.Worker, entityId: worker.id },
-    ]);
+    const groupName = await this.resolveGroupName(scope.userId, name);
+    const conv = await this.createConversation(
+      scope.userId,
+      ConversationKind.Group,
+      [
+        { type: ParticipantType.Employer, entityId: employer.id },
+        { type: ParticipantType.Client, entityId: client.id },
+        { type: ParticipantType.Worker, entityId: worker.id },
+      ],
+      groupName,
+    );
     return this.buildConversationDetail(conv, scope);
+  }
+
+  async renameGroup(requester: any, conversationPublicId: string, name?: string | null) {
+    const scope = await this.resolveRequesterScope(requester);
+    const conv = await this.findConversationOrThrow(conversationPublicId);
+    if (conv.kind !== ConversationKind.Group) {
+      throw new BadRequestException('Only group conversations can be renamed');
+    }
+    if (!this.canRenameGroup(scope, conv)) {
+      throw new ForbiddenException('You cannot rename this group');
+    }
+    const trimmed = (name ?? '').trim();
+    conv.name = trimmed ? trimmed : await this.generateDefaultGroupName(conv.createdByUserId ?? scope.userId);
+    await this.conversationRepo.save(conv);
+    await this.notifyConversationUpsert(conv.id);
+    return this.buildConversationDetail(conv, scope);
+  }
+
+  async setGroupImage(requester: any, conversationPublicId: string, file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+      throw new BadRequestException('Group image must be PNG or JPEG');
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('Group image must be 2 MB or smaller');
+    }
+
+    const scope = await this.resolveRequesterScope(requester);
+    const conv = await this.findConversationOrThrow(conversationPublicId);
+    if (conv.kind !== ConversationKind.Group) {
+      throw new BadRequestException('Only group conversations can have an image');
+    }
+    if (!(await this.canChangeGroupImage(scope, conv))) {
+      throw new ForbiddenException('You cannot change this group image');
+    }
+
+    const oldPublicId = conv.imagePublicId;
+    const uploaded = await this.cloudinary.uploadImage(file.buffer, 'controljobs/group-images');
+    conv.imagePublicId = uploaded.publicId;
+    conv.imageUrl = uploaded.secureUrl;
+    await this.conversationRepo.save(conv);
+
+    if (oldPublicId && oldPublicId !== uploaded.publicId) {
+      await this.cloudinary.deleteImage(oldPublicId);
+    }
+    await this.notifyConversationUpsert(conv.id);
+    return this.buildConversationDetail(conv, scope);
+  }
+
+  async deleteGroupImage(requester: any, conversationPublicId: string) {
+    const scope = await this.resolveRequesterScope(requester);
+    const conv = await this.findConversationOrThrow(conversationPublicId);
+    if (conv.kind !== ConversationKind.Group) {
+      throw new BadRequestException('Only group conversations can have an image');
+    }
+    if (!(await this.canChangeGroupImage(scope, conv))) {
+      throw new ForbiddenException('You cannot change this group image');
+    }
+
+    const oldPublicId = conv.imagePublicId;
+    conv.imagePublicId = null;
+    conv.imageUrl = null;
+    await this.conversationRepo.save(conv);
+    if (oldPublicId) await this.cloudinary.deleteImage(oldPublicId);
+    await this.notifyConversationUpsert(conv.id);
+    return this.buildConversationDetail(conv, scope);
+  }
+
+  private async resolveGroupName(creatorUserId: number, raw?: string): Promise<string> {
+    const trimmed = (raw ?? '').trim();
+    if (trimmed) return trimmed;
+    return this.generateDefaultGroupName(creatorUserId);
+  }
+
+  private async generateDefaultGroupName(creatorUserId: number): Promise<string> {
+    const count = await this.conversationRepo.count({
+      where: { kind: ConversationKind.Group, createdByUserId: creatorUserId },
+    });
+    return `group${count + 1}`;
+  }
+
+  private canRenameGroup(scope: RequesterScope, conv: Conversation): boolean {
+    return conv.createdByUserId === scope.userId;
+  }
+
+  private async canChangeGroupImage(scope: RequesterScope, conv: Conversation): Promise<boolean> {
+    if (conv.createdByUserId === scope.userId) return true;
+    const participants = await this.participantRepo.find({ where: { conversationId: conv.id } });
+    const isPartnerGroup = participants.some((p) => p.participantType === ParticipantType.Partner);
+    if (isPartnerGroup) {
+      return scope.participantType === ParticipantType.Admin;
+    }
+    return (
+      scope.participantType === ParticipantType.Client &&
+      participants.some(
+        (p) =>
+          p.participantType === ParticipantType.Client &&
+          p.participantEntityId === scope.participantEntityId,
+      )
+    );
   }
 
   async sendMessage(
@@ -785,6 +932,7 @@ export class ChatService {
     createdByUserId: number,
     kind: ConversationKind,
     participants: ParticipantRef[],
+    name: string | null = null,
   ): Promise<Conversation> {
     return this.dataSource.transaction(async (manager) => {
       const conv = await manager.save(
@@ -792,6 +940,7 @@ export class ChatService {
           kind,
           createdByUserId,
           lastMessageAt: null,
+          name,
         }),
       );
       const rows = participants.map((p) =>
@@ -825,6 +974,38 @@ export class ChatService {
     for (const conv of conversations) {
       const count = await this.participantRepo.count({ where: { conversationId: conv.id } });
       if (count === 2) return conv;
+    }
+    return null;
+  }
+
+  private async findPartnerGroupConversation(
+    partnerId: number,
+    adminId: number,
+    employerId: number,
+  ): Promise<Conversation | null> {
+    const conversations = await this.conversationRepo
+      .createQueryBuilder('c')
+      .innerJoin('chat_conversation_participants', 'pp', 'pp.conversation_id = c.id')
+      .innerJoin('chat_conversation_participants', 'pa', 'pa.conversation_id = c.id')
+      .innerJoin('chat_conversation_participants', 'pe', 'pe.conversation_id = c.id')
+      .where('c.kind = :kind', { kind: ConversationKind.Group })
+      .andWhere('pp.participant_type = :pt AND pp.participant_entity_id = :pid', {
+        pt: ParticipantType.Partner,
+        pid: partnerId,
+      })
+      .andWhere('pa.participant_type = :at AND pa.participant_entity_id = :aid', {
+        at: ParticipantType.Admin,
+        aid: adminId,
+      })
+      .andWhere('pe.participant_type = :et AND pe.participant_entity_id = :eid', {
+        et: ParticipantType.Employer,
+        eid: employerId,
+      })
+      .getMany();
+
+    for (const conv of conversations) {
+      const count = await this.participantRepo.count({ where: { conversationId: conv.id } });
+      if (count === 3) return conv;
     }
     return null;
   }
@@ -930,21 +1111,23 @@ export class ChatService {
     }
   }
 
+  private async assertCanCreatePartnerGroup(scope: RequesterScope, employerId: number) {
+    if (!this.isHighTierPartner(scope)) {
+      throw new ForbiddenException('Tu plan no permite crear grupos');
+    }
+    const employer = await this.employerRepo.findOne({ where: { id: employerId } });
+    if (!employer || employer.partnerId !== scope.participantEntityId) {
+      throw new ForbiddenException('Empleador no pertenece a este partner');
+    }
+  }
+
   private async assertCanCreateGroup(scope: RequesterScope, employerId: number, clientId: number, workerId: number) {
     const isAdmin = scope.participantType === ParticipantType.Admin;
     const isOwnEmployer =
       scope.participantType === ParticipantType.Employer && scope.participantEntityId === employerId;
-    const isHighPartner = this.isHighTierPartner(scope);
 
-    if (!isAdmin && !isOwnEmployer && !isHighPartner) {
+    if (!isAdmin && !isOwnEmployer) {
       throw new ForbiddenException('Tu plan no permite crear grupos');
-    }
-
-    if (isHighPartner) {
-      const employer = await this.employerRepo.findOne({ where: { id: employerId } });
-      if (!employer || employer.partnerId !== scope.participantEntityId) {
-        throw new ForbiddenException('Empleador no pertenece a este partner');
-      }
     }
 
     const hasClient = await this.employerClientRepo.findOne({
@@ -960,7 +1143,10 @@ export class ChatService {
   private async resolveEntityByPublicId(type: ParticipantType, publicId: string): Promise<EntityRef> {
     switch (type) {
       case ParticipantType.Admin:
-        return { id: ADMIN_ENTITY_ID, publicId: null, name: 'Admin' };
+        if (publicId && publicId !== ADMIN_PUBLIC_ID) {
+          throw new NotFoundException('Admin not found');
+        }
+        return { id: ADMIN_ENTITY_ID, publicId: ADMIN_PUBLIC_ID, name: 'Admin' };
       case ParticipantType.Partner: {
         const p = await this.partnerRepo.findOne({ where: { publicId } });
         if (!p) throw new NotFoundException('Partner not found');
@@ -1104,17 +1290,21 @@ export class ChatService {
         !(p.participantType === viewerScope.participantType &&
           p.participantEntityId === viewerScope.participantEntityId),
     );
-    const displayName = others
+    const isGroup = conv.kind === ConversationKind.Group;
+    const computedName = others
       .map((p) => entityInfoMap[`${p.participantType}:${p.participantEntityId}`]?.name || 'Sin nombre')
       .join(' · ');
-    const displayImageUrl =
+    const displayName = isGroup && conv.name ? conv.name : computedName;
+    const computedImageUrl =
       others.length === 1
         ? entityInfoMap[`${others[0].participantType}:${others[0].participantEntityId}`]?.imageUrl ?? null
         : null;
+    const displayImageUrl = isGroup ? conv.imageUrl ?? null : computedImageUrl;
 
     return {
       publicId: conv.publicId,
       kind: conv.kind,
+      createdByUserId: conv.createdByUserId,
       displayName,
       displayImageUrl,
       participants: participants.map((p) => {
@@ -1317,7 +1507,7 @@ export class ChatService {
   }
 
   private async adminContact(): Promise<EntityRef[]> {
-    return [{ id: ADMIN_ENTITY_ID, publicId: null, name: 'Admin', imageUrl: null }];
+    return [{ id: ADMIN_ENTITY_ID, publicId: ADMIN_PUBLIC_ID, name: 'Admin', imageUrl: null }];
   }
 
   private async employersOfPartner(partnerId: number): Promise<EntityRef[]> {

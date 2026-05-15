@@ -83,9 +83,15 @@ export class ClientInvitationService {
     const employerId = link.employer.id;
 
     const expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException(
+        'La fecha de caducidad debe ser posterior a la fecha actual',
+      );
+    }
 
     const invitation = this.invitationRepo.create({
       description: dto.description,
+      type: dto.type,
       employerId,
       maxRedemptions: dto.maxRedemptions ?? null,
       issuedByUserId: requester.id,
@@ -192,6 +198,7 @@ export class ClientInvitationService {
     valid: boolean;
     reason?: string;
     description?: string;
+    type?: 'company' | 'particular';
     employerId?: number;
     employerName?: string;
   }> {
@@ -226,6 +233,7 @@ export class ClientInvitationService {
     return {
       valid: true,
       description: invitation.description,
+      type: invitation.type,
       employerId: invitation.employerId,
       employerName: employer.name,
     };
@@ -271,7 +279,7 @@ export class ClientInvitationService {
     });
     if (dup) {
       throw new BadRequestException(
-        'This email already redeemed this invitation. Please log in instead.',
+        'Este email ya ha canjeado la invitación. Pruebe a iniciar sesión.',
       );
     }
 
@@ -312,8 +320,8 @@ export class ClientInvitationService {
         longitude: dto.longitude,
         landline: dto.landline,
         mobile: dto.mobile,
-        type: dto.type,
-        code: dto.code,
+        type: invitation.type || dto.type,
+        code: dto.code ?? '',
         taxId: dto.taxId,
         status: 'Active',
         observation: dto.observation,
@@ -349,19 +357,29 @@ export class ClientInvitationService {
     });
   }
 
+  private async assertCanManage(
+    requester: any,
+    invitation: ClientInvitation,
+  ): Promise<void> {
+    const role = String(requester?.role?.name || '').toLowerCase();
+    if (role === 'admin') return;
+    const link = await this.employerUserRepo.findOne({
+      where: { user: { id: requester.id } },
+      relations: ['employer'],
+    });
+    if (link?.employer?.id !== invitation.employerId) {
+      throw new ForbiddenException('Not your invitation');
+    }
+  }
+
   async update(
     requester: any,
     publicId: string,
     dto: UpdateClientInvitationDto,
   ): Promise<ClientInvitation> {
-    const role = String(requester?.role?.name || '').toLowerCase();
     const invitation = await this.invitationRepo.findOne({ where: { publicId } });
     if (!invitation) throw new NotFoundException('Invitation not found');
-    if (role !== 'admin' && invitation.issuedByUserId !== requester.id) {
-      throw new ForbiddenException(
-        'Cannot edit an invitation you did not issue',
-      );
-    }
+    await this.assertCanManage(requester, invitation);
     if (invitation.status !== 'PENDING') {
       throw new BadRequestException(
         `Cannot edit a ${invitation.status.toLowerCase()} invitation`,
@@ -369,21 +387,23 @@ export class ClientInvitationService {
     }
 
     if (dto.description !== undefined) invitation.description = dto.description;
+    if (dto.type !== undefined) invitation.type = dto.type;
     if (dto.expiresAt !== undefined) {
-      invitation.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+      const newExp = dto.expiresAt ? new Date(dto.expiresAt) : null;
+      if (newExp && newExp.getTime() <= Date.now()) {
+        throw new BadRequestException(
+          'La fecha de caducidad debe ser posterior a la fecha actual',
+        );
+      }
+      invitation.expiresAt = newExp;
     }
     return this.invitationRepo.save(invitation);
   }
 
   async remove(requester: any, publicId: string): Promise<void> {
-    const role = String(requester?.role?.name || '').toLowerCase();
     const invitation = await this.invitationRepo.findOne({ where: { publicId } });
     if (!invitation) throw new NotFoundException('Invitation not found');
-    if (role !== 'admin' && invitation.issuedByUserId !== requester.id) {
-      throw new ForbiddenException(
-        'Cannot delete an invitation you did not issue',
-      );
-    }
+    await this.assertCanManage(requester, invitation);
     const used = await this.redemptionRepo.count({
       where: { invitationId: invitation.id },
     });
@@ -396,14 +416,9 @@ export class ClientInvitationService {
   }
 
   async revoke(requester: any, publicId: string): Promise<void> {
-    const role = String(requester?.role?.name || '').toLowerCase();
     const invitation = await this.invitationRepo.findOne({ where: { publicId } });
     if (!invitation) throw new NotFoundException('Invitation not found');
-    if (role !== 'admin' && invitation.issuedByUserId !== requester.id) {
-      throw new ForbiddenException(
-        'Cannot revoke an invitation you did not issue',
-      );
-    }
+    await this.assertCanManage(requester, invitation);
     if (invitation.status === 'REVOKED' || invitation.status === 'EXPIRED') {
       throw new BadRequestException(
         `Invitation is already ${invitation.status.toLowerCase()}`,

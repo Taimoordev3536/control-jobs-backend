@@ -9,16 +9,18 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '../chat.constants';
 import { ChatService } from '../services/chat.service';
 import { CreateDirectConversationDto } from '../dto/create-direct-conversation.dto';
 import { CreateGroupConversationDto } from '../dto/create-group-conversation.dto';
+import { UpdateGroupNameDto } from '../dto/update-group-name.dto';
 import { SendMessageDto } from '../dto/send-message.dto';
 import { EditMessageDto } from '../dto/edit-message.dto';
 import { MarkReadDto } from '../dto/mark-read.dto';
@@ -67,7 +69,39 @@ export class ChatController {
       dto.employerPublicId,
       dto.clientPublicId,
       dto.workerPublicId,
+      dto.adminPublicId,
+      dto.name,
     );
+    return { data, isSuccess: true };
+  }
+
+  @Patch('conversations/:publicId/name')
+  async renameGroup(
+    @Req() req: any,
+    @Param('publicId', ParseUUIDPipe) publicId: string,
+    @Body() dto: UpdateGroupNameDto,
+  ) {
+    const data = await this.chatService.renameGroup(req.user, publicId, dto.name);
+    return { data, isSuccess: true };
+  }
+
+  @Post('conversations/:publicId/image')
+  @UseInterceptors(FileInterceptor('file'))
+  async setGroupImage(
+    @Req() req: any,
+    @Param('publicId', ParseUUIDPipe) publicId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const data = await this.chatService.setGroupImage(req.user, publicId, file);
+    return { data, isSuccess: true };
+  }
+
+  @Delete('conversations/:publicId/image')
+  async deleteGroupImage(
+    @Req() req: any,
+    @Param('publicId', ParseUUIDPipe) publicId: string,
+  ) {
+    const data = await this.chatService.deleteGroupImage(req.user, publicId);
     return { data, isSuccess: true };
   }
 

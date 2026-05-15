@@ -105,12 +105,17 @@ export class EmployerInvitationService {
       const cap = Number(partner.commission ?? 0);
       if (discountPercent > cap) {
         throw new BadRequestException(
-          `Discount cannot exceed partner commission (${cap}%)`,
+          `El descuento no puede exceder la comisión del ${cap}%`,
         );
       }
     }
 
     const expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException(
+        'La fecha de caducidad debe ser posterior a la fecha actual',
+      );
+    }
 
     const invitation = this.invitationRepo.create({
       description: dto.description,
@@ -319,7 +324,7 @@ export class EmployerInvitationService {
     });
     if (dup) {
       throw new BadRequestException(
-        'This email already redeemed this invitation. Please log in instead.',
+        'Este email ya ha canjeado la invitación. Pruebe a iniciar sesión.',
       );
     }
 
@@ -437,7 +442,7 @@ export class EmployerInvitationService {
         const cap = Number(partner.commission ?? 0);
         if (dto.discountPercent > cap) {
           throw new BadRequestException(
-            `Discount cannot exceed partner commission (${cap}%)`,
+            `El descuento no puede exceder la comisión del ${cap}%`,
           );
         }
       }
@@ -447,7 +452,13 @@ export class EmployerInvitationService {
       invitation.description = dto.description;
     }
     if (dto.expiresAt !== undefined) {
-      invitation.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+      const newExp = dto.expiresAt ? new Date(dto.expiresAt) : null;
+      if (newExp && newExp.getTime() <= Date.now()) {
+        throw new BadRequestException(
+          'La fecha de caducidad debe ser posterior a la fecha actual',
+        );
+      }
+      invitation.expiresAt = newExp;
     }
 
     return this.invitationRepo.save(invitation);

@@ -32,8 +32,8 @@ export class AcceptWorkerInvitationDto {
   email: string;
 
   @IsString()
-  @IsNotEmpty()
-  code: string;
+  @IsOptional()
+  code?: string;
 
   @IsString()
   @IsOptional()
@@ -102,6 +102,6 @@ export class AcceptWorkerInvitationDto {
   gender?: string;
 
   @IsDateString()
-  @IsOptional()
-  birthday?: string;
+  @IsNotEmpty()
+  birthday: string;
 }

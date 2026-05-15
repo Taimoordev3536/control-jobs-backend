@@ -1,12 +1,23 @@
-import { IsUUID } from 'class-validator';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateGroupConversationDto {
   @IsUUID()
   employerPublicId: string;
 
+  @IsOptional()
   @IsUUID()
-  clientPublicId: string;
+  adminPublicId?: string;
 
+  @IsOptional()
   @IsUUID()
-  workerPublicId: string;
+  clientPublicId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  workerPublicId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  name?: string;
 }

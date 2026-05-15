@@ -20,6 +20,11 @@ export class CreateWorkerInvitationDto {
   @MaxLength(255)
   description: string;
 
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  occupation: string;
+
   @IsOptional()
   @IsInt()
   @Min(1)

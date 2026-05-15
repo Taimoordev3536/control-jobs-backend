@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsIn,
   IsOptional,
   IsString,
   MaxLength,
@@ -13,6 +14,10 @@ export class UpdateClientInvitationDto {
   @IsString()
   @MaxLength(255)
   description?: string;
+
+  @IsOptional()
+  @IsIn(['company', 'particular'])
+  type?: 'company' | 'particular';
 
   @IsOptional()
   @IsDateString()

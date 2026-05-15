@@ -24,6 +24,15 @@ export class Conversation {
   @Column({ type: 'varchar', length: 20 })
   kind: ConversationKind;
 
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  name: string | null;
+
+  @Column({ name: 'image_public_id', type: 'varchar', length: 255, nullable: true })
+  imagePublicId: string | null;
+
+  @Column({ name: 'image_url', type: 'varchar', length: 500, nullable: true })
+  imageUrl: string | null;
+
   @Column({ name: 'created_by_user_id', nullable: true })
   createdByUserId: number | null;
 

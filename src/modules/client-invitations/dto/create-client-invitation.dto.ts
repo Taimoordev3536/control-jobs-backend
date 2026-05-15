@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -20,6 +21,9 @@ export class CreateClientInvitationDto {
   @IsNotEmpty()
   @MaxLength(255)
   description: string;
+
+  @IsIn(['company', 'particular'])
+  type: 'company' | 'particular';
 
   @IsOptional()
   @IsInt()

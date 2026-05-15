@@ -262,7 +262,7 @@ export class EmployersService {
     const cap = Number(partner.commission ?? 0);
     if (Number(discount) > cap) {
       throw new BadRequestException(
-        `Discount cannot exceed partner commission (${cap}%)`,
+        `El descuento no puede exceder la comisión del ${cap}%`,
       );
     }
   }

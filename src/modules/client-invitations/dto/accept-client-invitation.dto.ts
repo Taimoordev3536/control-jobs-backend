@@ -33,8 +33,8 @@ export class AcceptClientInvitationDto {
   type: string; // "company" | "particular"
 
   @IsString()
-  @IsNotEmpty()
-  code: string;
+  @IsOptional()
+  code?: string;
 
   @IsString()
   @IsNotEmpty()
