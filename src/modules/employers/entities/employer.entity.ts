@@ -195,9 +195,6 @@ export class Employer {
   @Column()
   subTypeId: number;
 
-  @Column('decimal', { precision: 5, scale: 2 })
-  fee: number;
-
   @Column('decimal', { precision: 5, scale: 2, nullable: true })
   discount: number;
 

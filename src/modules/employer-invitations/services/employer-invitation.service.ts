@@ -21,6 +21,7 @@ import { EmployersService } from '../../employers/employers.service';
 import { CreateInvitationDto } from '../dto/create-invitation.dto';
 import { UpdateInvitationDto } from '../dto/update-invitation.dto';
 import { AcceptInvitationDto } from '../dto/accept-invitation.dto';
+import { PaymentMethodsService } from '../../payment-methods/payment-methods.service';
 
 const TOKEN_TYPE = 'employer-invite';
 
@@ -59,6 +60,7 @@ export class EmployerInvitationService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly employersService: EmployersService,
+    private readonly paymentMethodsService: PaymentMethodsService,
   ) {}
 
   // ============================================================
@@ -288,6 +290,11 @@ export class EmployerInvitationService {
     const payload = this.verifyToken(dto.token);
     if (!payload) throw new UnauthorizedException('Invalid invitation token');
 
+    await this.paymentMethodsService.assertEligible(
+      dto.paymentMethodId ?? null,
+      'SELF_SERVICE',
+    );
+
     const invitation = await this.invitationRepo.findOne({
       where: { id: payload.invitationId },
     });
@@ -300,12 +307,10 @@ export class EmployerInvitationService {
       await this.invitationRepo.save(invitation);
       throw new BadRequestException('Invitation expired');
     }
-    // Defence in depth: cross-check partner & trial against the token.
+    // Defence in depth: cross-check partner against the token. trialDays
+    // is editable post-share so we trust the DB value at accept-time.
     if (invitation.partnerId !== payload.partnerId) {
       throw new BadRequestException('Partner mismatch');
-    }
-    if (invitation.trialDays !== payload.trialDays) {
-      throw new BadRequestException('Trial mismatch');
     }
 
     if (invitation.maxRedemptions !== null) {
@@ -354,7 +359,6 @@ export class EmployerInvitationService {
       landline: dto.landline,
       typeId: dto.typeId,
       subTypeId: dto.subTypeId,
-      fee: dto.fee ?? 0,
       // Discount comes from the token, not the form — clients can't
       // tamper with the offer terms.
       discount: Number(invitation.discountPercent),
@@ -365,7 +369,7 @@ export class EmployerInvitationService {
       paymentMethodId: dto.paymentMethodId ?? null,
       accountIban: dto.accountIban,
       bicSwift: dto.bicSwift,
-      probationPeriod: String(payload.trialDays),
+      probationPeriod: String(invitation.trialDays),
       responsible: dto.responsible,
       accessAccountStatus: 'request',
       accessEmail: emailLower,
@@ -450,6 +454,9 @@ export class EmployerInvitationService {
     }
     if (dto.description !== undefined) {
       invitation.description = dto.description;
+    }
+    if (dto.trialDays !== undefined) {
+      invitation.trialDays = dto.trialDays;
     }
     if (dto.expiresAt !== undefined) {
       const newExp = dto.expiresAt ? new Date(dto.expiresAt) : null;

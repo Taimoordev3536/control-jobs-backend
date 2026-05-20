@@ -16,6 +16,12 @@ export class PaymentMethod {
   @Column({ default: true })
   isActive: boolean;
 
+  @Column({ name: 'is_self_service', default: false })
+  isSelfService: boolean;
+
+  @Column({ name: 'display_order', default: 0 })
+  displayOrder: number;
+
   @OneToMany(() => Partner, partner => partner.defaultPaymentMethod)
   partners: Partner[];
 

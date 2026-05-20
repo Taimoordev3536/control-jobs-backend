@@ -93,9 +93,8 @@ export class SelfRegistrationService {
       landline: dto.landline,
       typeId: dto.typeId,
       subTypeId: dto.subTypeId,
-      fee: 0,
       discount: 0,                          // forced 0 for self-signups
-      paymentMethodId: 5,                   // "Others" — payment captured later
+      paymentMethodId: null,
       accountIban: '',
       bicSwift: '',
       probationPeriod: '15',

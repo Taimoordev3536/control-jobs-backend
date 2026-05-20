@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -11,12 +12,11 @@ import {
 /**
  * Body for PATCH /api/employer-invitations/:publicId.
  *
- * Only fields that are safe to mutate after the link has been shared:
- *   - description, discountPercent (DB is the source of truth at accept-time)
- *   - expiresAt (re-signed token uses the new expiry)
+ * Editable fields. DB is the source of truth at accept-time for
+ * description, discountPercent, and trialDays — so changes here apply
+ * to every future redemption, including via links already shared.
  *
- * partnerId / trialDays are intentionally NOT editable — the JWT already
- * shipped to recipients encodes them, and the accept flow rejects mismatches.
+ * partnerId is intentionally NOT editable.
  */
 export class UpdateInvitationDto {
   @IsOptional()
@@ -29,6 +29,12 @@ export class UpdateInvitationDto {
   @Min(0)
   @Max(100)
   discountPercent?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(30)
+  trialDays?: number;
 
   @IsOptional()
   @IsDateString()

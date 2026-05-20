@@ -14,6 +14,7 @@ import { EmployerInvitationsController } from './controllers/employer-invitation
 import { EmployersModule } from '../employers/employers.module';
 import { CommonModule } from '../../common/common.module';
 import { AuthModule } from '../auth/auth.module';
+import { PaymentMethodsModule } from '../payment-methods/payment-methods.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { AuthModule } from '../auth/auth.module';
     EmployersModule,
     CommonModule,
     AuthModule,
+    PaymentMethodsModule,
   ],
   controllers: [EmployerInvitationsController],
   providers: [EmployerInvitationService, SelfRegistrationService],

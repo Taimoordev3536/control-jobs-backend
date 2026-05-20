@@ -71,6 +71,7 @@ export class ChatController {
       dto.workerPublicId,
       dto.adminPublicId,
       dto.name,
+      dto.partnerPublicId,
     );
     return { data, isSuccess: true };
   }

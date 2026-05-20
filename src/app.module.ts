@@ -20,6 +20,7 @@ import { EmployerInvitationsModule } from './modules/employer-invitations/employ
 import { WorkerInvitationsModule } from './modules/worker-invitations/worker-invitations.module';
 import { ClientInvitationsModule } from './modules/client-invitations/client-invitations.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { PaymentMethodsModule } from './modules/payment-methods/payment-methods.module';
 
 config();
 
@@ -66,6 +67,7 @@ config();
     WorkerInvitationsModule,
     ClientInvitationsModule,
     ChatModule,
+    PaymentMethodsModule,
   ],
 })
 export class AppModule { }

@@ -25,6 +25,7 @@ import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
 import { RatePlanService } from '../billing/services/rate-plan.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { PaymentMethodsService } from '../payment-methods/payment-methods.service';
 
 @Injectable()
 export class EmployersService {
@@ -47,6 +48,7 @@ export class EmployersService {
     @Inject(forwardRef(() => RatePlanService))
     private readonly ratePlanService: RatePlanService,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly paymentMethodsService: PaymentMethodsService,
   ) {}
 
   // Resolve the Employer.id linked to a given User.id via the EmployerUser
@@ -114,8 +116,7 @@ export class EmployersService {
     });
     if (!employer) throw new NotFoundException(`Employer ${employerId} not found`);
 
-    const pm = await this.paymentMethodRepository.findOneBy({ id: paymentMethodId });
-    if (!pm) throw new BadRequestException('Invalid payment method');
+    await this.paymentMethodsService.assertEligible(paymentMethodId, 'SELF_SERVICE');
 
     employer.paymentMethodId = paymentMethodId;
     employer.paymentMethodAddedAt = new Date();
@@ -274,23 +275,19 @@ export class EmployersService {
     // invitation-link signups intentionally leave it null (collected later
     // via the AWAITING_PAYMENT_METHOD flow). When the caller does pass an
     // id, we still verify it points at a real row.
-    const [type, subType, paymentMethod] = await Promise.all([
+    const [type, subType] = await Promise.all([
       this.employerTypeRepository.findOneBy({ id: createEmployerDto.typeId }),
       this.employerSubTypeRepository.findOneBy({
         id: createEmployerDto.subTypeId,
       }),
-      createEmployerDto.paymentMethodId
-        ? this.paymentMethodRepository.findOneBy({
-            id: createEmployerDto.paymentMethodId,
-          })
-        : Promise.resolve(null),
     ]);
 
     if (!type) throw new BadRequestException('Invalid employer type');
     if (!subType) throw new BadRequestException('Invalid employer sub-type');
-    if (createEmployerDto.paymentMethodId && !paymentMethod) {
-      throw new BadRequestException('Invalid payment method');
-    }
+    await this.paymentMethodsService.assertEligible(
+      createEmployerDto.paymentMethodId ?? null,
+      'ADMIN_ASSIGN',
+    );
 
     // Resolve the matching rate plan so we can snapshot the rates onto the
     // new employer. Future price changes won't retroactively affect them.
@@ -337,7 +334,6 @@ export class EmployersService {
             landline: createEmployerDto.landline,
             typeId: createEmployerDto.typeId,
             subTypeId: createEmployerDto.subTypeId,
-            fee: createEmployerDto.fee,
             discount: createEmployerDto.discount,
             paymentMethodId: createEmployerDto.paymentMethodId ?? null,
             accountIban: createEmployerDto.accountIban,
@@ -467,7 +463,6 @@ export class EmployersService {
         name: e.name,
         class: e.subType?.name || null,
         type: e.type?.name || null,
-        fee: e.fee,
         createdAt: e.createdAt,
         paymentMethod: e.paymentMethod?.name || null,
         partnerName: e.partner?.name || null, // Added partner name
@@ -581,6 +576,36 @@ export class EmployersService {
               effectiveDiscount,
             );
           }
+
+          if (resolvedData.paymentMethodId !== undefined) {
+            await this.paymentMethodsService.assertEligible(
+              resolvedData.paymentMethodId,
+              'ADMIN_ASSIGN',
+            );
+          }
+
+          const typeChanging =
+            resolvedData.typeId !== undefined &&
+            Number(resolvedData.typeId) !== Number(employer.typeId);
+          const subTypeChanging =
+            resolvedData.subTypeId !== undefined &&
+            Number(resolvedData.subTypeId) !== Number(employer.subTypeId);
+          if (typeChanging || subTypeChanging) {
+            const newSubTypeId = Number(resolvedData.subTypeId ?? employer.subTypeId);
+            const newTypeId = Number(resolvedData.typeId ?? employer.typeId);
+            const match = await this.ratePlanService.findMatch(newSubTypeId, newTypeId);
+            if (!match) {
+              throw new BadRequestException(
+                'No active rate plan for this Clase/Tarifa combination',
+              );
+            }
+            const effective = this.ratePlanService.getEffectiveRates(match);
+            resolvedData.ratePlanId = match.id;
+            resolvedData.monthlyFixedRate = effective.monthlyFixed;
+            resolvedData.perWorkCenterRate = effective.perWorkCenter;
+            resolvedData.perWorkerRate = effective.perWorker;
+          }
+
           const updatedEmployer = await manager.save(Employer, {
             ...employer,
             ...resolvedData,

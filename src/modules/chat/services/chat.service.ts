@@ -5,6 +5,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, IsNull, LessThan, Not, Repository } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
@@ -96,7 +97,15 @@ export class ChatService {
     @InjectRepository(Worker) private readonly workerRepo: Repository<Worker>,
     private readonly dataSource: DataSource,
     private readonly gateway: ChatGateway,
+    private readonly configService: ConfigService,
   ) {}
+
+  private getSystemPartnerId(): number | null {
+    const raw = this.configService.get<string>('SYSTEM_PARTNER_ID');
+    if (!raw) return null;
+    const id = Number(raw);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
 
   async resolveRequesterScope(requester: any): Promise<RequesterScope> {
     const userId: number = requester?.id;
@@ -352,6 +361,7 @@ export class ChatService {
     workerPublicId?: string,
     adminPublicId?: string,
     name?: string,
+    partnerPublicId?: string,
   ) {
     const scope = await this.resolveRequesterScope(requester);
     const employer = await this.resolveEntityByPublicId(ParticipantType.Employer, employerPublicId);
@@ -377,6 +387,34 @@ export class ChatService {
         [
           { type: ParticipantType.Partner, entityId: scope.participantEntityId },
           { type: ParticipantType.Admin, entityId: admin.id },
+          { type: ParticipantType.Employer, entityId: employer.id },
+        ],
+        groupName,
+      );
+      return this.buildConversationDetail(conv, scope);
+    }
+
+    if (scope.participantType === ParticipantType.Admin) {
+      if (!partnerPublicId) {
+        throw new BadRequestException('partnerPublicId is required');
+      }
+      const partner = await this.resolveEntityByPublicId(ParticipantType.Partner, partnerPublicId);
+      await this.assertCanCreateAdminGroup(partner.id, employer.id);
+
+      const existing = await this.findPartnerGroupConversation(
+        partner.id,
+        ADMIN_ENTITY_ID,
+        employer.id,
+      );
+      if (existing) return this.buildConversationDetail(existing, scope);
+
+      const groupName = await this.resolveGroupName(scope.userId, name);
+      const conv = await this.createConversation(
+        scope.userId,
+        ConversationKind.Group,
+        [
+          { type: ParticipantType.Admin, entityId: ADMIN_ENTITY_ID },
+          { type: ParticipantType.Partner, entityId: partner.id },
           { type: ParticipantType.Employer, entityId: employer.id },
         ],
         groupName,
@@ -1048,10 +1086,13 @@ export class ChatService {
   private async allowedDirectTargets(scope: RequesterScope): Promise<ParticipantRef[]> {
     switch (scope.participantType) {
       case ParticipantType.Admin: {
+        const systemPartnerId = this.getSystemPartnerId();
         const partners = await this.partnerRepo.find({ select: { id: true } });
         const employers = await this.employerRepo.find({ select: { id: true } });
         return [
-          ...partners.map((p) => ({ type: ParticipantType.Partner, entityId: p.id })),
+          ...partners
+            .filter((p) => p.id !== systemPartnerId)
+            .map((p) => ({ type: ParticipantType.Partner, entityId: p.id })),
           ...employers.map((e) => ({ type: ParticipantType.Employer, entityId: e.id })),
         ];
       }
@@ -1117,6 +1158,17 @@ export class ChatService {
     }
     const employer = await this.employerRepo.findOne({ where: { id: employerId } });
     if (!employer || employer.partnerId !== scope.participantEntityId) {
+      throw new ForbiddenException('Empleador no pertenece a este partner');
+    }
+  }
+
+  private async assertCanCreateAdminGroup(partnerId: number, employerId: number) {
+    const systemPartnerId = this.getSystemPartnerId();
+    if (systemPartnerId !== null && partnerId === systemPartnerId) {
+      throw new ForbiddenException('No se puede crear grupo con el partner del sistema');
+    }
+    const employer = await this.employerRepo.findOne({ where: { id: employerId } });
+    if (!employer || employer.partnerId !== partnerId) {
       throw new ForbiddenException('Empleador no pertenece a este partner');
     }
   }
@@ -1487,13 +1539,16 @@ export class ChatService {
   }
 
   private async allPartners(): Promise<EntityRef[]> {
+    const systemPartnerId = this.getSystemPartnerId();
     const rows = await this.partnerRepo.find({ order: { name: 'ASC' } });
-    return rows.map((r) => ({
-      id: r.id,
-      publicId: r.publicId,
-      name: r.name,
-      imageUrl: r.logoUrl ?? null,
-    }));
+    return rows
+      .filter((r) => r.id !== systemPartnerId)
+      .map((r) => ({
+        id: r.id,
+        publicId: r.publicId,
+        name: r.name,
+        imageUrl: r.logoUrl ?? null,
+      }));
   }
 
   private async allEmployers(): Promise<EntityRef[]> {

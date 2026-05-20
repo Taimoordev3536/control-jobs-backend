@@ -92,10 +92,6 @@ export class UpdateEmployerDto {
 
     @IsNumber()
     @IsOptional()
-    fee?: number;
-
-    @IsNumber()
-    @IsOptional()
     @Min(0)
     @Max(100)
     discount?: number;

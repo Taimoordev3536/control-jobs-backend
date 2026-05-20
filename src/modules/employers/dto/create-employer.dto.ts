@@ -110,10 +110,6 @@ export class CreateEmployerDto {
   subTypeId: number;
 
   @IsNumber()
-  @IsNotEmpty()
-  fee: number;
-
-  @IsNumber()
   @IsOptional()
   @Min(0)
   @Max(100)

@@ -10,6 +10,10 @@ export class CreateGroupConversationDto {
 
   @IsOptional()
   @IsUUID()
+  partnerPublicId?: string;
+
+  @IsOptional()
+  @IsUUID()
   clientPublicId?: string;
 
   @IsOptional()
