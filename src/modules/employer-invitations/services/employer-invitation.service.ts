@@ -22,6 +22,7 @@ import { CreateInvitationDto } from '../dto/create-invitation.dto';
 import { UpdateInvitationDto } from '../dto/update-invitation.dto';
 import { AcceptInvitationDto } from '../dto/accept-invitation.dto';
 import { PaymentMethodsService } from '../../payment-methods/payment-methods.service';
+import { EmailVerificationService } from '../../../common/services/email-verification.service';
 
 const TOKEN_TYPE = 'employer-invite';
 
@@ -61,6 +62,7 @@ export class EmployerInvitationService {
     private readonly configService: ConfigService,
     private readonly employersService: EmployersService,
     private readonly paymentMethodsService: PaymentMethodsService,
+    private readonly emailVerificationService: EmailVerificationService,
   ) {}
 
   // ============================================================
@@ -413,6 +415,8 @@ export class EmployerInvitationService {
       invitation.acceptedEmployerId = employerId ?? null;
       await this.invitationRepo.save(invitation);
     }
+
+    await this.emailVerificationService.issueToken(userId, dto.responsible || dto.name);
 
     return { employerId, userId };
   }

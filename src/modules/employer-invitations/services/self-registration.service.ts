@@ -4,16 +4,13 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { Partner } from '../../partners/entities/partner.entity';
 import { EmployersService } from '../../employers/employers.service';
 import { SelfRegisterEmployerDto } from '../dto/self-register.dto';
-import { RefreshTokenService } from '../../auth/services/refresh-token.service';
-
-const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
+import { EmailVerificationService } from '../../../common/services/email-verification.service';
 
 @Injectable()
 export class SelfRegistrationService {
@@ -24,27 +21,23 @@ export class SelfRegistrationService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(Partner)
     private readonly partnerRepo: Repository<Partner>,
-    private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly employersService: EmployersService,
-    private readonly refreshTokenService: RefreshTokenService,
+    private readonly emailVerificationService: EmailVerificationService,
   ) {}
 
   /**
    * Public self-registration. Creates a new Employer + User under the
-   * platform's "system" partner (configured via SYSTEM_PARTNER_ID) and
-   * returns a JWT so the user can be logged in immediately.
+   * platform's "system" partner (configured via SYSTEM_PARTNER_ID).
+   * Sends a verification email; the user must confirm before logging in.
    */
   async register(
     dto: SelfRegisterEmployerDto,
-    deviceInfo?: string | null,
-    ipAddress?: string | null,
+    _deviceInfo?: string | null,
+    _ipAddress?: string | null,
   ): Promise<{
-    accessToken: string;
-    refreshToken: string;
-    accessExpiresIn: number;
-    token: string;
-    user: { id: number; email: string; role: string };
+    requiresEmailVerification: true;
+    email: string;
     employerId: number;
   }> {
     // ---- Honeypot ----
@@ -109,38 +102,19 @@ export class SelfRegistrationService {
 
     const employerId = (result?.data as any)?.id;
 
-    // ---- Sign a JWT so the frontend can drop them straight on the dashboard ----
-    const newUser = await this.userRepo.findOne({
-      where: { email: dto.email },
-      relations: ['role'],
-    });
+    const newUser = await this.userRepo.findOne({ where: { email: dto.email } });
     if (!newUser) {
       throw new BadRequestException('Account created but user lookup failed');
     }
-    const payload = {
-      sub: newUser.id,
-      id: newUser.id,
-      publicId: (newUser as any).publicId,
-      email: newUser.email,
-      role: newUser.role,
-      roleValue: (newUser as any).role?.value,
-      firstName: newUser.firstName,
-      lastName: newUser.lastName,
-      employerId,
-    };
-    const accessToken = this.jwtService.sign(payload);
-    const refresh = await this.refreshTokenService.issue(newUser.id, deviceInfo, ipAddress);
+
+    await this.emailVerificationService.issueToken(
+      newUser.id,
+      dto.responsible || dto.name,
+    );
 
     return {
-      accessToken,
-      refreshToken: refresh.raw,
-      accessExpiresIn: ACCESS_TOKEN_TTL_SECONDS,
-      token: accessToken,
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        role: (newUser as any).role?.name || 'EMPLOYER',
-      },
+      requiresEmailVerification: true,
+      email: newUser.email,
       employerId,
     };
   }

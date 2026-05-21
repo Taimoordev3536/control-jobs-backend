@@ -86,8 +86,8 @@ export class AcceptWorkerInvitationDto {
   mobile?: string;
 
   @IsString()
-  @IsOptional()
-  nif?: string;
+  @IsNotEmpty()
+  nif: string;
 
   @IsString()
   @IsOptional()
@@ -98,8 +98,8 @@ export class AcceptWorkerInvitationDto {
   occupation?: string;
 
   @IsString()
-  @IsOptional()
-  gender?: string;
+  @IsNotEmpty()
+  gender: string;
 
   @IsDateString()
   @IsNotEmpty()

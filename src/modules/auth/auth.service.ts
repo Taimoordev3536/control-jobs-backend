@@ -135,6 +135,10 @@ export class AuthService {
         throw new UnauthorizedException('Invalid credentials');
       }
 
+      if (user.roleId !== 1 && !(user as any).emailVerifiedAt) {
+        throw new ForbiddenException(`EMAIL_NOT_VERIFIED:${user.email}`);
+      }
+
       // Attach entity id for each role
       let entityId = null;
       let partnerId = null;
@@ -202,7 +206,7 @@ export class AuthService {
         developerError: '',
       };
     } catch (error) {
-      if (error instanceof UnauthorizedException) {
+      if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
         throw error;
       }
       throw new Error(`Login failed: ${error.message}`);
@@ -574,6 +578,20 @@ export class AuthService {
       return { targetUser: user, entityId: worker.id, entityType: 'worker' };
     }
 
+    return null;
+  }
+
+  async resolveImpersonatorLogo(
+    impersonatorUserId: number,
+    impersonatorRole: string | null | undefined,
+  ): Promise<string | null> {
+    if (impersonatorRole === 'Employer') {
+      const link = await this.employerUserRepository.findOne({
+        where: { user: { id: impersonatorUserId }, isDefault: true },
+        relations: ['employer'],
+      });
+      return link?.employer?.logoUrl ?? null;
+    }
     return null;
   }
 

@@ -28,6 +28,7 @@ import { WorkerUser } from '../../workers/entities/worker-user.entity';
 import { CreateWorkerInvitationDto } from '../dto/create-worker-invitation.dto';
 import { UpdateWorkerInvitationDto } from '../dto/update-worker-invitation.dto';
 import { AcceptWorkerInvitationDto } from '../dto/accept-worker-invitation.dto';
+import { EmailVerificationService } from '../../../common/services/email-verification.service';
 
 const TOKEN_TYPE = 'worker-invite';
 
@@ -62,6 +63,7 @@ export class WorkerInvitationService {
     private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly emailVerificationService: EmailVerificationService,
   ) {}
 
   // ============================================================
@@ -296,7 +298,7 @@ export class WorkerInvitationService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const txResult = await this.dataSource.transaction(async (manager) => {
       const workerRole = await manager.findOne(Role, { where: { value: 5 } });
       if (!workerRole) {
         throw new BadRequestException('Worker role not configured');
@@ -362,6 +364,9 @@ export class WorkerInvitationService {
 
       return { workerId: savedWorker.id, userId: savedUser.id };
     });
+
+    await this.emailVerificationService.issueToken(txResult.userId, dto.name);
+    return txResult;
   }
 
   private async assertCanManage(

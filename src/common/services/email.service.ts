@@ -196,6 +196,44 @@ export class EmailService {
     }
   }
 
+  async sendVerificationEmail(
+    to: string,
+    name: string,
+    verifyLink: string,
+  ): Promise<any> {
+    const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL');
+    const subject = 'Confirma tu cuenta en ControlJobs';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #662D91;">Confirma tu correo electrónico</h2>
+        <p>Hola ${name},</p>
+        <p>Gracias por registrarte en ControlJobs. Para activar tu cuenta y poder iniciar sesión, confirma tu dirección de correo haciendo clic en el botón:</p>
+        <p style="margin: 28px 0;">
+          <a href="${verifyLink}"
+             style="background:#662D91;color:#fff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:600;">
+            Confirmar mi correo
+          </a>
+        </p>
+        <p style="color:#666;font-size:13px;">
+          O copia y pega este enlace en tu navegador:<br />
+          <span style="word-break:break-all;color:#444;">${verifyLink}</span>
+        </p>
+        <p style="color:#666;font-size:13px;">
+          Este enlace caduca en 24 horas. Si no creaste esta cuenta, puedes ignorar este mensaje.
+        </p>
+        <hr style="border:none;border-top:1px solid #eee;margin:24px 0;" />
+        <p style="color:#888;font-size:12px;">— Equipo ControlJobs</p>
+      </div>
+    `;
+    return this.deliver({
+      to,
+      subject,
+      html,
+      fromEmail,
+      kind: 'email-verification',
+    });
+  }
+
   async sendRateChangeNotice(args: {
     to: string;
     name: string;

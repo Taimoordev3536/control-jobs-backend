@@ -38,6 +38,18 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  @Column({ name: 'email_verified_at', type: 'timestamp', nullable: true })
+  emailVerifiedAt: Date | null;
+
+  @Column({ name: 'email_verification_token_hash', type: 'varchar', length: 64, nullable: true })
+  emailVerificationTokenHash: string | null;
+
+  @Column({ name: 'email_verification_expires_at', type: 'timestamp', nullable: true })
+  emailVerificationExpiresAt: Date | null;
+
+  @Column({ name: 'email_verification_sent_at', type: 'timestamp', nullable: true })
+  emailVerificationSentAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

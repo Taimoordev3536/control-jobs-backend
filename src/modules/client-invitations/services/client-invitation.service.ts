@@ -28,6 +28,7 @@ import { ClientUser } from '../../clients/entities/client-user.entity';
 import { CreateClientInvitationDto } from '../dto/create-client-invitation.dto';
 import { UpdateClientInvitationDto } from '../dto/update-client-invitation.dto';
 import { AcceptClientInvitationDto } from '../dto/accept-client-invitation.dto';
+import { EmailVerificationService } from '../../../common/services/email-verification.service';
 
 const TOKEN_TYPE = 'client-invite';
 
@@ -62,6 +63,7 @@ export class ClientInvitationService {
     private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly emailVerificationService: EmailVerificationService,
   ) {}
 
   async create(
@@ -292,7 +294,7 @@ export class ClientInvitationService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const txResult = await this.dataSource.transaction(async (manager) => {
       const clientRole = await manager.findOne(Role, { where: { value: 4 } });
       if (!clientRole) {
         throw new BadRequestException('Client role not configured');
@@ -355,6 +357,9 @@ export class ClientInvitationService {
 
       return { clientId: savedClient.id, userId: savedUser.id };
     });
+
+    await this.emailVerificationService.issueToken(txResult.userId, dto.name);
+    return txResult;
   }
 
   private async assertCanManage(

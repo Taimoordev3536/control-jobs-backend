@@ -96,8 +96,9 @@ function drawCenteredText(
   if (!text) return;
   doc.font(font).fontSize(fontSize).fillColor(color);
   const textW = doc.widthOfString(text);
-  const textH = doc.currentLineHeight();
-  doc.text(text, boxX + (boxW - textW) / 2, boxY + (boxH - textH) / 2, {
+  const capHeight = fontSize * 0.718;
+  const y = boxY + (boxH - capHeight) / 2;
+  doc.text(text, boxX + (boxW - textW) / 2, y, {
     lineBreak: false,
     width: boxW,
   });
@@ -148,8 +149,8 @@ export function generateQrPdfBuffer(data: QrPdfTemplateData): Promise<Buffer> {
           'Helvetica-Bold',
           innerW - 2 * wcPadH,
           wcH - 2 * wcPadV,
-          14,
-          200,
+          10,
+          32,
         );
         drawCenteredText(
           doc,
@@ -197,7 +198,7 @@ export function generateQrPdfBuffer(data: QrPdfTemplateData): Promise<Buffer> {
           innerW - 2 * clPadH,
           clientH - 2 * clPadV,
           6,
-          80,
+          20,
         );
         drawCenteredText(
           doc,

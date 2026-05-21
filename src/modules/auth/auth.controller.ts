@@ -4,6 +4,7 @@ import {
   Body,
   UseGuards,
   Get,
+  Query,
   Request,
   Ip,
   Headers,
@@ -17,9 +18,14 @@ import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { RefreshTokenService } from './services/refresh-token.service';
+import { EmailVerificationService } from '../../common/services/email-verification.service';
 
 interface RefreshDto {
   refreshToken: string;
+}
+
+interface ResendVerificationDto {
+  email: string;
 }
 
 @Controller('auth')
@@ -27,6 +33,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly refreshTokenService: RefreshTokenService,
+    private readonly emailVerificationService: EmailVerificationService,
   ) { }
 
   /**
@@ -65,6 +72,32 @@ export class AuthController {
   @Post('logout')
   async logout(@Body() body: RefreshDto): Promise<BaseResponse> {
     return this.authService.logout(body?.refreshToken || null);
+  }
+
+  @Get('verify-email')
+  async verifyEmail(@Query('token') token: string): Promise<BaseResponse> {
+    const result = await this.emailVerificationService.verifyToken(token || '');
+    return {
+      message: 'Email verified successfully',
+      data: result,
+      isSuccess: true,
+      statusCode: 200,
+      developerError: '',
+    };
+  }
+
+  @Post('resend-verification')
+  async resendVerification(
+    @Body() body: ResendVerificationDto,
+  ): Promise<BaseResponse> {
+    await this.emailVerificationService.resend(body?.email || '');
+    return {
+      message: 'If an unverified account exists, a new verification email has been sent',
+      data: null,
+      isSuccess: true,
+      statusCode: 200,
+      developerError: '',
+    };
   }
 
   @UseGuards(JwtAuthGuard)
@@ -116,11 +149,18 @@ export class AuthController {
   @Get('me/impersonation-context')
   async getImpersonationContext(@Request() req): Promise<BaseResponse> {
     const impersonation = req.user?.impersonation || { isImpersonating: false };
+    let impersonatorLogoUrl: string | null = null;
+    if (impersonation.isImpersonating && impersonation.impersonatorUserId) {
+      impersonatorLogoUrl = await this.authService.resolveImpersonatorLogo(
+        impersonation.impersonatorUserId,
+        impersonation.impersonatorRole,
+      );
+    }
     return {
       isSuccess: true,
       statusCode: 200,
       message: 'Impersonation context',
-      data: impersonation,
+      data: { ...impersonation, impersonatorLogoUrl },
       developerError: '',
     };
   }
