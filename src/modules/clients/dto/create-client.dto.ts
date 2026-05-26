@@ -7,6 +7,8 @@ import {
   IsOptional,
   IsBoolean,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { normalizeFloorDoor } from '../../../common/utils/normalize-floor-door';
 
 export class CreateClientDto {
   @IsString()
@@ -93,6 +95,7 @@ export class CreateClientDto {
 
   @IsString()
   @IsOptional()
+  @Transform(({ value }) => normalizeFloorDoor(value))
   floorDoor?: string;
 
   @IsString()

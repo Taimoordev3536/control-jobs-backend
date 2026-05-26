@@ -9,6 +9,7 @@ import {
   IsNotEmpty,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
+import { normalizeFloorDoor } from '../../../common/utils/normalize-floor-door';
 
 const PARTNER_TYPE_ALIASES: Record<string, string> = {
   GOLD: 'Gold',
@@ -87,6 +88,7 @@ export class CreatePartnerDto {
 
   @IsString()
   @IsOptional()
+  @Transform(({ value }) => normalizeFloorDoor(value))
   floorDoor?: string;
 
   @IsString()

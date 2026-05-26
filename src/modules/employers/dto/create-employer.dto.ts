@@ -9,7 +9,8 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
+import { normalizeFloorDoor } from '../../../common/utils/normalize-floor-door';
 
 export class CreateEmployerUserDto {
   @IsEmail()
@@ -52,6 +53,7 @@ export class CreateEmployerDto {
 
   @IsString()
   @IsOptional()
+  @Transform(({ value }) => normalizeFloorDoor(value))
   floorDoor?: string;
 
   @IsString()

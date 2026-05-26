@@ -16,6 +16,7 @@ import { EmployerInvitationRedemption } from '../entities/employer-invitation-re
 import { Partner } from '../../partners/entities/partner.entity';
 import { PartnerUser } from '../../partners/entities/partner-user.entity';
 import { User } from '../../users/entities/user.entity';
+import { Employer } from '../../employers/entities/employer.entity';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { EmployersService } from '../../employers/employers.service';
 import { CreateInvitationDto } from '../dto/create-invitation.dto';
@@ -23,6 +24,7 @@ import { UpdateInvitationDto } from '../dto/update-invitation.dto';
 import { AcceptInvitationDto } from '../dto/accept-invitation.dto';
 import { PaymentMethodsService } from '../../payment-methods/payment-methods.service';
 import { EmailVerificationService } from '../../../common/services/email-verification.service';
+import { EmailService } from '../../../common/services/email.service';
 
 const TOKEN_TYPE = 'employer-invite';
 
@@ -58,11 +60,14 @@ export class EmployerInvitationService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(EmployerUser)
     private readonly employerUserRepo: Repository<EmployerUser>,
+    @InjectRepository(Employer)
+    private readonly employerRepo: Repository<Employer>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly employersService: EmployersService,
     private readonly paymentMethodsService: PaymentMethodsService,
     private readonly emailVerificationService: EmailVerificationService,
+    private readonly emailService: EmailService,
   ) {}
 
   // ============================================================
@@ -507,6 +512,105 @@ export class EmployerInvitationService {
     }
     invitation.status = 'REVOKED' as InvitationStatus;
     await this.invitationRepo.save(invitation);
+  }
+
+  /**
+   * Re-send the email-verification link to the default user linked to an
+   * employer. Used by the pending-employers UI on rows in
+   * 'AWAITING_EMAIL_VERIFICATION'. Partner-scoped.
+   */
+  async resendEmployerEmailVerification(
+    requester: any,
+    employerPublicId: string,
+  ): Promise<{ sent: boolean }> {
+    const role = String(requester?.role?.name || '').toLowerCase();
+
+    const employer = await this.employerRepo.findOne({
+      where: { publicId: employerPublicId },
+    });
+    if (!employer) throw new NotFoundException('Employer not found');
+
+    if (role === 'partner') {
+      const link = await this.partnerUserRepo.findOne({
+        where: { userId: requester.id },
+      });
+      if (!link?.partnerId || link.partnerId !== employer.partnerId) {
+        throw new ForbiddenException(
+          'Cannot resend verification for an employer outside your partner scope',
+        );
+      }
+    } else if (role !== 'admin') {
+      throw new ForbiddenException('Only admin or partner can resend verification');
+    }
+
+    const eu = await this.employerUserRepo.findOne({
+      where: { employer: { id: employer.id } },
+      relations: ['user'],
+    });
+    if (!eu?.user) {
+      throw new BadRequestException('No user linked to this employer');
+    }
+    if (eu.user.emailVerifiedAt) {
+      throw new BadRequestException('Email is already verified');
+    }
+    await this.emailVerificationService.resend(eu.user.email);
+    return { sent: true };
+  }
+
+  /**
+   * Re-send the invitation link to a recipient email. Used by the pending-
+   * employers UI when a partner wants to nudge an invitee whose link they
+   * already shared (or who never received the original).
+   */
+  async resend(
+    requester: any,
+    publicId: string,
+    email: string,
+  ): Promise<{ sent: boolean; inviteLink: string }> {
+    const role = String(requester?.role?.name || '').toLowerCase();
+    const invitation = await this.invitationRepo.findOne({
+      where: { publicId },
+      relations: ['partner'],
+    });
+    if (!invitation) throw new NotFoundException('Invitation not found');
+    if (role !== 'admin' && invitation.issuedByUserId !== requester.id) {
+      throw new ForbiddenException('Cannot resend an invitation you did not issue');
+    }
+    if (invitation.status !== 'PENDING') {
+      throw new BadRequestException(
+        `Cannot resend a ${invitation.status.toLowerCase()} invitation`,
+      );
+    }
+    if (invitation.expiresAt && invitation.expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException('Invitation has expired');
+    }
+    const recipient = String(email || '').trim();
+    if (!recipient) {
+      throw new BadRequestException('Recipient email is required');
+    }
+
+    const token = this.signToken(
+      {
+        type: TOKEN_TYPE,
+        invitationId: invitation.id,
+        partnerId: invitation.partnerId,
+        trialDays: invitation.trialDays,
+        discountPercent: Number(invitation.discountPercent),
+        description: invitation.description,
+        issuedByUserId: invitation.issuedByUserId,
+      },
+      invitation.expiresAt,
+    );
+    const inviteLink = this.buildLink(token);
+
+    await this.emailService.sendEmployerInvitation(
+      recipient,
+      invitation.partner?.name ?? 'ControlJobs',
+      inviteLink,
+      invitation.trialDays,
+    );
+
+    return { sent: true, inviteLink };
   }
 
   // ============================================================

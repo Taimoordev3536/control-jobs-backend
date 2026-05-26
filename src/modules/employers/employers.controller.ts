@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EmployersService } from './employers.service';
+import { PendingEmployersService } from './services/pending-employers.service';
 import { CreateEmployerDto } from './dto/create-employer.dto';
 import { UpdateEmployerDto } from './dto/update-employer.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -28,6 +29,7 @@ import { AuthService } from '../auth/auth.service';
 export class EmployersController {
   constructor(
     private readonly employersService: EmployersService,
+    private readonly pendingEmployersService: PendingEmployersService,
     private readonly authService: AuthService,
   ) { }
 
@@ -45,6 +47,16 @@ export class EmployersController {
   @Roles(1, 2)
   async findAll(@Query('partnerId') partnerId?: number): Promise<BaseResponse<Employer[]>> {
     return this.employersService.findAll(partnerId);
+  }
+
+  // Admin/Partner: Pending employer pipeline — invitations not yet redeemed
+  // PLUS employers whose users have not verified their email. Must come before
+  // ':id' to avoid being parsed as a UUID.
+  @Get('pending')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1, 2)
+  async findPending(@Request() req) {
+    return this.pendingEmployersService.list(req.user);
   }
 
   // Employer: Get own data (must be before :id to avoid conflict)

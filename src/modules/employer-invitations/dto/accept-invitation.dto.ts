@@ -6,6 +6,8 @@ import {
   IsString,
   MinLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { normalizeFloorDoor } from '../../../common/utils/normalize-floor-door';
 
 /**
  * Body for POST /api/employer-invitations/accept.
@@ -28,7 +30,7 @@ export class AcceptInvitationDto {
   @IsString() address: string;
   @IsOptional() @IsString() street?: string;
   @IsOptional() @IsString() streetNumber?: string;
-  @IsOptional() @IsString() floorDoor?: string;
+  @IsOptional() @IsString() @Transform(({ value }) => normalizeFloorDoor(value)) floorDoor?: string;
   @IsOptional() @IsString() postalCode?: string;
   @IsOptional() @IsString() city?: string;
   @IsOptional() @IsString() province?: string;

@@ -1,5 +1,6 @@
 import { IsString, IsEmail, IsOptional, IsNumber, Max, Min, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
+import { normalizeFloorDoor } from '../../../common/utils/normalize-floor-door';
 
 export class UpdateEmployerUserDto {
     @IsEmail()
@@ -42,6 +43,7 @@ export class UpdateEmployerDto {
 
     @IsString()
     @IsOptional()
+    @Transform(({ value }) => normalizeFloorDoor(value))
     floorDoor?: string;
 
     @IsString()

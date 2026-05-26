@@ -7,6 +7,7 @@ import { EmployerInvitationRedemption } from './entities/employer-invitation-red
 import { Partner } from '../partners/entities/partner.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
 import { User } from '../users/entities/user.entity';
+import { Employer } from '../employers/entities/employer.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { EmployerInvitationService } from './services/employer-invitation.service';
 import { SelfRegistrationService } from './services/self-registration.service';
@@ -24,6 +25,7 @@ import { PaymentMethodsModule } from '../payment-methods/payment-methods.module'
       Partner,
       PartnerUser,
       User,
+      Employer,
       EmployerUser,
     ]),
     JwtModule.registerAsync({

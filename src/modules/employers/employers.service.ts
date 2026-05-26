@@ -466,6 +466,7 @@ export class EmployersService {
         createdAt: e.createdAt,
         paymentMethod: e.paymentMethod?.name || null,
         partnerName: e.partner?.name || null, // Added partner name
+        trialDaysRemaining: computeTrialDaysRemaining(e.trialEndsAt),
         // ...add any other fields you want to expose
       }));
 
@@ -514,7 +515,12 @@ export class EmployersService {
 
       return {
         message: 'Employer retrieved successfully',
-        data: { ...employer, email, partnerId: partnerPublicId || employer.partnerId },
+        data: {
+          ...employer,
+          email,
+          partnerId: partnerPublicId || employer.partnerId,
+          trialDaysRemaining: computeTrialDaysRemaining(employer.trialEndsAt),
+        },
         isSuccess: true,
         statusCode: 200,
         developerError: '',
@@ -604,6 +610,20 @@ export class EmployersService {
             resolvedData.monthlyFixedRate = effective.monthlyFixed;
             resolvedData.perWorkCenterRate = effective.perWorkCenter;
             resolvedData.perWorkerRate = effective.perWorker;
+          }
+
+          // Recompute trial end from today when the trial period is edited;
+          // skip non-TRIAL/ACTIVE accounts so a cancelled one isn't revived.
+          if (resolvedData.probationPeriod !== undefined) {
+            const newTrialDays = parseTrialDays(resolvedData.probationPeriod);
+            const reschedulable =
+              employer.billingStatus === 'TRIAL' ||
+              employer.billingStatus === 'ACTIVE';
+            if (reschedulable) {
+              resolvedData.trialEndsAt =
+                newTrialDays > 0 ? addDays(new Date(), newTrialDays) : null;
+              resolvedData.billingStatus = newTrialDays > 0 ? 'TRIAL' : 'ACTIVE';
+            }
           }
 
           const updatedEmployer = await manager.save(Employer, {
@@ -729,4 +749,12 @@ function addDays(date: Date, days: number): Date {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
+}
+
+function computeTrialDaysRemaining(trialEndsAt: Date | null | undefined): number {
+  if (!trialEndsAt) return 0;
+  const end = new Date(trialEndsAt).getTime();
+  const diffMs = end - Date.now();
+  if (diffMs <= 0) return 0;
+  return Math.ceil(diffMs / (24 * 60 * 60 * 1000));
 }

@@ -68,6 +68,31 @@ export class EmployerInvitationsController {
     return { data: { revoked: true } };
   }
 
+  @Post(':publicId/resend')
+  @UseGuards(JwtAuthGuard)
+  async resend(
+    @Req() req: any,
+    @Param('publicId') publicId: string,
+    @Body() body: { email: string },
+  ) {
+    const data = await this.service.resend(req.user, publicId, body?.email);
+    return { data };
+  }
+
+  @Post('employer/:employerPublicId/resend-email-verification')
+  @UseGuards(JwtAuthGuard)
+  async resendEmployerVerification(
+    @Req() req: any,
+    @Param('employerPublicId') employerPublicId: string,
+  ) {
+    console.log('[resendEmployerVerification] HIT — employerPublicId:', employerPublicId, 'user:', req.user?.id, 'role:', req.user?.role?.name);
+    const data = await this.service.resendEmployerEmailVerification(
+      req.user,
+      employerPublicId,
+    );
+    return { data };
+  }
+
   @Get(':publicId/redemptions')
   @UseGuards(JwtAuthGuard)
   async redemptions(@Req() req: any, @Param('publicId') publicId: string) {

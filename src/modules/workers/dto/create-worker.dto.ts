@@ -1,5 +1,6 @@
 import { IsString, IsEmail, IsNotEmpty, IsOptional, IsDateString, IsNumber, IsBoolean } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
+import { normalizeFloorDoor } from '../../../common/utils/normalize-floor-door';
 
 export class CreateWorkerDto {
   @IsString()
@@ -24,6 +25,7 @@ export class CreateWorkerDto {
 
   @IsString()
   @IsOptional()
+  @Transform(({ value }) => normalizeFloorDoor(value))
   floorDoor?: string;
 
   @IsString()
