@@ -8,6 +8,7 @@ import {
   Body,
   Request,
   Put,
+  Patch,
   Post,
   Delete,
   ParseIntPipe,
@@ -26,6 +27,7 @@ import { AppAbility } from '../auth/casl/ability.factory';
 import { BaseDto } from '../auth/dto/base.dto';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import { UpdateAdminMeDto } from './dto/update-admin-me.dto';
 import { Action } from '../auth/enums/action.enum';
 
 @Controller('users')
@@ -83,6 +85,12 @@ export class UsersController {
   @Roles(UserRole.Admin)
   async getAdminMe(@Request() req) {
     return this.usersService.getAdminMe(req.user.id);
+  }
+
+  @Patch('admin/me')
+  @Roles(UserRole.Admin)
+  async updateAdminMe(@Request() req, @Body() dto: UpdateAdminMeDto) {
+    return this.usersService.updateAdminMe(req.user.id, dto);
   }
 
   // Admin self-service: upload/remove personal photo.

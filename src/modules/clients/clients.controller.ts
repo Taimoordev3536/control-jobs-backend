@@ -92,6 +92,13 @@ export class ClientsController {
     };
   }
 
+  @Put('me')
+  @UseGuards(JwtAuthGuard)
+  async updateMe(@Request() req, @Body() dto: UpdateClientDto) {
+    const clientId = await this.clientsService.findClientIdByUserId(req.user.id);
+    return this.clientsService.update(clientId, dto);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)

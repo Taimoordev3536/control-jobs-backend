@@ -95,6 +95,13 @@ export class WorkersController {
     return this.workersService.getWorkersByClientPublicId(publicId);
   }
 
+  @Put('me')
+  @UseGuards(JwtAuthGuard)
+  async updateMe(@Request() req, @Body() dto: UpdateWorkerDto) {
+    const workerId = await this.workersService.findWorkerIdByUserId(req.user.id);
+    return this.workersService.update(workerId, dto);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)

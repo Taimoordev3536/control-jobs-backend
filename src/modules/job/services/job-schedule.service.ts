@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Job } from '../entities/job.entity';
 import { SeasonalSchedule } from '../entities/seasonal-schedule.entity';
-import { Weekday, ScheduleType } from '../entities/shift.entity';
+import { Weekday, ScheduleType, Shift } from '../entities/shift.entity';
 
 @Injectable()
 export class JobScheduleService {
@@ -211,5 +211,39 @@ export class JobScheduleService {
    */
   filterJobsScheduledForDate(jobs: Job[], targetDate: Date): Job[] {
     return jobs.filter(job => this.isJobScheduledForDate(job, targetDate));
+  }
+
+  getScheduledMinutesForDate(job: Job, targetDate: Date): number {
+    if (!this.isJobScheduledForDate(job, targetDate)) return 0;
+    if (job.scheduleType === ScheduleType.FREE) return 0;
+
+    const activeSchedule = this.getActiveSeasonalSchedule(job, targetDate);
+    if (!activeSchedule || !activeSchedule.shifts) return 0;
+
+    const targetWeekday = this.getWeekdayFromDate(targetDate);
+    let minutes = 0;
+    for (const shift of activeSchedule.shifts) {
+      if (this.isWeekdayInShiftRange(targetWeekday, shift.startWeekday, shift.endWeekday)) {
+        minutes += this.getShiftMinutes(shift);
+      }
+    }
+    return minutes;
+  }
+
+  private getShiftMinutes(shift: Shift): number {
+    if (shift.totalHours != null) return Math.round(shift.totalHours * 60);
+    const start = this.parseTimeToMinutes(shift.baseStartTime);
+    const end = this.parseTimeToMinutes(shift.baseEndTime);
+    if (start == null || end == null) return 0;
+    let diff = end - start;
+    if (diff <= 0 || shift.isContinuous) diff += 24 * 60;
+    return diff;
+  }
+
+  private parseTimeToMinutes(time: string): number | null {
+    if (!time) return null;
+    const [h, m] = time.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return h * 60 + m;
   }
 }

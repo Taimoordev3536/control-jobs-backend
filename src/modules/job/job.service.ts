@@ -11,7 +11,7 @@ import { Repository, DataSource, IsNull, In } from 'typeorm';
 import { Job } from './entities/job.entity';
 import { Shift, Weekday, ScheduleType } from './entities/shift.entity';
 import { SigningMethod, SigningMethodType, SigningMethodDetail } from './entities/signing-method.entity';
-import { Alert } from './entities/alert.entity';
+import { Alert, AlertType } from './entities/alert.entity';
 import { Task } from './entities/task.entity';
 import { TaskHistory } from './entities/task-history.entity';
 import { ScanLog } from './entities/scan-log.entity';
@@ -3349,15 +3349,97 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
     ]);
 
     // Combine into daily history cards
-    const result = Array.from(allDates).map(date => ({
+    const result: any[] = Array.from(allDates).map(date => ({
       date,
       scans: groupedByDate[date] || [],
       breaks: breaksByDate[date] || [],
       sessions: sessionsByDate[date] || [],
       tasks: tasksByDate[date] || [], // Include tasks for each date
     }));
-    
-    console.log('Final result with tasks:', JSON.stringify(result, null, 2));
+
+    const job = await this.jobRepo.findOne({
+      where: { id: jobId },
+      relations: ['seasonalSchedules', 'seasonalSchedules.shifts', 'tasks', 'alerts'],
+    });
+    const jobTaskCount = job?.tasks?.length || 0;
+    const alertRules: Alert[] = job?.alerts || [];
+    const nowDate = new Date();
+    const todayStr = `${nowDate.getFullYear()}-${String(nowDate.getMonth() + 1).padStart(2, '0')}-${String(nowDate.getDate()).padStart(2, '0')}`;
+
+    const parseTriggerMinutes = (s: string): number | null => {
+      if (!s) return null;
+      const [h, m] = s.split(':').map(Number);
+      if (Number.isNaN(h)) return null;
+      return h * 60 + (m || 0);
+    };
+
+    const computeAlertCount = (day: any): number => {
+      if (!alertRules.length) return 0;
+      const checkIns = (day.scans || [])
+        .filter((s: any) => s.scanType === 'check-in')
+        .sort((a: any, b: any) => new Date(a.scanTime).getTime() - new Date(b.scanTime).getTime());
+      if (checkIns.length === 0) return 0;
+      const hasCheckOut = (day.scans || []).some((s: any) => s.scanType === 'check-out');
+      const firstCheckIn = new Date(checkIns[0].scanTime);
+      const checkInMinutes = firstCheckIn.getHours() * 60 + firstCheckIn.getMinutes();
+      const workedMinutes = (day.sessions || []).reduce((sum: number, s: any) => sum + (s.totalWorkMinutes || 0), 0);
+
+      let count = 0;
+      for (const rule of alertRules) {
+        if (rule.alertType === AlertType.DELAY) {
+          const trig = parseTriggerMinutes(rule.triggerTime);
+          if (trig != null && checkInMinutes > trig) count++;
+        } else if (rule.alertType === AlertType.DURATION) {
+          if (rule.minDuration != null && workedMinutes < rule.minDuration) count++;
+        } else if (rule.alertType === AlertType.SIGN_OUT) {
+          if (!hasCheckOut && day.date !== todayStr) count++;
+        }
+      }
+      return count;
+    };
+
+    const parseDateOnly = (s: string): Date => {
+      const [y, m, d] = s.slice(0, 10).split('-').map(Number);
+      return new Date(y, m - 1, d);
+    };
+
+    if (job) {
+      for (const day of result) {
+        day.scheduledMinutes = this.jobScheduleService.getScheduledMinutesForDate(job, parseDateOnly(day.date));
+        day.scheduledTaskCount = jobTaskCount;
+        day.alertCount = computeAlertCount(day);
+      }
+
+      if (startDate && endDate) {
+        const existingDates = new Set(result.map(r => r.date));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const jobStart = new Date(job.startDate);
+        jobStart.setHours(0, 0, 0, 0);
+        let cur = parseDateOnly(startDate);
+        if (cur < jobStart) cur = new Date(jobStart);
+        const end = parseDateOnly(endDate);
+
+        while (cur <= end && cur <= today) {
+          const ds = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
+          const sm = this.jobScheduleService.getScheduledMinutesForDate(job, cur);
+          if (!existingDates.has(ds) && sm > 0) {
+            result.push({
+              date: ds,
+              scans: [],
+              breaks: [],
+              sessions: [],
+              tasks: [],
+              scheduledMinutes: sm,
+              scheduledTaskCount: jobTaskCount,
+              alertCount: 0,
+            });
+            existingDates.add(ds);
+          }
+          cur.setDate(cur.getDate() + 1);
+        }
+      }
+    }
 
     return {
       message: 'Success',

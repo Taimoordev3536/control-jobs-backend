@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
+import { MeController } from './me.controller';
 import { User } from './entities/user.entity';
 import { AwsModule } from '../aws/aws.module';
 import { Role } from './entities/role.entity';
@@ -18,7 +19,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
     forwardRef(() => AuthModule),
   ],
   providers: [UsersService, RolesSeedService],
-  controllers: [UsersController],
+  controllers: [UsersController, MeController],
   exports: [UsersService, RolesSeedService,TypeOrmModule],
 })
 export class UsersModule {

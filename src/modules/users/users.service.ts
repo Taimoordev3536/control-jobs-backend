@@ -7,6 +7,8 @@ import { Role } from './entities/role.entity';
 import { AdminUser } from './entities/admin-user.entity';
 import { Partner } from '../partners/entities/partner.entity';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateAdminMeDto } from './dto/update-admin-me.dto';
+import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
 import { AwsService } from '../aws/aws.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
@@ -30,18 +32,21 @@ export class UsersService {
   // endpoints to scope read/write to the active admin without trusting the
   // payload's id directly.
   private async findAdminUserByUserId(userId: number): Promise<AdminUser> {
-    const link = await this.adminUserRepository.findOne({ where: { userId } });
+    let link = await this.adminUserRepository.findOne({ where: { userId } });
     if (!link) {
-      throw new NotFoundException('No admin profile is linked to the current user');
+      link = await this.adminUserRepository.save(
+        this.adminUserRepository.create({ userId, isDefault: false }),
+      );
     }
     return link;
   }
 
-  async getAdminMe(userId: number): Promise<BaseResponse<AdminUser>> {
+  async getAdminMe(userId: number): Promise<BaseResponse<any>> {
     const admin = await this.findAdminUserByUserId(userId);
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
     return {
       message: 'Admin profile retrieved',
-      data: admin,
+      data: { ...admin, name: user?.name ?? '', email: user?.email ?? '' },
       isSuccess: true,
       statusCode: 200,
     };
@@ -91,6 +96,54 @@ export class UsersService {
     return {
       message: 'Logo removed',
       data: null,
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async updateAdminMe(
+    userId: number,
+    dto: UpdateAdminMeDto,
+  ): Promise<BaseResponse<{ id: number; name: string; email: string }>> {
+    await this.findAdminUserByUserId(userId);
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (dto.name !== undefined) user.name = dto.name;
+    if (dto.email !== undefined) user.email = dto.email;
+    await this.usersRepository.save(user);
+    return {
+      message: 'Profile updated',
+      data: { id: user.id, name: user.name, email: user.email },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async getMyProfile(userId: number): Promise<BaseResponse<{ name: string; email: string; alias: string | null }>> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    return {
+      message: 'Profile retrieved',
+      data: { name: user.name, email: user.email, alias: user.alias ?? null },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  async updateMyProfile(
+    userId: number,
+    dto: UpdateMyProfileDto,
+  ): Promise<BaseResponse<{ alias: string | null }>> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (dto.alias !== undefined) {
+      const trimmed = dto.alias.trim();
+      user.alias = trimmed ? trimmed : null;
+    }
+    await this.usersRepository.save(user);
+    return {
+      message: 'Profile updated',
+      data: { alias: user.alias ?? null },
       isSuccess: true,
       statusCode: 200,
     };
