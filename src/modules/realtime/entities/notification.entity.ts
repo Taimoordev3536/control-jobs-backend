@@ -28,6 +28,9 @@ export class Notification {
   @Column({ name: 'is_read', default: false })
   isRead: boolean;
 
+  @Column({ name: 'banner_dismissed', default: false })
+  bannerDismissed: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   @Index()
   createdAt: Date;

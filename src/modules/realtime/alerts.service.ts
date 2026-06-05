@@ -12,7 +12,8 @@ export type AlertType =
   | 'MANUAL_ATTENDANCE_REJECTED'
   | 'MANUAL_ATTENDANCE_CANCELLED'
   | 'RATE_CHANGE_SCHEDULED'
-  | 'RATE_CHANGE_CANCELLED';
+  | 'RATE_CHANGE_CANCELLED'
+  | 'ANNOUNCEMENT';
 export interface AlertPayload {
   type: AlertType;
   jobId: number;
@@ -139,6 +140,13 @@ export class AlertsService {
     if (notif) {
       await this.notifRepo.remove(notif);
     }
+  }
+
+  async dismissBannerForRecipient(publicId: string, role: string, userId: number) {
+    await this.notifRepo.update(
+      { publicId, role, recipientId: userId },
+      { bannerDismissed: true },
+    );
   }
 
   async pruneOlderThanDays(days: number) {
