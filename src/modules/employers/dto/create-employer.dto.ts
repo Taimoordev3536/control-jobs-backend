@@ -134,6 +134,14 @@ export class CreateEmployerDto {
 
   @IsString()
   @IsOptional()
+  cardLast4?: string;
+
+  @IsString()
+  @IsOptional()
+  paypalEmail?: string;
+
+  @IsString()
+  @IsOptional()
   probationPeriod?: string;
 
   @IsString()

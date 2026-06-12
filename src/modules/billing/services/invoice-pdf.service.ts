@@ -16,6 +16,22 @@ const SVGtoPDF = require('svg-to-pdfkit') as (
 import { Invoice } from '../entities/invoice.entity';
 import { Employer } from '../../employers/entities/employer.entity';
 import { AdminConfig } from '../../admin/entities/admin-config.entity';
+import { RatePlan } from '../entities/rate-plan.entity';
+
+const PAYMENT_LABELS: Record<string, string> = {
+  DIRECT_DEBIT: 'Domiciliación',
+  TRANSFER: 'Transferencia',
+  CARD: 'Tarjeta',
+  PAYPAL: 'PayPal',
+  OTHERS: 'Otros',
+};
+
+function maskIbanPdf(iban?: string | null): string | null {
+  if (!iban) return null;
+  const clean = iban.replace(/\s+/g, '');
+  if (clean.length <= 8) return clean;
+  return `${clean.slice(0, 4)} **** **** **** ${clean.slice(-4)}`;
+}
 
 const fmtEur = (n: number | string) => {
   const num = typeof n === 'string' ? parseFloat(n) : n;
@@ -51,7 +67,38 @@ export class InvoicePdfService {
     private readonly employerRepo: Repository<Employer>,
     @InjectRepository(AdminConfig)
     private readonly adminConfigRepo: Repository<AdminConfig>,
+    @InjectRepository(RatePlan)
+    private readonly ratePlanRepo: Repository<RatePlan>,
   ) {}
+
+  /** Payment-method text (label + masked identifier) and tariff for the header. */
+  private async buildExtras(
+    invoice: Invoice,
+    employer: Employer | null,
+  ): Promise<{ paymentText: string | null; tariffText: string | null }> {
+    const methodCode =
+      (invoice as any).paymentMethod?.name ||
+      (employer?.paymentMethod as any)?.name ||
+      null;
+    const label = methodCode ? PAYMENT_LABELS[methodCode] || methodCode : null;
+    let detail = '';
+    if (methodCode === 'DIRECT_DEBIT' || methodCode === 'TRANSFER') {
+      const m = maskIbanPdf(employer?.accountIban);
+      if (m) detail = `IBAN: ${m}`;
+    } else if (methodCode === 'CARD' && (employer as any)?.cardLast4) {
+      detail = `Nº: **** **** **** ${(employer as any).cardLast4}`;
+    } else if (methodCode === 'PAYPAL' && (employer as any)?.paypalEmail) {
+      detail = `eMail: ${(employer as any).paypalEmail}`;
+    }
+    const paymentText = label ? (detail ? `${label}   ${detail}` : label) : null;
+
+    let tariffText: string | null = null;
+    if (employer?.ratePlanId) {
+      const rp = await this.ratePlanRepo.findOne({ where: { id: employer.ratePlanId } });
+      if (rp) tariffText = rp.tariffType || rp.label;
+    }
+    return { paymentText, tariffText };
+  }
 
   private getLogoSvg(): string | null {
     if (this.logoSvg) return this.logoSvg;
@@ -95,25 +142,203 @@ export class InvoicePdfService {
     opts?: { level?: 'full' | 'page1Only' },
   ): Promise<Buffer> {
     const level = opts?.level ?? 'full';
-    const invoice = await this.invoiceRepo.findOne({
-      where: { publicId },
-      relations: ['workCenters', 'workers'],
+    const invoice = await this.loadInvoice(publicId);
+    const employer = await this.employerRepo.findOne({
+      where: { id: invoice.employerId },
+      relations: ['paymentMethod'],
     });
-    if (!invoice) throw new Error('Invoice not found');
-    const employer = await this.employerRepo.findOne({ where: { id: invoice.employerId } });
+    const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
+    const extras = await this.buildExtras(invoice, employer);
+
+    const doc = new PDFDocument({ size: 'A4', margin: 48 });
+    const done = this.collect(doc);
+    this.drawInvoice(doc, invoice, employer, config, level, extras);
+    doc.end();
+    return done;
+  }
+
+  /** Merge several invoices into one multi-page PDF (accounting ledger). */
+  async renderMany(
+    items: Array<{ publicId: string; level?: 'full' | 'page1Only' }>,
+  ): Promise<Buffer> {
+    const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
+    const doc = new PDFDocument({ size: 'A4', margin: 48 });
+    const done = this.collect(doc);
+    let first = true;
+    for (const item of items) {
+      const invoice = await this.loadInvoice(item.publicId);
+      const employer = await this.employerRepo.findOne({
+        where: { id: invoice.employerId },
+        relations: ['paymentMethod'],
+      });
+      const extras = await this.buildExtras(invoice, employer);
+      if (!first) doc.addPage();
+      first = false;
+      this.drawInvoice(doc, invoice, employer, config, item.level ?? 'full', extras);
+    }
+    doc.end();
+    return done;
+  }
+
+  /**
+   * Issue collection receipts (recibos de cobro) for the selected invoices,
+   * one per page, ordered by the employer's payment method.
+   */
+  async renderReceipts(
+    items: Array<{ publicId: string }>,
+  ): Promise<Buffer> {
     const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
 
+    const loaded = [] as Array<{
+      invoice: Invoice;
+      employer: Employer | null;
+      methodName: string;
+    }>;
+    for (const item of items) {
+      const invoice = await this.loadInvoice(item.publicId);
+      const employer = await this.employerRepo.findOne({
+        where: { id: invoice.employerId },
+        relations: ['paymentMethod'],
+      });
+      const methodName =
+        (employer?.paymentMethod as any)?.name || 'Sin forma de pago';
+      loaded.push({ invoice, employer, methodName });
+    }
+    loaded.sort((a, b) => a.methodName.localeCompare(b.methodName));
+
+    const doc = new PDFDocument({ size: 'A4', margin: 48 });
+    const done = this.collect(doc);
+    let first = true;
+    for (const row of loaded) {
+      if (!first) doc.addPage();
+      first = false;
+      this.drawReceipt(doc, row.invoice, row.employer, config, row.methodName);
+    }
+    doc.end();
+    return done;
+  }
+
+  private drawReceipt(
+    doc: any,
+    invoice: Invoice,
+    employer: Employer | null,
+    config: AdminConfig | undefined,
+    methodName: string,
+  ): void {
     const MARGIN = 48;
-    const doc = new PDFDocument({ size: 'A4', margin: MARGIN });
+    const CONTENT_WIDTH = doc.page.width - 2 * MARGIN;
+    const PURPLE = '#662D91';
+    const TEXT_DARK = '#222222';
+    const TEXT_MUTED = '#666666';
+
+    let leftY = MARGIN;
+    const svg = this.getLogoSvg();
+    if (svg) {
+      try {
+        SVGtoPDF(doc, svg, MARGIN, leftY, {
+          width: 150,
+          preserveAspectRatio: 'xMinYMin meet',
+        });
+        leftY += 56;
+      } catch {
+        doc.fontSize(18).fillColor(PURPLE).font('Helvetica-Bold');
+        doc.text(config?.companyName || 'ControlJobs', MARGIN, leftY);
+        leftY += 24;
+      }
+    } else {
+      doc.fontSize(18).fillColor(PURPLE).font('Helvetica-Bold');
+      doc.text(config?.companyName || 'ControlJobs', MARGIN, leftY);
+      leftY += 24;
+    }
+
+    doc.fontSize(22).fillColor(TEXT_DARK).font('Helvetica-Bold');
+    doc.text('RECIBO DE COBRO', MARGIN, MARGIN, {
+      width: CONTENT_WIDTH,
+      align: 'right',
+    });
+
+    let y = Math.max(leftY, MARGIN + 30) + 30;
+
+    const employerName = employer?.name || `Empleador #${invoice.employerId}`;
+    const line = (text: string, bold = false) => {
+      doc.fontSize(11).fillColor(TEXT_DARK).font(bold ? 'Helvetica-Bold' : 'Helvetica');
+      doc.text(text, MARGIN, y, { width: CONTENT_WIDTH });
+      y = doc.y + 8;
+    };
+
+    line(`He recibido de ${employerName}` + (employer?.taxId ? ` (NIF: ${employer.taxId})` : ''));
+    line(`la cantidad de ${fmtEur(invoice.total)}`, true);
+    line(
+      `en concepto de la factura Nº ${invoice.invoiceNumber} de fecha ${fmtDateEs(invoice.issueDate)}.`,
+    );
+
+    y += 8;
+    doc.fontSize(11).fillColor(TEXT_MUTED).font('Helvetica-Bold');
+    doc.text(`Forma de pago: ${methodName}`, MARGIN, y);
+    y += 50;
+
+    doc.fontSize(10).fillColor(TEXT_MUTED).font('Helvetica');
+    doc.text('Firma y sello:', MARGIN, y);
+    doc
+      .moveTo(MARGIN + 80, y + 10)
+      .lineTo(MARGIN + 280, y + 10)
+      .lineWidth(0.5)
+      .strokeColor('#999999')
+      .stroke();
+  }
+
+  /** Rotated, faded status stamp centered at (cx, cy). */
+  private drawStatusStamp(doc: any, status: string, cx: number, cy: number): void {
+    const label = (STATUS_LABELS[status] || status).toUpperCase();
+    const color =
+      status === 'PAID'
+        ? '#16a34a'
+        : status === 'CANCELLED' || status === 'REFUNDED'
+          ? '#9ca3af'
+          : '#ef4444';
+    doc.save();
+    doc.fillOpacity(0.7).strokeOpacity(0.7);
+    doc.rotate(-18, { origin: [cx, cy] });
+    doc.fontSize(26).font('Helvetica-Bold').fillColor(color);
+    const textW = doc.widthOfString(label);
+    const boxW = textW + 28;
+    const boxH = 42;
+    doc.lineWidth(3).strokeColor(color);
+    doc.roundedRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH, 4).stroke();
+    doc.text(label, cx - textW / 2, cy - 13, { lineBreak: false });
+    doc.restore();
+    doc.fillOpacity(1).strokeOpacity(1);
+  }
+
+  private async loadInvoice(publicId: string): Promise<Invoice> {
+    const invoice = await this.invoiceRepo.findOne({
+      where: { publicId },
+      relations: ['workCenters', 'workers', 'lines', 'paymentMethod'],
+    });
+    if (!invoice) throw new Error('Invoice not found');
+    return invoice;
+  }
+
+  private collect(doc: any): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    doc.on('data', (c: Buffer) => chunks.push(c));
+    return new Promise<Buffer>((resolve) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+  }
+
+  private drawInvoice(
+    doc: any,
+    invoice: Invoice,
+    employer: Employer | null,
+    config: AdminConfig | undefined,
+    level: 'full' | 'page1Only',
+    extras?: { paymentText: string | null; tariffText: string | null },
+  ): void {
+    const MARGIN = 48;
     const PAGE_WIDTH = doc.page.width;
     const CONTENT_WIDTH = PAGE_WIDTH - 2 * MARGIN;
     const RIGHT_EDGE = MARGIN + CONTENT_WIDTH;
-
-    const chunks: Buffer[] = [];
-    doc.on('data', (c) => chunks.push(c));
-    const done = new Promise<Buffer>((resolve) => {
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-    });
 
     // Brand colours
     const PURPLE = '#662D91';
@@ -149,6 +374,11 @@ export class InvoicePdfService {
       leftY += 24;
     }
 
+    if (config?.companyName) {
+      doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica-Bold');
+      doc.text(config.companyName, MARGIN, leftY, { width: 240 });
+      leftY = doc.y + 2;
+    }
     doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica');
     if (config?.address) {
       doc.text(config.address, MARGIN, leftY, { width: 240 });
@@ -157,7 +387,8 @@ export class InvoicePdfService {
 
     // Right side
     doc.fontSize(24).fillColor(TEXT_DARK).font('Helvetica-Bold');
-    doc.text('FACTURA', MARGIN, rightY, { width: CONTENT_WIDTH, align: 'right' });
+    const docTitle = Number(invoice.total) < 0 ? 'ABONO' : 'FACTURA';
+    doc.text(docTitle, MARGIN, rightY, { width: CONTENT_WIDTH, align: 'right' });
     rightY += 30;
 
     doc.fontSize(9).fillColor(TEXT_DARK).font('Helvetica');
@@ -170,7 +401,7 @@ export class InvoicePdfService {
     };
     metaRow('Nº', invoice.invoiceNumber);
     metaRow('Fecha', fmtDateEs(invoice.issueDate));
-    metaRow('Vencimiento', fmtDateEs(invoice.dueDate));
+    if (invoice.chargeDate) metaRow('Fecha de cargo', fmtDateEs(invoice.chargeDate));
     // Per spec §8: always show calendar-day count in parens, prorated or not.
     // Use the persisted `proratedDays` when available, fall back to a
     // computed inclusive day count from the period boundaries.
@@ -185,6 +416,8 @@ export class InvoicePdfService {
       'Periodo',
       `${fmtDateEs(invoice.periodStart)} - ${fmtDateEs(invoice.periodEnd)} (${periodDays} días)`,
     );
+    if (extras?.paymentText) metaRow('Forma de pago', extras.paymentText);
+    if (extras?.tariffText) metaRow('Tarifa', extras.tariffText);
     // The standalone "Prorrateado: N/M dias" line was retired now that the
     // calendar-day count lives directly in the Periodo line — same info,
     // one less row, no clash with the rest of the header's neutral colors.
@@ -195,7 +428,7 @@ export class InvoicePdfService {
     // BILL-TO
     // ============================================================
     doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica-Bold');
-    doc.text('CLIENTE', MARGIN, y);
+    doc.text('EMPLEADOR', MARGIN, y);
     y += 14;
     doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica-Bold');
     doc.text(employer?.name || `Empleador #${invoice.employerId}`, MARGIN, y);
@@ -274,19 +507,28 @@ export class InvoicePdfService {
         .stroke();
     };
 
-    writeRow('Cuota fija', 1, invoice.monthlyFixedRate, invoice.fixedAmount);
-    writeRow(
-      'Centros de trabajo',
-      invoice.workcenterCount,
-      invoice.perWorkCenterRate,
-      invoice.workcenterAmount,
-    );
-    writeRow(
-      'Trabajadores',
-      invoice.workerCount,
-      invoice.perWorkerRate,
-      invoice.workerAmount,
-    );
+    const lineRows = (invoice as any).lines as
+      | Array<{ description: string; quantity: number; unitPrice: number; lineTotal: number; sortOrder: number }>
+      | undefined;
+    if (invoice.isManual && lineRows?.length) {
+      for (const l of [...lineRows].sort((a, b) => a.sortOrder - b.sortOrder)) {
+        writeRow(l.description, Number(l.quantity), l.unitPrice, l.lineTotal);
+      }
+    } else {
+      writeRow('Cuota fija', 1, invoice.monthlyFixedRate, invoice.fixedAmount);
+      writeRow(
+        'Centros de trabajo',
+        invoice.workcenterCount,
+        invoice.perWorkCenterRate,
+        invoice.workcenterAmount,
+      );
+      writeRow(
+        'Trabajadores',
+        invoice.workerCount,
+        invoice.perWorkerRate,
+        invoice.workerAmount,
+      );
+    }
 
     // ============================================================
     // TOTALS — right-aligned, two columns (label / value)
@@ -330,6 +572,9 @@ export class InvoicePdfService {
 
     totalLine('TOTAL', fmtEur(invoice.total), true);
 
+    // Diagonal status stamp in the empty lower-left band (matches the UI).
+    this.drawStatusStamp(doc, invoice.status, MARGIN + 175, y + 70);
+
     // ============================================================
     // FOOTER — status + payment details, bottom of page
     // ============================================================
@@ -349,6 +594,15 @@ export class InvoicePdfService {
       fy,
     );
     fy += 14;
+
+    if (invoice.remarks) {
+      doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica-Bold');
+      doc.text('Observaciones:', MARGIN, fy);
+      fy += 12;
+      doc.fontSize(9).fillColor(TEXT_DARK).font('Helvetica');
+      doc.text(invoice.remarks, MARGIN, fy, { width: CONTENT_WIDTH });
+      fy = doc.y + 4;
+    }
 
     if (config?.paymentDetails) {
       doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica-Bold');
@@ -374,7 +628,7 @@ export class InvoicePdfService {
       let py = MARGIN;
 
       doc.fontSize(14).fillColor(PURPLE).font('Helvetica-Bold');
-      doc.text('Detalle de servicios', MARGIN, py);
+      doc.text('Detalle de facturación', MARGIN, py);
       py += 22;
 
       doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica');
@@ -426,7 +680,5 @@ export class InvoicePdfService {
       }
     }
 
-    doc.end();
-    return done;
   }
 }

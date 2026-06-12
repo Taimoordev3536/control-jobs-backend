@@ -338,6 +338,8 @@ export class EmployersService {
             paymentMethodId: createEmployerDto.paymentMethodId ?? null,
             accountIban: createEmployerDto.accountIban,
             bicSwift: createEmployerDto.bicSwift,
+            cardLast4: createEmployerDto.cardLast4 ?? null,
+            paypalEmail: createEmployerDto.paypalEmail ?? null,
             probationPeriod: createEmployerDto.probationPeriod,
             responsible: createEmployerDto.responsible,
             accessAccountStatus: createEmployerDto.accessAccountStatus,

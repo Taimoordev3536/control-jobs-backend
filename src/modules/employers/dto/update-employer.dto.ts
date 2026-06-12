@@ -112,6 +112,14 @@ export class UpdateEmployerDto {
 
     @IsString()
     @IsOptional()
+    cardLast4?: string;
+
+    @IsString()
+    @IsOptional()
+    paypalEmail?: string;
+
+    @IsString()
+    @IsOptional()
     probationPeriod?: string;
 
     @IsString()

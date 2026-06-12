@@ -10,8 +10,10 @@ import {
   Index,
 } from 'typeorm';
 import { Employer } from '../../employers/entities/employer.entity';
+import { PaymentMethod } from '../../../shared/entities/payment-method.entity';
 import { InvoiceWorkCenter } from './invoice-workcenter.entity';
 import { InvoiceWorker } from './invoice-worker.entity';
+import { InvoiceLine } from './invoice-line.entity';
 
 export type InvoiceStatus =
   | 'PENDING'
@@ -20,8 +22,14 @@ export type InvoiceStatus =
   | 'CANCELLED'
   | 'REFUNDED';
 
+export type InvoiceType = 'NORMAL' | 'RECTIFICATIVA';
+
 @Entity('cjobs_invoices')
-@Index('uq_invoices_employer_period', ['employerId', 'periodStart'], { unique: true })
+// Once-per-period unique applies only to auto invoices; manual ones are exempt.
+@Index('uq_invoices_employer_period', ['employerId', 'periodStart'], {
+  unique: true,
+  where: 'is_manual = false',
+})
 export class Invoice {
   @PrimaryGeneratedColumn()
   id: number;
@@ -105,6 +113,28 @@ export class Invoice {
   @Column({ length: 20, default: 'PENDING' })
   status: InvoiceStatus;
 
+  @Column({ name: 'invoice_type', length: 20, default: 'NORMAL' })
+  invoiceType: InvoiceType;
+
+  @Column({ name: 'is_manual', default: false })
+  isManual: boolean;
+
+  @Column({ name: 'rectifies_invoice_id', type: 'bigint', nullable: true })
+  rectifiesInvoiceId: number | null;
+
+  @Column({ type: 'text', nullable: true })
+  remarks: string | null;
+
+  @Column({ name: 'charge_date', type: 'date', nullable: true })
+  chargeDate: string | null;
+
+  @Column({ name: 'payment_method_id', nullable: true })
+  paymentMethodId: number | null;
+
+  @ManyToOne(() => PaymentMethod, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'payment_method_id' })
+  paymentMethod: PaymentMethod | null;
+
   @Column({ name: 'paid_at', type: 'timestamp', nullable: true })
   paidAt: Date | null;
 
@@ -122,4 +152,7 @@ export class Invoice {
 
   @OneToMany(() => InvoiceWorker, (row) => row.invoice)
   workers: InvoiceWorker[];
+
+  @OneToMany(() => InvoiceLine, (row) => row.invoice)
+  lines: InvoiceLine[];
 }

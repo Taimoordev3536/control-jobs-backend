@@ -214,6 +214,12 @@ export class Employer {
   @Column({ nullable: true })
   bicSwift: string;
 
+  @Column({ name: 'card_last4', length: 4, nullable: true })
+  cardLast4: string | null;
+
+  @Column({ name: 'paypal_email', length: 255, nullable: true })
+  paypalEmail: string | null;
+
   @Column({ nullable: true })
   probationPeriod: string;
 

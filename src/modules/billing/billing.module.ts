@@ -5,6 +5,7 @@ import { RatePlan } from './entities/rate-plan.entity';
 import { Invoice } from './entities/invoice.entity';
 import { InvoiceWorkCenter } from './entities/invoice-workcenter.entity';
 import { InvoiceWorker } from './entities/invoice-worker.entity';
+import { InvoiceLine } from './entities/invoice-line.entity';
 import { EmployerSubType } from '../employers/entities/employer-sub-type.entity';
 import { EmployerType } from '../employers/entities/employer-type.entity';
 import { Employer } from '../employers/entities/employer.entity';
@@ -16,6 +17,7 @@ import { Partner } from '../partners/entities/partner.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
 import { PartnerTier } from '../partners/entities/partner-type.entity';
 import { AdminConfig } from '../admin/entities/admin-config.entity';
+import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { PricingService } from './services/pricing.service';
 import { RatePlanService } from './services/rate-plan.service';
 import { BillingPreviewService } from './services/billing-preview.service';
@@ -37,6 +39,7 @@ import { AlertsModule } from '../realtime/alerts.module';
       Invoice,
       InvoiceWorkCenter,
       InvoiceWorker,
+      InvoiceLine,
       EmployerSubType,
       EmployerType,
       Employer,
@@ -48,6 +51,7 @@ import { AlertsModule } from '../realtime/alerts.module';
       PartnerUser,
       PartnerTier,
       AdminConfig,
+      PaymentMethod,
     ]),
     ScheduleModule.forRoot(),
     forwardRef(() => EmployersModule),
