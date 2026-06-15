@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClientsController } from './clients.controller';
 import { ClientsService } from './clients.service';
 import { Client } from './entities/client.entity';
+import { ClientFile } from './entities/client-file.entity';
 import { ClientUser } from './entities/client-user.entity';
 import { User } from '../users/entities/user.entity';
 import { Role } from '../users/entities/role.entity';
@@ -13,7 +14,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Client, ClientUser, User, Role, Employer, EmployerClient]),
+    TypeOrmModule.forFeature([Client, ClientFile, ClientUser, User, Role, Employer, EmployerClient]),
     CommonModule,
     CloudinaryModule,
   ],

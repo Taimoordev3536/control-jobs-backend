@@ -99,6 +99,40 @@ export class ClientsController {
     return this.clientsService.update(clientId, dto);
   }
 
+  @Get(':id/files')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async listFiles(@Param('id', ParseUUIDPipe) id: string) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    return this.clientsService.listClientFiles(clientId);
+  }
+
+  @Post(':id/files')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('description') description: string,
+    @Req() req,
+  ) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    return this.clientsService.uploadClientFile(clientId, file, description, req.user?.id);
+  }
+
+  @Delete(':id/files/:fileId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async deleteFile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('fileId', ParseUUIDPipe) fileId: string,
+  ) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    await this.clientsService.deleteClientFile(clientId, fileId);
+    return { isSuccess: true };
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)

@@ -4,6 +4,7 @@ import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Client } from './entities/client.entity';
+import { ClientFile } from './entities/client-file.entity';
 import { ClientUser } from './entities/client-user.entity';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AssignClientUserDto } from './dto/assign-client-user.dto';
@@ -22,6 +23,8 @@ export class ClientsService {
   constructor(
     @InjectRepository(Client)
     private clientRepo: Repository<Client>,
+    @InjectRepository(ClientFile)
+    private clientFileRepo: Repository<ClientFile>,
     @InjectRepository(ClientUser)
     private clientUserRepo: Repository<ClientUser>,
     @InjectRepository(User)
@@ -87,6 +90,85 @@ export class ClientsService {
       isSuccess: true,
       statusCode: 200,
     };
+  }
+
+  private mapFile(f: ClientFile) {
+    return {
+      id: f.publicId,
+      fileName: f.fileName,
+      url: f.url,
+      mimeType: f.mimeType,
+      sizeBytes: f.sizeBytes != null ? Number(f.sizeBytes) : null,
+      description: f.description,
+      createdAt: f.createdAt,
+    };
+  }
+
+  async listClientFiles(clientId: number) {
+    const files = await this.clientFileRepo.find({
+      where: { clientId },
+      order: { createdAt: 'DESC' },
+    });
+    return files.map((f) => this.mapFile(f));
+  }
+
+  async uploadClientFile(
+    clientId: number,
+    file: Express.Multer.File,
+    description: string | undefined,
+    userId: number | undefined,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const allowed = [
+      'application/pdf',
+      'image/png',
+      'image/jpeg',
+      'image/jpg',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+    if (!allowed.includes(file.mimetype)) {
+      throw new BadRequestException('Unsupported file type (PDF, image or Office document only)');
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      throw new BadRequestException('File must be 15 MB or smaller');
+    }
+    const client = await this.clientRepo.findOne({ where: { id: clientId } });
+    if (!client) throw new NotFoundException('Client not found');
+
+    const uploaded = await this.cloudinaryService.uploadAttachment(
+      file.buffer,
+      'controljobs/client-files',
+      'auto',
+    );
+    const rec = this.clientFileRepo.create({
+      clientId,
+      fileName: file.originalname,
+      url: uploaded.secureUrl,
+      storagePublicId: uploaded.publicId,
+      resourceType: uploaded.resourceType || 'raw',
+      mimeType: file.mimetype,
+      sizeBytes: file.size,
+      description: description || null,
+      uploadedByUserId: userId || null,
+    });
+    const saved = await this.clientFileRepo.save(rec);
+    return this.mapFile(saved);
+  }
+
+  async deleteClientFile(clientId: number, filePublicId: string): Promise<void> {
+    const f = await this.clientFileRepo.findOne({
+      where: { publicId: filePublicId, clientId },
+    });
+    if (!f) throw new NotFoundException('File not found');
+    await this.clientFileRepo.delete(f.id);
+    try {
+      await this.cloudinaryService.deleteAsset(f.storagePublicId, f.resourceType);
+    } catch {
+      /* asset cleanup is best-effort */
+    }
   }
 
   async clearLogo(id: number): Promise<BaseResponse<null>> {

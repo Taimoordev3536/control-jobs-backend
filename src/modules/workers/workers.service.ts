@@ -514,4 +514,121 @@ export class WorkersService {
       };
     });
   }
+
+  private async resolveEmployerIdForUser(employerUser: User): Promise<number> {
+    const link = await this.dataSource.getRepository(EmployerUser).findOne({
+      where: { user: { id: employerUser.id } },
+      relations: ['employer'],
+    });
+    if (!link?.employer) throw new NotFoundException('Employer not found for this user');
+    return link.employer.id;
+  }
+
+  /** Jobs the given worker is assigned to, scoped to the requesting employer. */
+  async getWorkerJobs(publicId: string, employerUser: User) {
+    const employerId = await this.resolveEmployerIdForUser(employerUser);
+    const workerId = await this.resolvePublicId(publicId);
+    const jobs = await this.dataSource
+      .getRepository(Job)
+      .createQueryBuilder('job')
+      .innerJoin('job.workers', 'w', 'w.id = :workerId', { workerId })
+      .innerJoin('job.employer', 'emp', 'emp.id = :employerId', { employerId })
+      .leftJoinAndSelect('job.client', 'client')
+      .leftJoinAndSelect('job.workCenters', 'wc')
+      .orderBy('job.jobName', 'ASC')
+      .getMany();
+    return jobs.map((j) => ({
+      id: j.id,
+      publicId: j.publicId,
+      holder: j.client?.name || '',
+      denomination: j.jobName,
+      workCenter: (j.workCenters || []).map((wc) => wc.name).join(', '),
+    }));
+  }
+
+  /** Distinct clients the given worker serves through their jobs (employer-scoped). */
+  async getWorkerClients(publicId: string, employerUser: User) {
+    const employerId = await this.resolveEmployerIdForUser(employerUser);
+    const workerId = await this.resolvePublicId(publicId);
+    const jobs = await this.dataSource
+      .getRepository(Job)
+      .createQueryBuilder('job')
+      .innerJoin('job.workers', 'w', 'w.id = :workerId', { workerId })
+      .innerJoin('job.employer', 'emp', 'emp.id = :employerId', { employerId })
+      .leftJoinAndSelect('job.client', 'client')
+      .getMany();
+    const byId = new Map<number, any>();
+    for (const j of jobs) {
+      const c = j.client;
+      if (c && !byId.has(c.id)) {
+        byId.set(c.id, {
+          id: c.id,
+          publicId: c.publicId,
+          name: c.name || '',
+          responsible: c.responsible || '',
+          mobile: c.mobile || '',
+          locality: (c as any).city || '',
+          postalCode: c.postalCode || '',
+        });
+      }
+    }
+    return Array.from(byId.values());
+  }
+
+  /**
+   * The employer's active workers, each flagged `available` = not assigned to
+   * another (non-cancelled) job whose date range overlaps [startDate, endDate].
+   * Suitability fields (occupation, locality) are returned for client-side filtering.
+   */
+  async findAvailableWorkers(
+    employerUser: User,
+    startDate?: string,
+    endDate?: string,
+  ) {
+    const employerId = await this.resolveEmployerIdForUser(employerUser);
+
+    const ewLinks = await this.employerWorkerRepo.find({
+      where: { employer: { id: employerId }, isActive: true },
+      relations: ['worker'],
+    });
+    const workers = ewLinks.map((l) => l.worker).filter(Boolean);
+    const workerIds = workers.map((w) => w.id);
+
+    const workerUsers = workerIds.length
+      ? await this.workerUserRepo.find({
+          where: workerIds.map((id) => ({ workerId: id })),
+          relations: ['user'],
+        })
+      : [];
+    const nameMap = new Map<number, string>();
+    workerUsers.forEach((wu) => {
+      if (wu.user) nameMap.set(wu.workerId, (wu.user as any).name);
+    });
+
+    let busyIds = new Set<number>();
+    if (startDate && endDate) {
+      const busy = await this.dataSource
+        .getRepository(Job)
+        .createQueryBuilder('job')
+        .innerJoin('job.workers', 'w')
+        .innerJoin('job.employer', 'emp', 'emp.id = :employerId', { employerId })
+        .where('job.startDate <= :end', { end: new Date(endDate) })
+        .andWhere('job.endDate >= :start', { start: new Date(startDate) })
+        .andWhere('job.status != :cancelled', { cancelled: 'cancelled' })
+        .select('w.id', 'wid')
+        .distinct(true)
+        .getRawMany();
+      busyIds = new Set(busy.map((r) => Number(r.wid)));
+    }
+
+    return workers.map((w) => ({
+      id: w.id,
+      publicId: w.publicId,
+      name: nameMap.get(w.id) || (w as any).code || `Worker #${w.id}`,
+      occupation: (w as any).occupation || '',
+      locality: (w as any).city || '',
+      mobile: (w as any).mobile || '',
+      available: !busyIds.has(w.id),
+    }));
+  }
 }

@@ -8,6 +8,7 @@ import {
   Delete,
   ParseIntPipe,
   ParseUUIDPipe,
+  Query,
   UseGuards,
   Req,
   UseInterceptors,
@@ -100,6 +101,31 @@ export class WorkersController {
   async updateMe(@Request() req, @Body() dto: UpdateWorkerDto) {
     const workerId = await this.workersService.findWorkerIdByUserId(req.user.id);
     return this.workersService.update(workerId, dto);
+  }
+
+  @Get('find-available')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async findAvailable(
+    @Req() req,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.workersService.findAvailableWorkers(req.user, startDate, endDate);
+  }
+
+  @Get(':id/jobs')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async getWorkerJobs(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+    return this.workersService.getWorkerJobs(id, req.user);
+  }
+
+  @Get(':id/clients')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async getWorkerClients(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+    return this.workersService.getWorkerClients(id, req.user);
   }
 
   @Get(':id')

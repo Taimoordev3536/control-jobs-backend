@@ -737,6 +737,7 @@ export class InvoiceService {
   /** Paginated list with simple filtering + role scoping. */
   async list(options: {
     employerId?: number;
+    partnerId?: number;
     status?: InvoiceStatus;
     page?: number;
     pageSize?: number;
@@ -776,6 +777,14 @@ export class InvoiceService {
     // User-supplied filters layer on top.
     if (options.employerId) {
       qb.andWhere('inv.employerId = :employerId', { employerId: options.employerId });
+    }
+    if (options.partnerId) {
+      qb.innerJoin(
+        Employer,
+        'pf',
+        'pf.id = inv.employerId AND pf.partnerId = :filterPartnerId',
+        { filterPartnerId: options.partnerId },
+      );
     }
     if (options.status) {
       qb.andWhere('inv.status = :status', { status: options.status });

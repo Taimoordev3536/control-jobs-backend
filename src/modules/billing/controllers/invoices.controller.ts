@@ -34,6 +34,7 @@ export class InvoicesController {
   async list(
     @Req() req: any,
     @Query('employerId') employerId?: string,
+    @Query('partnerId') partnerId?: string,
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
@@ -41,6 +42,7 @@ export class InvoicesController {
     const scope = await this.access.resolveScope(req.user);
     return this.invoices.list({
       employerId: employerId ? Number(employerId) : undefined,
+      partnerId: partnerId ? Number(partnerId) : undefined,
       status: status as InvoiceStatus | undefined,
       page: page ? Number(page) : undefined,
       pageSize: pageSize ? Number(pageSize) : undefined,
