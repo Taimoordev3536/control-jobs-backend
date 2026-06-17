@@ -1,6 +1,8 @@
 export type AudienceSegment =
   | 'ALL_PARTNERS'
   | 'ALL_EMPLOYERS'
+  | 'ALL_CLIENTS'
+  | 'ALL_WORKERS'
   | 'MY_EMPLOYERS'
   | 'MY_CLIENTS'
   | 'MY_WORKERS';
@@ -8,6 +10,8 @@ export type AudienceSegment =
 export const ALL_SEGMENTS: AudienceSegment[] = [
   'ALL_PARTNERS',
   'ALL_EMPLOYERS',
+  'ALL_CLIENTS',
+  'ALL_WORKERS',
   'MY_EMPLOYERS',
   'MY_CLIENTS',
   'MY_WORKERS',
@@ -18,7 +22,7 @@ export type RecipientRole = 'PARTNER' | 'EMPLOYER' | 'CLIENT' | 'WORKER';
 export type SenderRole = 'ADMIN' | 'PARTNER' | 'EMPLOYER';
 
 export const SEGMENTS_BY_SENDER_ROLE: Record<SenderRole, AudienceSegment[]> = {
-  ADMIN: ['ALL_PARTNERS', 'ALL_EMPLOYERS'],
+  ADMIN: ['ALL_PARTNERS', 'ALL_EMPLOYERS', 'ALL_WORKERS', 'ALL_CLIENTS'],
   PARTNER: ['MY_EMPLOYERS'],
   EMPLOYER: ['MY_CLIENTS', 'MY_WORKERS'],
 };

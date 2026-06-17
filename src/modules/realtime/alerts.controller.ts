@@ -12,9 +12,27 @@ export class AlertsController {
     const user = req.user;
     const userId = user?.id;
     const role = (user?.role?.name || user?.role || '').toString().toUpperCase();
-    await this.alertsService.pruneOlderThanDays(2);
-    const items = await this.alertsService.getRecentForRecipient(role, userId, 2);
+    await this.alertsService.pruneOlderThanDays(5);
+    const items = await this.alertsService.getRecentForRecipient(role, userId, 5);
     return { data: items, isSuccess: true };
+  }
+
+  @Get('unread-count')
+  async unreadCount(@Req() req: any) {
+    const user = req.user;
+    const userId = user?.id;
+    const role = (user?.role?.name || user?.role || '').toString().toUpperCase();
+    const count = await this.alertsService.countUnreadForRecipient(role, userId);
+    return { data: { count }, isSuccess: true };
+  }
+
+  @Post('read-all')
+  async markAllRead(@Req() req: any) {
+    const user = req.user;
+    const userId = user?.id;
+    const role = (user?.role?.name || user?.role || '').toString().toUpperCase();
+    await this.alertsService.markAllReadForRecipient(role, userId);
+    return { isSuccess: true };
   }
 
   @Delete(':id')

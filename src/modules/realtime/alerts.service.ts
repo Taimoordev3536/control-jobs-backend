@@ -135,6 +135,19 @@ export class AlertsService {
       .getMany();
   }
 
+  async countUnreadForRecipient(role: string, userId: number): Promise<number> {
+    return this.notifRepo.count({
+      where: { role, recipientId: userId, isRead: false },
+    });
+  }
+
+  async markAllReadForRecipient(role: string, userId: number) {
+    await this.notifRepo.update(
+      { role, recipientId: userId, isRead: false },
+      { isRead: true },
+    );
+  }
+
   async dismissForRecipient(publicId: string, role: string, userId: number) {
     const notif = await this.notifRepo.findOne({ where: { publicId, role, recipientId: userId } });
     if (notif) {

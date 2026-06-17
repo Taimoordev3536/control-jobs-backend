@@ -90,6 +90,10 @@ export class AudienceResolverService {
         return this.tag(await this.allPartnerUserIds(), 'PARTNER');
       case 'ALL_EMPLOYERS':
         return this.tag(await this.employerUserIds(), 'EMPLOYER');
+      case 'ALL_CLIENTS':
+        return this.tag(await this.allClientUserIds(), 'CLIENT');
+      case 'ALL_WORKERS':
+        return this.tag(await this.allWorkerUserIds(), 'WORKER');
       case 'MY_EMPLOYERS': {
         const partnerId = await this.partnerIdOf(sender.userId);
         const employerIds = await this.employerIdsOfPartner(partnerId);
@@ -185,6 +189,22 @@ export class AudienceResolverService {
       });
     }
     const rows = await qb.getRawMany<{ id: number }>();
+    return rows.map((r) => Number(r.id));
+  }
+
+  private async allClientUserIds(): Promise<number[]> {
+    const rows = await this.clientUserRepo
+      .createQueryBuilder('cu')
+      .select('cu.userId', 'id')
+      .getRawMany<{ id: number }>();
+    return rows.map((r) => Number(r.id));
+  }
+
+  private async allWorkerUserIds(): Promise<number[]> {
+    const rows = await this.workerUserRepo
+      .createQueryBuilder('wu')
+      .select('wu.userId', 'id')
+      .getRawMany<{ id: number }>();
     return rows.map((r) => Number(r.id));
   }
 
