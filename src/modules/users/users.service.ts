@@ -32,10 +32,13 @@ export class UsersService {
   // endpoints to scope read/write to the active admin without trusting the
   // payload's id directly.
   private async findAdminUserByUserId(userId: number): Promise<AdminUser> {
-    let link = await this.adminUserRepository.findOne({ where: { userId } });
+    let link = await this.adminUserRepository.findOne({
+      where: { userId },
+      order: { isDefault: 'DESC', id: 'ASC' },
+    });
     if (!link) {
       link = await this.adminUserRepository.save(
-        this.adminUserRepository.create({ userId, isDefault: false }),
+        this.adminUserRepository.create({ userId, isDefault: true }),
       );
     }
     return link;
@@ -105,12 +108,35 @@ export class UsersService {
     userId: number,
     dto: UpdateAdminMeDto,
   ): Promise<BaseResponse<{ id: number; name: string; email: string }>> {
-    await this.findAdminUserByUserId(userId);
+    const admin = await this.findAdminUserByUserId(userId);
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
+
     if (dto.name !== undefined) user.name = dto.name;
     if (dto.email !== undefined) user.email = dto.email;
     await this.usersRepository.save(user);
+
+    const profileFields = [
+      'nif',
+      'responsible',
+      'address',
+      'street',
+      'streetNumber',
+      'floorDoor',
+      'postalCode',
+      'city',
+      'province',
+      'country',
+      'latitude',
+      'longitude',
+      'landline',
+      'mobile',
+    ] as const;
+    for (const field of profileFields) {
+      if (dto[field] !== undefined) admin[field] = dto[field] as never;
+    }
+    await this.adminUserRepository.save(admin);
+
     return {
       message: 'Profile updated',
       data: { id: user.id, name: user.name, email: user.email },

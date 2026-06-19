@@ -74,6 +74,27 @@ export class WorkersController {
     return this.workersService.clearLogo(workerId);
   }
 
+  // Employer: upload/remove a logo on behalf of one of their workers.
+  @Post(':id/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadLogo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.setLogo(numericId, file);
+  }
+
+  @Delete(':id/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async deleteLogo(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.clearLogo(numericId);
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async getMe(@Request() req) {

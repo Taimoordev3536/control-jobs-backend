@@ -16,6 +16,8 @@ const SVGtoPDF = require('svg-to-pdfkit') as (
 import { Invoice } from '../entities/invoice.entity';
 import { Employer } from '../../employers/entities/employer.entity';
 import { AdminConfig } from '../../admin/entities/admin-config.entity';
+import { AdminUser } from '../../users/entities/admin-user.entity';
+import { CompanyIdentity, resolveCompanyIdentity } from '../helpers/company-identity';
 import { RatePlan } from '../entities/rate-plan.entity';
 
 const PAYMENT_LABELS: Record<string, string> = {
@@ -30,7 +32,7 @@ function maskIbanPdf(iban?: string | null): string | null {
   if (!iban) return null;
   const clean = iban.replace(/\s+/g, '');
   if (clean.length <= 8) return clean;
-  return `${clean.slice(0, 4)} **** **** **** ${clean.slice(-4)}`;
+  return `${clean.slice(0, 4)} **** **** **** **** ${clean.slice(-4)}`;
 }
 
 const fmtEur = (n: number | string) => {
@@ -67,6 +69,8 @@ export class InvoicePdfService {
     private readonly employerRepo: Repository<Employer>,
     @InjectRepository(AdminConfig)
     private readonly adminConfigRepo: Repository<AdminConfig>,
+    @InjectRepository(AdminUser)
+    private readonly adminUserRepo: Repository<AdminUser>,
     @InjectRepository(RatePlan)
     private readonly ratePlanRepo: Repository<RatePlan>,
   ) {}
@@ -148,11 +152,12 @@ export class InvoicePdfService {
       relations: ['paymentMethod'],
     });
     const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
+    const company = await resolveCompanyIdentity(this.adminUserRepo);
     const extras = await this.buildExtras(invoice, employer);
 
     const doc = new PDFDocument({ size: 'A4', margin: 48 });
     const done = this.collect(doc);
-    this.drawInvoice(doc, invoice, employer, config, level, extras);
+    this.drawInvoice(doc, invoice, employer, config, company, level, extras);
     doc.end();
     return done;
   }
@@ -162,6 +167,7 @@ export class InvoicePdfService {
     items: Array<{ publicId: string; level?: 'full' | 'page1Only' }>,
   ): Promise<Buffer> {
     const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
+    const company = await resolveCompanyIdentity(this.adminUserRepo);
     const doc = new PDFDocument({ size: 'A4', margin: 48 });
     const done = this.collect(doc);
     let first = true;
@@ -174,7 +180,7 @@ export class InvoicePdfService {
       const extras = await this.buildExtras(invoice, employer);
       if (!first) doc.addPage();
       first = false;
-      this.drawInvoice(doc, invoice, employer, config, item.level ?? 'full', extras);
+      this.drawInvoice(doc, invoice, employer, config, company, item.level ?? 'full', extras);
     }
     doc.end();
     return done;
@@ -188,6 +194,7 @@ export class InvoicePdfService {
     items: Array<{ publicId: string }>,
   ): Promise<Buffer> {
     const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
+    const company = await resolveCompanyIdentity(this.adminUserRepo);
 
     const loaded = [] as Array<{
       invoice: Invoice;
@@ -212,7 +219,7 @@ export class InvoicePdfService {
     for (const row of loaded) {
       if (!first) doc.addPage();
       first = false;
-      this.drawReceipt(doc, row.invoice, row.employer, config, row.methodName);
+      this.drawReceipt(doc, row.invoice, row.employer, config, company, row.methodName);
     }
     doc.end();
     return done;
@@ -223,8 +230,10 @@ export class InvoicePdfService {
     invoice: Invoice,
     employer: Employer | null,
     config: AdminConfig | undefined,
+    company: CompanyIdentity | null,
     methodName: string,
   ): void {
+    const companyName = company?.name || config?.companyName || 'ControlJobs';
     const MARGIN = 48;
     const CONTENT_WIDTH = doc.page.width - 2 * MARGIN;
     const PURPLE = '#662D91';
@@ -242,12 +251,12 @@ export class InvoicePdfService {
         leftY += 56;
       } catch {
         doc.fontSize(18).fillColor(PURPLE).font('Helvetica-Bold');
-        doc.text(config?.companyName || 'ControlJobs', MARGIN, leftY);
+        doc.text(companyName, MARGIN, leftY);
         leftY += 24;
       }
     } else {
       doc.fontSize(18).fillColor(PURPLE).font('Helvetica-Bold');
-      doc.text(config?.companyName || 'ControlJobs', MARGIN, leftY);
+      doc.text(companyName, MARGIN, leftY);
       leftY += 24;
     }
 
@@ -332,6 +341,7 @@ export class InvoicePdfService {
     invoice: Invoice,
     employer: Employer | null,
     config: AdminConfig | undefined,
+    company: CompanyIdentity | null,
     level: 'full' | 'page1Only',
     extras?: { paymentText: string | null; tariffText: string | null },
   ): void {
@@ -354,6 +364,7 @@ export class InvoicePdfService {
 
     // Left side — render the SVG logo if available, otherwise fall back to
     // the company name as text.
+    const companyName = company?.name || config?.companyName || 'ControlJobs';
     const svg = this.getLogoSvg();
     if (svg) {
       try {
@@ -365,23 +376,32 @@ export class InvoicePdfService {
       } catch {
         // fallback to text on render error
         doc.fontSize(18).fillColor(PURPLE).font('Helvetica-Bold');
-        doc.text(config?.companyName || 'ControlJobs', MARGIN, leftY);
+        doc.text(companyName, MARGIN, leftY);
         leftY += 24;
       }
     } else {
       doc.fontSize(18).fillColor(PURPLE).font('Helvetica-Bold');
-      doc.text(config?.companyName || 'ControlJobs', MARGIN, leftY);
+      doc.text(companyName, MARGIN, leftY);
       leftY += 24;
     }
 
-    if (config?.companyName) {
-      doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica-Bold');
-      doc.text(config.companyName, MARGIN, leftY, { width: 240 });
-      leftY = doc.y + 2;
-    }
+    doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica-Bold');
+    doc.text(companyName, MARGIN, leftY, { width: 240 });
+    leftY = doc.y + 2;
+
     doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica');
-    if (config?.address) {
-      doc.text(config.address, MARGIN, leftY, { width: 240 });
+    const companyLines = company
+      ? [
+          company.taxId,
+          company.address,
+          [company.postalCode, company.city].filter(Boolean).join(' '),
+          company.province,
+          company.country,
+        ]
+      : [config?.address];
+    for (const lineText of companyLines) {
+      if (!lineText) continue;
+      doc.text(lineText, MARGIN, leftY, { width: 240 });
       leftY = doc.y;
     }
 

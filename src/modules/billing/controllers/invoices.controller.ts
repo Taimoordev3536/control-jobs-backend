@@ -172,13 +172,17 @@ export class InvoicesController {
       };
     }
 
+    const isLastInvoice = await this.invoices.isLastInvoice(
+      (invoice as any).invoiceNumber,
+    );
+
     if (level === 'page1Only') {
       // Strip the page-2 snapshots so Bronze partners can't see worksite
       // / worker names. The financial breakdown stays.
       const { workCenters: _wc, workers: _wk, ...page1 } = invoice as any;
-      return { data: { ...page1, ...context, accessLevel: 'page1Only' } };
+      return { data: { ...page1, ...context, accessLevel: 'page1Only', isLastInvoice } };
     }
-    return { data: { ...invoice, ...context, accessLevel: 'full' } };
+    return { data: { ...invoice, ...context, accessLevel: 'full', isLastInvoice } };
   }
 
   @Post(':publicId/payment-method')

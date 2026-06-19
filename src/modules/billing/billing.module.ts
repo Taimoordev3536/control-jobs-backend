@@ -17,6 +17,7 @@ import { Partner } from '../partners/entities/partner.entity';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
 import { PartnerTier } from '../partners/entities/partner-type.entity';
 import { AdminConfig } from '../admin/entities/admin-config.entity';
+import { AdminUser } from '../users/entities/admin-user.entity';
 import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { PricingService } from './services/pricing.service';
 import { RatePlanService } from './services/rate-plan.service';
@@ -51,6 +52,7 @@ import { AlertsModule } from '../realtime/alerts.module';
       PartnerUser,
       PartnerTier,
       AdminConfig,
+      AdminUser,
       PaymentMethod,
     ]),
     ScheduleModule.forRoot(),

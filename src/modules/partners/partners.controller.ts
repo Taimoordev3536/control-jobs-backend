@@ -98,6 +98,27 @@ export class PartnersController {
     return this.partnersService.clearLogo(partnerId);
   }
 
+  // Admin: upload/remove a logo on behalf of any partner.
+  @Post(':id/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadLogo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const numericId = await this.partnersService.resolvePublicId(id);
+    return this.partnersService.setLogo(numericId, file);
+  }
+
+  @Delete(':id/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1)
+  async deleteLogo(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.partnersService.resolvePublicId(id);
+    return this.partnersService.clearLogo(numericId);
+  }
+
   @Get(':id')
   @Roles(1)
   async findOne(@Param('id', ParseUUIDPipe) id: string) {

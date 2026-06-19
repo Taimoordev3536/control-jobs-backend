@@ -17,6 +17,8 @@ import { EmployerWorker } from '../../employers/entities/employer-worker.entity'
 import { EmployerWorkCenter } from '../../employers/entities/employer-work-center.entity';
 import { WorkerUser } from '../../workers/entities/worker-user.entity';
 import { AdminConfig } from '../../admin/entities/admin-config.entity';
+import { AdminUser } from '../../users/entities/admin-user.entity';
+import { resolveCompanyIdentity } from '../helpers/company-identity';
 import { PaymentMethod } from '../../../shared/entities/payment-method.entity';
 import { PricingService } from './pricing.service';
 import { RatePlanService } from './rate-plan.service';
@@ -54,6 +56,8 @@ export class InvoiceService {
     private readonly workerUserRepo: Repository<WorkerUser>,
     @InjectRepository(AdminConfig)
     private readonly adminConfigRepo: Repository<AdminConfig>,
+    @InjectRepository(AdminUser)
+    private readonly adminUserRepo: Repository<AdminUser>,
     @InjectRepository(RatePlan)
     private readonly ratePlanRepo: Repository<RatePlan>,
     @InjectRepository(PaymentMethod)
@@ -248,6 +252,11 @@ export class InvoiceService {
     const dueDate = addDays(issueDate, 30);
     const periodStart = dto.periodStart ? new Date(dto.periodStart) : issueDate;
     const periodEnd = dto.periodEnd ? new Date(dto.periodEnd) : issueDate;
+    if (periodEnd < periodStart) {
+      throw new BadRequestException(
+        'The end date must be on or after the start date',
+      );
+    }
 
     const adminConfig = await this.adminConfigRepo.find({ take: 1 });
     const series = adminConfig.length ? adminConfig[0].invoiceSeries : 'CJOBS';
@@ -367,6 +376,33 @@ export class InvoiceService {
     return `${prefix}${String(next).padStart(6, '0')}`;
   }
 
+  /**
+   * Next number in the active series, read-only (no FOR UPDATE lock), used to
+   * preview the upcoming invoice number in the form. The number is only
+   * reserved when the invoice is actually created.
+   */
+  async previewNextInvoiceNumber(issueDate: Date = new Date()): Promise<string> {
+    const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
+    const series = config?.invoiceSeries || 'CJOBS';
+    const yyyy = issueDate.getFullYear();
+    const prefix = `${series}-${yyyy}-`;
+    const result = await this.invoiceRepo.query(
+      `SELECT invoice_number FROM cjobs_invoices
+        WHERE invoice_number LIKE $1
+          AND invoice_number !~ $2
+        ORDER BY invoice_number DESC
+        LIMIT 1`,
+      [`${prefix}%`, `^${series}-${yyyy}-\\d{2}-`],
+    );
+    let next = 1;
+    if (result.length > 0) {
+      const last = String(result[0].invoice_number);
+      const tail = parseInt(last.slice(prefix.length), 10);
+      if (Number.isFinite(tail)) next = tail + 1;
+    }
+    return `${prefix}${String(next).padStart(6, '0')}`;
+  }
+
   /** Company + client + payment + tariff context the Factura form renders. */
   async getInvoiceFormContext(employerId?: number) {
     const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
@@ -380,14 +416,20 @@ export class InvoiceService {
       ? await this.ratePlanRepo.findOne({ where: { id: employer.ratePlanId } })
       : null;
     const paymentMethods = await this.paymentMethodRepo.find({
-      where: { isActive: true },
+      where: { isActive: true, isSelfService: true },
       order: { displayOrder: 'ASC', name: 'ASC' },
     });
     const partnerCommission = Number((employer?.partner as any)?.commission) || 0;
-    return {
-      company: config
+    const identity = await resolveCompanyIdentity(this.adminUserRepo);
+    const company = identity
+      ? { ...identity, paymentDetails: config?.paymentDetails ?? null }
+      : config
         ? { name: config.companyName, address: config.address, paymentDetails: config.paymentDetails }
-        : null,
+        : null;
+    const nextInvoiceNumber = await this.previewNextInvoiceNumber();
+    return {
+      company,
+      nextInvoiceNumber,
       client: employer
         ? {
             id: employer.id,
@@ -986,9 +1028,28 @@ export class InvoiceService {
   }
 
   /** Hard-delete an invoice and its line/snapshot rows. */
+  async isLastInvoice(invoiceNumber: string | null): Promise<boolean> {
+    if (!invoiceNumber || invoiceNumber.length <= 6) return false;
+    const prefix = invoiceNumber.slice(0, invoiceNumber.length - 6);
+    const rows = await this.invoiceRepo.query(
+      `SELECT MAX(invoice_number) AS max FROM cjobs_invoices
+        WHERE invoice_number LIKE $1 AND length(invoice_number) = $2`,
+      [`${prefix}%`, invoiceNumber.length],
+    );
+    return rows[0]?.max === invoiceNumber;
+  }
+
   async deleteInvoice(publicId: string): Promise<void> {
     const invoice = await this.invoiceRepo.findOne({ where: { publicId } });
     if (!invoice) throw new NotFoundException('Invoice not found');
+    if (invoice.status !== 'PENDING') {
+      throw new BadRequestException('Only pending invoices can be deleted');
+    }
+    if (!(await this.isLastInvoice(invoice.invoiceNumber))) {
+      throw new BadRequestException(
+        'Only the last invoice can be deleted, to keep the numbering sequential',
+      );
+    }
     await this.invoiceRepo.manager.transaction(async (manager) => {
       await manager.delete(InvoiceLine, { invoiceId: invoice.id });
       await manager.delete(InvoiceWorkCenter, { invoiceId: invoice.id });
@@ -1013,7 +1074,7 @@ function maskIban(iban?: string | null): string | null {
   if (!iban) return null;
   const clean = iban.replace(/\s+/g, '');
   if (clean.length <= 8) return clean;
-  return `${clean.slice(0, 4)} **** **** **** ${clean.slice(-4)}`;
+  return `${clean.slice(0, 4)} **** **** **** **** ${clean.slice(-4)}`;
 }
 
 function addDays(date: Date, days: number): Date {
