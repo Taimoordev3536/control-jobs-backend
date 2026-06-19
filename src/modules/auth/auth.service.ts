@@ -292,13 +292,42 @@ export class AuthService {
   async getProfile(userId: number): Promise<BaseResponse> {
     try {
       const user = await this.usersService.findOne(userId);
-
-      // Remove sensitive data
       const { password, ...userWithoutPassword } = user;
+
+      let partnerId: number | null = null;
+      let employerInfo: any = null;
+
+      if (user.roleId === 2) {
+        const partnerUser = await this.partnerUserRepository.findOne({
+          where: { userId: user.id },
+        });
+        if (partnerUser) partnerId = partnerUser.partnerId;
+      } else if (user.roleId === 3) {
+        try {
+          const eu = await this.employerUserRepository.findOne({
+            where: { user: { id: user.id } },
+            relations: ['employer'],
+          });
+          if (eu?.employer) employerInfo = eu.employer;
+        } catch (e) {
+          // ignore lookup errors
+        }
+      }
+
+      const data: any = { ...userWithoutPassword, partnerId };
+      if (employerInfo) {
+        data.employer = {
+          id: employerInfo.id,
+          publicId: employerInfo.publicId,
+          name: employerInfo.name,
+          typeId: employerInfo.typeId,
+          subTypeId: employerInfo.subTypeId,
+        };
+      }
 
       return {
         message: 'Profile retrieved successfully',
-        data: userWithoutPassword,
+        data,
         isSuccess: true,
         statusCode: 200,
         developerError: '',
