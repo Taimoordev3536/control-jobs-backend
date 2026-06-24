@@ -481,6 +481,44 @@ export class ClientsService {
     });
   }
 
+  // All clients across every employer, for the admin Accounts > Clients list.
+  async findAllForAdmin() {
+    const links = await this.employerClientRepo.find({
+      where: { isActive: true },
+      relations: ['client', 'employer'],
+    });
+
+    const clientIds = links.map((l) => l.client.id);
+    const clientUsers = clientIds.length
+      ? await this.clientUserRepo.find({
+          where: clientIds.map((id) => ({ clientId: id })),
+          relations: ['user'],
+        })
+      : [];
+
+    const clientIdToUserName = new Map<number, string>();
+    clientUsers.forEach((cu) => {
+      if (cu.isDefault && cu.user) {
+        clientIdToUserName.set(cu.clientId, cu.user.name);
+      }
+    });
+
+    return links.map((l) => {
+      const c = l.client;
+      return {
+        id: c.id,
+        publicId: c.publicId,
+        name: c.name || clientIdToUserName.get(c.id) || '',
+        city: c.city || '',
+        province: c.province || '',
+        type: c.type,
+        employer: l.employer?.name || '',
+        employerPublicId: l.employer?.publicId || '',
+        active: c.active,
+      };
+    });
+  }
+
 
     //clients And employer for add job (Select client dropdown)
   async findClientsForAddJob(employerUser: User) {

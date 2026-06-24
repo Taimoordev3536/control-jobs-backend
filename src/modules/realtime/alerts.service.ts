@@ -13,7 +13,9 @@ export type AlertType =
   | 'MANUAL_ATTENDANCE_CANCELLED'
   | 'RATE_CHANGE_SCHEDULED'
   | 'RATE_CHANGE_CANCELLED'
-  | 'ANNOUNCEMENT';
+  | 'ANNOUNCEMENT'
+  | 'SUPPORT_REQUEST'
+  | 'SUGGESTION';
 export interface AlertPayload {
   type: AlertType;
   jobId: number;

@@ -28,6 +28,8 @@ import { BaseDto } from '../auth/dto/base.dto';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdateAdminMeDto } from './dto/update-admin-me.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { ChangeEmailDto } from './dto/change-email.dto';
 import { Action } from '../auth/enums/action.enum';
 
 @Controller('users')
@@ -108,5 +110,17 @@ export class UsersController {
   @Roles(UserRole.Admin)
   async deleteAdminLogo(@Request() req) {
     return this.usersService.clearAdminLogo(req.user.id);
+  }
+
+  @Post('admin/me/change-password')
+  @Roles(UserRole.Admin)
+  async changeAdminPassword(@Request() req, @Body() dto: ChangePasswordDto) {
+    return this.usersService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
+  }
+
+  @Post('admin/me/change-email')
+  @Roles(UserRole.Admin)
+  async changeAdminEmail(@Request() req, @Body() dto: ChangeEmailDto) {
+    return this.usersService.changeEmail(req.user.id, dto.currentPassword, dto.newEmail);
   }
 }

@@ -54,6 +54,14 @@ export class WorkersController {
     return this.workersService.findAllByEmployer(req.user);
   }
 
+  // Must precede @Get(':id') so "admin" isn't parsed as a UUID param.
+  @Get('admin')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Admin)
+  async findAllForAdmin() {
+    return this.workersService.findAllForAdmin();
+  }
+
   // Worker self-service: upload/remove personal photo. Declared before :id so
   // ParseUUIDPipe doesn't reject "me".
   @Post('me/logo')

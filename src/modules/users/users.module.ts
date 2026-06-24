@@ -10,6 +10,7 @@ import { AdminUser } from './entities/admin-user.entity';
 import { RolesSeedService } from './roles.seed';
 import { AuthModule } from '../auth/auth.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
     AwsModule,
     CloudinaryModule,
     forwardRef(() => AuthModule),
+    AuditModule,
   ],
   providers: [UsersService, RolesSeedService],
   controllers: [UsersController, MeController],

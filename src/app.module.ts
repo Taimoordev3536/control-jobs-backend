@@ -22,6 +22,8 @@ import { ClientInvitationsModule } from './modules/client-invitations/client-inv
 import { ChatModule } from './modules/chat/chat.module';
 import { PaymentMethodsModule } from './modules/payment-methods/payment-methods.module';
 import { AnnouncementsModule } from './modules/announcements/announcements.module';
+import { SupportModule } from './modules/support/support.module';
+import { AuditModule } from './modules/audit/audit.module';
 
 config();
 
@@ -70,6 +72,8 @@ config();
     ChatModule,
     PaymentMethodsModule,
     AnnouncementsModule,
+    SupportModule,
+    AuditModule,
   ],
 })
 export class AppModule { }

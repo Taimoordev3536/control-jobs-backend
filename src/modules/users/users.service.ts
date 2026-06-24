@@ -13,6 +13,7 @@ import { AwsService } from '../aws/aws.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { CreateUserDto } from './dto/create-user.dto';
+import { AuditService } from '../audit/audit.service';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -26,6 +27,7 @@ export class UsersService {
     private adminUserRepository: Repository<AdminUser>,
     private readonly awsService: AwsService,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly auditService: AuditService,
   ) { }
 
   // Find the AdminUser row for the given login user. Used by /users/admin/me/*
@@ -143,6 +145,40 @@ export class UsersService {
       isSuccess: true,
       statusCode: 200,
     };
+  }
+
+  async changePassword(userId: number, currentPassword: string, newPassword: string): Promise<BaseResponse<null>> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    const ok = await this.validatePassword(currentPassword, user.password);
+    if (!ok) throw new BadRequestException('Current password is incorrect');
+    user.password = await bcrypt.hash(newPassword, 10);
+    await this.usersRepository.save(user);
+    await this.auditService.record({
+      actorUserId: user.id,
+      actorName: user.name,
+      action: 'PASSWORD_CHANGED',
+    });
+    return { message: 'Password updated', data: null, isSuccess: true, statusCode: 200 };
+  }
+
+  async changeEmail(userId: number, currentPassword: string, newEmail: string): Promise<BaseResponse<{ email: string }>> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    const ok = await this.validatePassword(currentPassword, user.password);
+    if (!ok) throw new BadRequestException('Current password is incorrect');
+    const existing = await this.usersRepository.findOne({ where: { email: newEmail } });
+    if (existing && existing.id !== userId) throw new BadRequestException('Email already in use');
+    const previousEmail = user.email;
+    user.email = newEmail;
+    await this.usersRepository.save(user);
+    await this.auditService.record({
+      actorUserId: user.id,
+      actorName: user.name,
+      action: 'EMAIL_CHANGED',
+      detail: `${previousEmail} -> ${newEmail}`,
+    });
+    return { message: 'Email updated', data: { email: user.email }, isSuccess: true, statusCode: 200 };
   }
 
   async getMyProfile(userId: number): Promise<BaseResponse<{ name: string; email: string; alias: string | null }>> {

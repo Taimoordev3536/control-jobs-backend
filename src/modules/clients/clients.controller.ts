@@ -51,6 +51,14 @@ export class ClientsController {
     return this.clientsService.findAllByEmployerUser(req.user);
   }
 
+  // Must precede @Get(':id') so "admin" isn't parsed as a UUID param.
+  @Get('admin')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Admin)
+  async findAllForAdmin() {
+    return this.clientsService.findAllForAdmin();
+  }
+
   @Get('for-add-job')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)

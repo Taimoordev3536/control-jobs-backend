@@ -515,6 +515,42 @@ export class WorkersService {
     });
   }
 
+  // All workers across every employer, for the admin Accounts > Workers list.
+  async findAllForAdmin() {
+    const links = await this.employerWorkerRepo.find({
+      where: { isActive: true },
+      relations: ['worker', 'employer'],
+    });
+
+    const workerIds = links.map((l) => l.worker.id);
+    const workerUsers = workerIds.length
+      ? await this.workerUserRepo.find({
+          where: workerIds.map((id) => ({ workerId: id })),
+          relations: ['user'],
+        })
+      : [];
+
+    const workerIdToUserName = new Map<number, string>();
+    workerUsers.forEach((wu) => {
+      if (wu.user) workerIdToUserName.set(wu.workerId, wu.user.name);
+    });
+
+    return links.map((l) => {
+      const w = l.worker;
+      return {
+        id: w.id,
+        publicId: w.publicId,
+        name: workerIdToUserName.get(w.id) || '',
+        city: w.city || '',
+        province: w.province || '',
+        occupation: w.occupation || '',
+        employer: l.employer?.name || '',
+        employerPublicId: l.employer?.publicId || '',
+        active: w.active,
+      };
+    });
+  }
+
   private async resolveEmployerIdForUser(employerUser: User): Promise<number> {
     const link = await this.dataSource.getRepository(EmployerUser).findOne({
       where: { user: { id: employerUser.id } },
