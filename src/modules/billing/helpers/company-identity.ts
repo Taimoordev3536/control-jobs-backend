@@ -5,6 +5,7 @@ export interface CompanyIdentity {
   name: string;
   taxId: string | null;
   address: string | null;
+  floorDoor: string | null;
   postalCode: string | null;
   city: string | null;
   province: string | null;
@@ -35,6 +36,7 @@ export async function resolveCompanyIdentity(
     name: admin.user?.name || '',
     taxId: admin.nif,
     address: admin.address,
+    floorDoor: admin.floorDoor,
     postalCode: admin.postalCode,
     city: admin.city,
     province: admin.province,

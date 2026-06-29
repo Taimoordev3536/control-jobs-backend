@@ -78,7 +78,7 @@ export class SubUsersController {
   // Public — consumed by the invite-acceptance page (no JWT guard; token is in body).
   @Post('accept-invite')
   async acceptInvite(@Body() dto: AcceptInviteDto) {
-    const data = await this.service.acceptInvite(dto.token, dto.password);
+    const data = await this.service.acceptInvite(dto);
     return { isSuccess: true, statusCode: 200, message: 'Invite accepted', data };
   }
 }

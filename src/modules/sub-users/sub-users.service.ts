@@ -10,6 +10,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 
 import { User } from '../users/entities/user.entity';
 import { Role } from '../users/entities/role.entity';
@@ -203,19 +204,25 @@ export class SubUsersService {
   ): Promise<{ user: Partial<User>; inviteToken: string; inviteLink: string }> {
     const scope = await this.resolveRequesterScope(requester);
 
-    const existing = await this.usersRepo.findOne({ where: { email: dto.email } });
-    if (existing) {
-      throw new BadRequestException('A user with this email already exists');
+    const email = dto.email?.trim();
+    if (email) {
+      const existing = await this.usersRepo.findOne({ where: { email } });
+      if (existing) {
+        throw new BadRequestException('A user with this email already exists');
+      }
     }
 
     const role = await this.rolesRepo.findOne({ where: { id: scope.roleId } });
     if (!role) throw new NotFoundException('Parent role not found');
 
+    const fullName = dto.name || `${dto.firstName ?? ''} ${dto.lastName ?? ''}`.trim();
     const user = this.usersRepo.create({
-      name: dto.name || `${dto.firstName} ${dto.lastName}`.trim(),
-      email: dto.email,
-      firstName: dto.firstName,
-      lastName: dto.lastName,
+      name: fullName || 'Invitación pendiente',
+      // The invitee supplies their own email when accepting; store a unique
+      // placeholder until then so the unique/non-null email column is satisfied.
+      email: email || `pending-${randomUUID()}@invite.local`,
+      firstName: dto.firstName ?? null,
+      lastName: dto.lastName ?? null,
       password: '',
       roleId: role.id,
       isActive: false,
@@ -352,10 +359,16 @@ export class SubUsersService {
     return this.resetPassword(requester, subUserId);
   }
 
-  async acceptInvite(token: string, password: string): Promise<{ isSuccess: boolean }> {
+  async acceptInvite(args: {
+    token: string;
+    password: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+  }): Promise<{ isSuccess: boolean }> {
     let payload: any;
     try {
-      payload = this.jwtService.verify(token);
+      payload = this.jwtService.verify(args.token);
     } catch {
       throw new UnauthorizedException('Invite link is invalid or has expired');
     }
@@ -365,8 +378,20 @@ export class SubUsersService {
     const user = await this.usersRepo.findOne({ where: { id: payload.id } });
     if (!user) throw new NotFoundException('User not found');
 
-    const hashed = await bcrypt.hash(password, 10);
+    const email = args.email.trim().toLowerCase();
+    const clash = await this.usersRepo.findOne({ where: { email } });
+    if (clash && clash.id !== user.id) {
+      throw new BadRequestException('A user with this email already exists');
+    }
+
+    const firstName = args.firstName.trim();
+    const lastName = args.lastName.trim();
+    const hashed = await bcrypt.hash(args.password, 10);
     await this.usersRepo.update({ id: user.id }, {
+      email,
+      firstName,
+      lastName,
+      name: `${firstName} ${lastName}`.trim(),
       password: hashed,
       isActive: true,
     } as any);

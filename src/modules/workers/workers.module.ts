@@ -30,5 +30,6 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
   ],
   controllers: [WorkersController],
   providers: [WorkersService],
+  exports: [WorkersService],
 })
 export class WorkersModule {}

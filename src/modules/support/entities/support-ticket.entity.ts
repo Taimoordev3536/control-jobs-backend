@@ -26,6 +26,15 @@ export class SupportTicket {
   @Column({ default: 'OPEN' })
   status: string;
 
+  @Column({ type: 'text', nullable: true })
+  response: string | null;
+
+  @Column({ name: 'responded_by_name', nullable: true })
+  respondedByName: string | null;
+
+  @Column({ name: 'responded_at', type: 'timestamptz', nullable: true })
+  respondedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

@@ -436,6 +436,7 @@ export class InvoiceService {
             name: employer.name,
             taxId: employer.taxId,
             address: employer.address,
+            floorDoor: employer.floorDoor,
             postalCode: employer.postalCode,
             city: employer.city,
             province: employer.province,

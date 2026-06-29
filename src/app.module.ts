@@ -24,6 +24,9 @@ import { PaymentMethodsModule } from './modules/payment-methods/payment-methods.
 import { AnnouncementsModule } from './modules/announcements/announcements.module';
 import { SupportModule } from './modules/support/support.module';
 import { AuditModule } from './modules/audit/audit.module';
+import { AdminConfigModule } from './modules/admin/admin-config.module';
+import { FaqModule } from './modules/faq/faq.module';
+import { ImportModule } from './modules/import/import.module';
 
 config();
 
@@ -74,6 +77,9 @@ config();
     AnnouncementsModule,
     SupportModule,
     AuditModule,
+    AdminConfigModule,
+    FaqModule,
+    ImportModule,
   ],
 })
 export class AppModule { }

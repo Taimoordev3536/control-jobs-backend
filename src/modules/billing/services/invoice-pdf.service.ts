@@ -357,13 +357,15 @@ export class InvoicePdfService {
     const BORDER = '#dddddd';
 
     // ============================================================
-    // HEADER — left: company / right: FACTURA + metadata
+    // HEADER — left: logo + company + metadata / right: FACTURA + client
     // ============================================================
+    const LEFT_W = 290;
+    const RIGHT_X = MARGIN + 310;
+    const RIGHT_W = RIGHT_EDGE - RIGHT_X;
     let leftY = MARGIN;
     let rightY = MARGIN;
 
-    // Left side — render the SVG logo if available, otherwise fall back to
-    // the company name as text.
+    // Left — render the SVG logo if available, otherwise fall back to text.
     const companyName = company?.name || config?.companyName || 'ControlJobs';
     const svg = this.getLogoSvg();
     if (svg) {
@@ -372,9 +374,8 @@ export class InvoicePdfService {
           width: 150,
           preserveAspectRatio: 'xMinYMin meet',
         });
-        leftY += 56; // visual height of the logo block
+        leftY += 50;
       } catch {
-        // fallback to text on render error
         doc.fontSize(18).fillColor(PURPLE).font('Helvetica-Bold');
         doc.text(companyName, MARGIN, leftY);
         leftY += 24;
@@ -386,14 +387,14 @@ export class InvoicePdfService {
     }
 
     doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica-Bold');
-    doc.text(companyName, MARGIN, leftY, { width: 240 });
+    doc.text(companyName, MARGIN, leftY, { width: LEFT_W });
     leftY = doc.y + 2;
 
     doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica');
     const companyLines = company
       ? [
           company.taxId,
-          company.address,
+          [company.address, company.floorDoor].filter(Boolean).join(' '),
           [company.postalCode, company.city].filter(Boolean).join(' '),
           company.province,
           company.country,
@@ -401,30 +402,20 @@ export class InvoicePdfService {
       : [config?.address];
     for (const lineText of companyLines) {
       if (!lineText) continue;
-      doc.text(lineText, MARGIN, leftY, { width: 240 });
+      doc.text(lineText, MARGIN, leftY, { width: LEFT_W });
       leftY = doc.y;
     }
 
-    // Right side
-    doc.fontSize(24).fillColor(TEXT_DARK).font('Helvetica-Bold');
-    const docTitle = Number(invoice.total) < 0 ? 'ABONO' : 'FACTURA';
-    doc.text(docTitle, MARGIN, rightY, { width: CONTENT_WIDTH, align: 'right' });
-    rightY += 30;
-
+    leftY += 16;
     doc.fontSize(9).fillColor(TEXT_DARK).font('Helvetica');
     const metaRow = (label: string, value: string) => {
-      doc.text(`${label}: ${value}`, MARGIN, rightY, {
-        width: CONTENT_WIDTH,
-        align: 'right',
-      });
-      rightY += 12;
+      doc.text(`${label}: ${value}`, MARGIN, leftY, { width: LEFT_W });
+      leftY = doc.y + 3;
     };
     metaRow('Nº', invoice.invoiceNumber);
     metaRow('Fecha', fmtDateEs(invoice.issueDate));
     if (invoice.chargeDate) metaRow('Fecha de cargo', fmtDateEs(invoice.chargeDate));
     // Per spec §8: always show calendar-day count in parens, prorated or not.
-    // Use the persisted `proratedDays` when available, fall back to a
-    // computed inclusive day count from the period boundaries.
     const periodDays =
       invoice.proratedDays ??
       Math.round(
@@ -438,43 +429,33 @@ export class InvoicePdfService {
     );
     if (extras?.paymentText) metaRow('Forma de pago', extras.paymentText);
     if (extras?.tariffText) metaRow('Tarifa', extras.tariffText);
-    // The standalone "Prorrateado: N/M dias" line was retired now that the
-    // calendar-day count lives directly in the Periodo line — same info,
-    // one less row, no clash with the rest of the header's neutral colors.
+
+    rightY = MARGIN + 18;
+    doc.fontSize(24).fillColor(TEXT_DARK).font('Helvetica-Bold');
+    const docTitle = Number(invoice.total) < 0 ? 'ABONO' : 'FACTURA';
+    doc.text(docTitle, RIGHT_X, rightY, { width: RIGHT_W, align: 'right' });
+    rightY += 38;
+
+    doc.fontSize(11).fillColor(TEXT_DARK).font('Helvetica-Bold');
+    doc.text(employer?.name || `Empleador #${invoice.employerId}`, RIGHT_X, rightY, {
+      width: RIGHT_W,
+    });
+    rightY = doc.y + 3;
+    doc.fontSize(9).fillColor(TEXT_DARK).font('Helvetica');
+    const clientLines = [
+      employer?.taxId ? `CIF/NIF: ${employer.taxId}` : null,
+      [employer?.address, employer?.floorDoor].filter(Boolean).join(' ') || null,
+      [employer?.postalCode, employer?.city].filter(Boolean).join(' ') || null,
+      employer?.province || null,
+      employer?.country || null,
+    ];
+    for (const lineText of clientLines) {
+      if (!lineText) continue;
+      doc.text(lineText, RIGHT_X, rightY, { width: RIGHT_W });
+      rightY = doc.y;
+    }
 
     let y = Math.max(leftY, rightY) + 24;
-
-    // ============================================================
-    // BILL-TO
-    // ============================================================
-    doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica-Bold');
-    doc.text('EMPLEADOR', MARGIN, y);
-    y += 14;
-    doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica-Bold');
-    doc.text(employer?.name || `Empleador #${invoice.employerId}`, MARGIN, y);
-    y += 14;
-    doc.fontSize(9).fillColor(TEXT_DARK).font('Helvetica');
-    if (employer?.taxId) {
-      doc.text(`CIF/NIF: ${employer.taxId}`, MARGIN, y);
-      y += 12;
-    }
-    if (employer?.address) {
-      doc.text(employer.address, MARGIN, y);
-      y += 12;
-    }
-    const cityLine = [employer?.postalCode, employer?.city, employer?.province]
-      .filter(Boolean)
-      .join(' ');
-    if (cityLine) {
-      doc.text(cityLine, MARGIN, y);
-      y += 12;
-    }
-    if (employer?.country) {
-      doc.text(employer.country, MARGIN, y);
-      y += 12;
-    }
-
-    y += 18;
 
     // ============================================================
     // LINE ITEMS TABLE
@@ -485,7 +466,7 @@ export class InvoicePdfService {
     const colPriceX = MARGIN + 350;
     const colPriceW = 70;
     const colAmountX = MARGIN + 425;
-    const colAmountW = 75;
+    const colAmountW = 68;
 
     // Header band
     doc.rect(MARGIN, y, CONTENT_WIDTH, 22).fill(PURPLE);
@@ -551,52 +532,59 @@ export class InvoicePdfService {
     }
 
     // ============================================================
-    // TOTALS — right-aligned, two columns (label / value)
+    // TOTALS — Subtotal / discount, then the "Desglose fiscal" box
+    // (Base imponible + I.V.A.) and the final "Total a Pagar" bar.
     // ============================================================
     y += 16;
-    const labelX = MARGIN + 280;
-    const labelW = 140;
-    const valueX = MARGIN + 425;
-    const valueW = 75;
-
-    const totalLine = (label: string, value: string, bold = false) => {
-      doc.fontSize(bold ? 12 : 10);
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica');
-      doc.fillColor(bold ? TEXT_DARK : '#444');
-      doc.text(label, labelX, y, { width: labelW, align: 'right' });
-      doc.text(value, valueX, y, { width: valueW, align: 'right' });
-      y += bold ? 20 : 16;
+    const boxW = 240;
+    const boxX = RIGHT_EDGE - boxW;
+    const padX = 10;
+    const labelW = boxW / 2 - padX;
+    const valW = boxW / 2 - padX;
+    const pct = (n: number | string) => {
+      const v = Number(n) || 0;
+      return Number.isInteger(v) ? String(v) : v.toFixed(2);
     };
 
-    totalLine('Subtotal', fmtEur(invoice.subtotal));
-    if (Number(invoice.discountPct) > 0) {
-      totalLine(
-        `Descuento (${Number(invoice.discountPct).toFixed(2)}%)`,
-        `-${fmtEur(invoice.discountAmount)}`,
-      );
-    }
-    totalLine(
-      `IVA (${Number(invoice.vatPct).toFixed(2)}%)`,
-      fmtEur(invoice.vatAmount),
-    );
+    const sumRow = (label: string, value: string) => {
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(TEXT_DARK);
+      doc.text(label, boxX + padX, y, { width: labelW });
+      doc.font('Helvetica').text(value, boxX + boxW / 2, y, { width: valW, align: 'right' });
+      y += 18;
+    };
 
-    // Separator above TOTAL
-    y += 4;
-    doc
-      .moveTo(labelX, y)
-      .lineTo(RIGHT_EDGE, y)
-      .lineWidth(1.2)
-      .strokeColor(PURPLE)
-      .stroke();
-    y += 8;
+    sumRow('Subtotal', fmtEur(invoice.subtotal));
+    sumRow(`Dto. (${pct(invoice.discountPct)}%)`, `-${fmtEur(invoice.discountAmount)}`);
 
-    totalLine('TOTAL', fmtEur(invoice.total), true);
+    y += 6;
+    const boxTop = y;
+    doc.rect(boxX, y, boxW, 18).fill('#f1e9f8');
+    doc.fontSize(9).font('Helvetica-Bold').fillColor(TEXT_DARK);
+    doc.text('Desglose Fiscal', boxX, y + 5, { width: boxW, align: 'center' });
+    y += 18 + 8;
+
+    const base = (Number(invoice.subtotal) || 0) - (Number(invoice.discountAmount) || 0);
+    doc.fontSize(9).font('Helvetica-Bold').fillColor(TEXT_DARK);
+    doc.text('Base Imponible', boxX + padX, y, { width: labelW });
+    doc.font('Helvetica').text(fmtEur(base), boxX + boxW / 2, y, { width: valW, align: 'right' });
+    y += 18;
+    doc.font('Helvetica-Bold').text(`I.V.A. ${pct(invoice.vatPct)}%`, boxX + padX, y, { width: labelW });
+    doc.font('Helvetica').text(fmtEur(invoice.vatAmount), boxX + boxW / 2, y, { width: valW, align: 'right' });
+    y += 18 + 4;
+
+    doc.rect(boxX, boxTop, boxW, y - boxTop).lineWidth(0.5).strokeColor(BORDER).stroke();
+
+    doc.rect(boxX, y, boxW, 24).fill(PURPLE);
+    doc.fontSize(11).font('Helvetica-Bold').fillColor('white');
+    doc.text('Total a Pagar', boxX + padX, y + 7, { width: labelW });
+    doc.text(fmtEur(invoice.total), boxX + boxW / 2, y + 7, { width: valW, align: 'right' });
+    y += 24;
 
     // Diagonal status stamp in the empty lower-left band (matches the UI).
-    this.drawStatusStamp(doc, invoice.status, MARGIN + 175, y + 70);
+    this.drawStatusStamp(doc, invoice.status, MARGIN + 160, boxTop + 24);
 
     // ============================================================
-    // FOOTER — status + payment details, bottom of page
+    // FOOTER — remarks + payment details, bottom of page
     // ============================================================
     const footerY = Math.max(y + 30, doc.page.height - 110);
     doc
@@ -607,13 +595,6 @@ export class InvoicePdfService {
       .stroke();
 
     let fy = footerY + 10;
-    doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica-Bold');
-    doc.text(
-      `Estado: ${STATUS_LABELS[invoice.status] || invoice.status}`,
-      MARGIN,
-      fy,
-    );
-    fy += 14;
 
     if (invoice.remarks) {
       doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica-Bold');

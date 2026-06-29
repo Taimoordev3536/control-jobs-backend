@@ -9,7 +9,9 @@ import { AlertsService } from '../realtime/alerts.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { CreateSuggestionDto } from './dto/create-suggestion.dto';
+import { ReplyTicketDto } from './dto/reply-ticket.dto';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
+import { NotFoundException } from '@nestjs/common';
 
 @Injectable()
 export class SupportService {
@@ -20,6 +22,17 @@ export class SupportService {
     private readonly alertsService: AlertsService,
     private readonly auditService: AuditService,
   ) {}
+
+  private roleInSpanish(roleName?: string): string {
+    switch (String(roleName ?? '').toLowerCase()) {
+      case 'admin': return 'administrador';
+      case 'partner': return 'partner';
+      case 'employer': return 'empleador';
+      case 'client': return 'cliente';
+      case 'worker': return 'trabajador';
+      default: return 'usuario';
+    }
+  }
 
   private async notifyAdmins(type: 'SUPPORT_REQUEST' | 'SUGGESTION', message: string, meta: Record<string, any>) {
     const admins = await this.usersRepo.find({
@@ -47,10 +60,14 @@ export class SupportService {
       status: 'OPEN',
     });
     const saved = await this.ticketRepo.save(ticket);
-    await this.notifyAdmins('SUPPORT_REQUEST', `New support request from ${user.name ?? 'a user'}`, {
-      ticketId: saved.id,
-      ticketPublicId: saved.publicId,
-    });
+    await this.notifyAdmins(
+      'SUPPORT_REQUEST',
+      `Nueva solicitud de soporte del ${this.roleInSpanish(user.role?.name)} ${user.name ?? ''}`.trim(),
+      {
+        ticketId: saved.id,
+        ticketPublicId: saved.publicId,
+      },
+    );
     await this.auditService.record({
       actorUserId: user.id,
       actorName: user.name,
@@ -66,6 +83,49 @@ export class SupportService {
     return { message: 'Tickets', data, isSuccess: true, statusCode: 200 };
   }
 
+  private alertRoleOf(roleName?: string): 'EMPLOYER' | 'CLIENT' | 'WORKER' | 'PARTNER' | 'ADMIN' {
+    switch (String(roleName ?? '').toLowerCase()) {
+      case 'partner': return 'PARTNER';
+      case 'employer': return 'EMPLOYER';
+      case 'client': return 'CLIENT';
+      case 'worker': return 'WORKER';
+      default: return 'ADMIN';
+    }
+  }
+
+  async replyToTicket(admin: any, publicId: string, dto: ReplyTicketDto): Promise<BaseResponse<SupportTicket>> {
+    const ticket = await this.ticketRepo.findOne({ where: { publicId } });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+    ticket.response = dto.response;
+    ticket.respondedByName = admin?.name ?? 'Administrador';
+    ticket.respondedAt = new Date();
+    ticket.status = 'ANSWERED';
+    const saved = await this.ticketRepo.save(ticket);
+
+    await this.alertsService.createAndEmitForUser({
+      userId: ticket.requesterUserId,
+      role: this.alertRoleOf(ticket.requesterRole),
+      type: 'SUPPORT_REPLY',
+      message: `Respuesta de soporte: ${dto.response}`,
+      meta: {
+        ticketId: saved.id,
+        ticketPublicId: saved.publicId,
+      },
+    });
+
+    await this.auditService.record({
+      actorUserId: admin?.id,
+      actorName: admin?.name,
+      actorRole: admin?.role?.name,
+      action: 'SUPPORT_TICKET_ANSWERED',
+      detail: `Ticket #${saved.id}`,
+    });
+
+    return { message: 'Reply sent', data: saved, isSuccess: true, statusCode: 200 };
+  }
+
   async createSuggestion(user: any, dto: CreateSuggestionDto): Promise<BaseResponse<Suggestion>> {
     const suggestion = this.suggestionRepo.create({
       requesterUserId: user.id,
@@ -74,9 +134,13 @@ export class SupportService {
       message: dto.message,
     });
     const saved = await this.suggestionRepo.save(suggestion);
-    await this.notifyAdmins('SUGGESTION', `New suggestion from ${user.name ?? 'a user'}`, {
-      suggestionId: saved.id,
-    });
+    await this.notifyAdmins(
+      'SUGGESTION',
+      `Nueva sugerencia del ${this.roleInSpanish(user.role?.name)} ${user.name ?? ''}`.trim(),
+      {
+        suggestionId: saved.id,
+      },
+    );
     await this.auditService.record({
       actorUserId: user.id,
       actorName: user.name,

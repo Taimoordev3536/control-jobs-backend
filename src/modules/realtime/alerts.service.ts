@@ -15,6 +15,7 @@ export type AlertType =
   | 'RATE_CHANGE_CANCELLED'
   | 'ANNOUNCEMENT'
   | 'SUPPORT_REQUEST'
+  | 'SUPPORT_REPLY'
   | 'SUGGESTION';
 export interface AlertPayload {
   type: AlertType;

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class AcceptInviteDto {
   @IsString()
@@ -8,4 +8,17 @@ export class AcceptInviteDto {
   @IsString()
   @MinLength(8)
   password: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  firstName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  lastName: string;
+
+  @IsEmail()
+  email: string;
 }

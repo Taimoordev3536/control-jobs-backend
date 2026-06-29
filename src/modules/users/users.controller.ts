@@ -123,4 +123,14 @@ export class UsersController {
   async changeAdminEmail(@Request() req, @Body() dto: ChangeEmailDto) {
     return this.usersService.changeEmail(req.user.id, dto.currentPassword, dto.newEmail);
   }
+
+  @Post('me/change-password')
+  async changeMyPassword(@Request() req, @Body() dto: ChangePasswordDto) {
+    return this.usersService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
+  }
+
+  @Post('me/change-email')
+  async changeMyEmail(@Request() req, @Body() dto: ChangeEmailDto) {
+    return this.usersService.changeEmail(req.user.id, dto.currentPassword, dto.newEmail);
+  }
 }
