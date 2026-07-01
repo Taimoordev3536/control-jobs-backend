@@ -6,6 +6,7 @@ import { Employer } from '../../employers/entities/employer.entity';
 import { InvoiceService } from './invoice.service';
 import { RatePlanService } from './rate-plan.service';
 import { AutofacturaService } from './autofactura.service';
+import { BankOperationsService } from './bank-operations.service';
 
 /**
  * Scheduled jobs for the billing system.
@@ -24,6 +25,7 @@ export class BillingCronService {
     private readonly invoices: InvoiceService,
     private readonly ratePlans: RatePlanService,
     private readonly autofacturas: AutofacturaService,
+    private readonly bankOps: BankOperationsService,
   ) {}
 
   private get enabled(): boolean {
@@ -186,6 +188,35 @@ export class BillingCronService {
       this.logger.log(`✅ Monthly commissions job done — created ${created} autofactura(s)`);
     } catch (err: any) {
       this.logger.error(`Monthly commissions job failed: ${err.message}`, err.stack);
+    }
+  }
+
+  /**
+   * Month-end automatic close for "Bancos": creates the bank tasks (cobros/pagos)
+   * the Admin and each Employer must order with their bank for the previous month.
+   * Runs at 00:20 on day 1, after invoices (00:01) and commissions (00:10).
+   */
+  @Cron('20 0 1 * *', { name: 'billing-monthly-bank-tasks' })
+  async generateMonthlyBankTasks() {
+    if (!this.enabled) return;
+    this.logger.log('🔄 Monthly bank-tasks job starting');
+    const now = new Date();
+    const periodStart = toIsoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+    const periodEnd = toIsoDate(new Date(now.getFullYear(), now.getMonth(), 0));
+    try {
+      // Admin: collections (Facturas) + partner payments (Comisiones).
+      await this.bankOps.closeMonth({ kind: 'all' } as any, 'FACTURAS', periodStart, periodEnd, 'AUTO');
+      await this.bankOps.closeMonth({ kind: 'all' } as any, 'COMISIONES', periodStart, periodEnd, 'AUTO');
+      // Each employer: client collections (Facturas) + worker payments (Salarios).
+      const employers = await this.employerRepo.find();
+      for (const e of employers) {
+        const scope = { kind: 'employer', employerId: e.id } as any;
+        await this.bankOps.closeMonth(scope, 'FACTURAS', periodStart, periodEnd, 'AUTO');
+        await this.bankOps.closeMonth(scope, 'SALARIOS', periodStart, periodEnd, 'AUTO');
+      }
+      this.logger.log('✅ Monthly bank-tasks job done');
+    } catch (err: any) {
+      this.logger.error(`Monthly bank-tasks job failed: ${err.message}`, err.stack);
     }
   }
 }

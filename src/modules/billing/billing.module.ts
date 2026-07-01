@@ -9,6 +9,11 @@ import { InvoiceLine } from './entities/invoice-line.entity';
 import { Autofactura } from './entities/autofactura.entity';
 import { AutofacturaLine } from './entities/autofactura-line.entity';
 import { AutofacturaSource } from './entities/autofactura-source.entity';
+import { BankOperation } from './entities/bank-operation.entity';
+import { ClientInvoice } from '../clients/entities/client-invoice.entity';
+import { SalaryReceipt } from '../workers/entities/salary-receipt.entity';
+import { BankOperationsService } from './services/bank-operations.service';
+import { BankOperationsController } from './controllers/bank-operations.controller';
 import { EmployerSubType } from '../employers/entities/employer-sub-type.entity';
 import { EmployerType } from '../employers/entities/employer-type.entity';
 import { Employer } from '../employers/entities/employer.entity';
@@ -50,6 +55,9 @@ import { AlertsModule } from '../realtime/alerts.module';
       Autofactura,
       AutofacturaLine,
       AutofacturaSource,
+      BankOperation,
+      ClientInvoice,
+      SalaryReceipt,
       EmployerSubType,
       EmployerType,
       Employer,
@@ -69,7 +77,7 @@ import { AlertsModule } from '../realtime/alerts.module';
     CommonModule,
     AlertsModule,
   ],
-  controllers: [RatePlansController, BillingController, InvoicesController, AutofacturasController],
+  controllers: [RatePlansController, BillingController, InvoicesController, AutofacturasController, BankOperationsController],
   providers: [
     PricingService,
     RatePlanService,
@@ -78,6 +86,7 @@ import { AlertsModule } from '../realtime/alerts.module';
     InvoicePdfService,
     AutofacturaService,
     AutofacturaPdfService,
+    BankOperationsService,
     BillingCronService,
     BillingAccessService,
   ],
