@@ -90,6 +90,15 @@ user: User;
   @Column({ name: 'logo_url', length: 500, nullable: true })
   logoUrl: string | null;
 
+  @Column({ name: 'salary_fixed_amount', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  salaryFixedAmount: string | null;
+
+  @Column({ name: 'salary_hours_label', length: 120, default: 'Horas de trabajo' })
+  salaryHoursLabel: string;
+
+  @Column({ name: 'salary_hour_rate', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  salaryHourRate: string | null;
+
   // Relations
   @OneToMany(() => ScanLog, scanLog => scanLog.worker)
   scanLogs: ScanLog[];

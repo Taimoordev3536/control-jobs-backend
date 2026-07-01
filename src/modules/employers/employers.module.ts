@@ -4,6 +4,7 @@ import { EmployersController } from './employers.controller';
 import { EmployersService } from './employers.service';
 import { PendingEmployersService } from './services/pending-employers.service';
 import { Employer } from './entities/employer.entity';
+import { EmployerHoliday } from './entities/employer-holiday.entity';
 import { EmployerType } from './entities/employer-type.entity';
 import { EmployerSubType } from './entities/employer-sub-type.entity';
 import { EmployerClient } from './entities/employer-client.entity';
@@ -24,6 +25,7 @@ import { PaymentMethodsModule } from '../payment-methods/payment-methods.module'
   imports: [
     TypeOrmModule.forFeature([
       Employer,
+      EmployerHoliday,
       EmployerType,
       EmployerSubType,
       EmployerClient,

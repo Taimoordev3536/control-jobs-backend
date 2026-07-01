@@ -15,9 +15,12 @@ import { EmployerWorker } from '../../modules/employers/entities/employer-worker
 import { EmployerUser } from '../../modules/employers/entities/employer-user.entity';
 import { Client } from '../clients/entities/client.entity';
 import { Job } from '../job/entities/job.entity';
+import { WorkerDocument } from './entities/worker-document.entity';
+import { SalaryReceipt } from './entities/salary-receipt.entity';
 import { In } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { EmailService } from '../../common/services/email.service';
+import { renderLineDocPdf, DocLine } from '../../common/helpers/line-doc-pdf';
 
 @Injectable()
 export class WorkersService {
@@ -41,7 +44,322 @@ export class WorkersService {
     private clientRepo: Repository<Client>,
     @InjectRepository(Job)
     private jobRepo: Repository<Job>,
+    @InjectRepository(WorkerDocument)
+    private workerDocumentRepo: Repository<WorkerDocument>,
+    @InjectRepository(SalaryReceipt)
+    private salaryReceiptRepo: Repository<SalaryReceipt>,
+    @InjectRepository(EmployerUser)
+    private employerUserRepo: Repository<EmployerUser>,
   ) {}
+
+  private readonly attachmentMimeTypes = [
+    'application/pdf',
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ];
+
+  private mapWorkerDocument(f: WorkerDocument) {
+    return {
+      id: f.publicId,
+      fileName: f.fileName,
+      url: f.url,
+      mimeType: f.mimeType,
+      sizeBytes: f.sizeBytes != null ? Number(f.sizeBytes) : null,
+      description: f.description,
+      createdAt: f.createdAt,
+    };
+  }
+
+  async listWorkerDocuments(workerId: number) {
+    const files = await this.workerDocumentRepo.find({
+      where: { workerId },
+      order: { createdAt: 'DESC' },
+    });
+    return files.map((f) => this.mapWorkerDocument(f));
+  }
+
+  async uploadWorkerDocument(
+    workerId: number,
+    file: Express.Multer.File,
+    description: string | undefined,
+    userId: number | undefined,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    if (!this.attachmentMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException('Unsupported file type (PDF, image or Office document only)');
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      throw new BadRequestException('File must be 15 MB or smaller');
+    }
+    const worker = await this.workerRepo.findOne({ where: { id: workerId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+
+    const uploaded = await this.cloudinaryService.uploadAttachment(
+      file.buffer,
+      'controljobs/worker-documents',
+      'auto',
+    );
+    const rec = this.workerDocumentRepo.create({
+      workerId,
+      fileName: file.originalname,
+      url: uploaded.secureUrl,
+      storagePublicId: uploaded.publicId,
+      resourceType: uploaded.resourceType || 'raw',
+      mimeType: file.mimetype,
+      sizeBytes: file.size,
+      description: description || null,
+      uploadedByUserId: userId || null,
+    });
+    const saved = await this.workerDocumentRepo.save(rec);
+    return this.mapWorkerDocument(saved);
+  }
+
+  async deleteWorkerDocument(workerId: number, filePublicId: string): Promise<void> {
+    const f = await this.workerDocumentRepo.findOne({
+      where: { publicId: filePublicId, workerId },
+    });
+    if (!f) throw new NotFoundException('Document not found');
+    await this.workerDocumentRepo.delete(f.id);
+    try {
+      await this.cloudinaryService.deleteAsset(f.storagePublicId, f.resourceType);
+    } catch {
+      /* asset cleanup is best-effort */
+    }
+  }
+
+  private num(v: string | number | null | undefined): number {
+    if (v == null) return 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  async getWorkerSalaryConfig(workerId: number) {
+    const worker = await this.workerRepo.findOne({ where: { id: workerId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+    return {
+      fixedAmount: worker.salaryFixedAmount != null ? Number(worker.salaryFixedAmount) : null,
+      hoursLabel: worker.salaryHoursLabel || 'Horas de trabajo',
+      hourRate: worker.salaryHourRate != null ? Number(worker.salaryHourRate) : null,
+    };
+  }
+
+  async updateWorkerSalaryConfig(
+    workerId: number,
+    dto: { fixedAmount?: number | null; hoursLabel?: string; hourRate?: number | null },
+  ) {
+    const worker = await this.workerRepo.findOne({ where: { id: workerId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+    if (dto.fixedAmount !== undefined) worker.salaryFixedAmount = dto.fixedAmount == null ? null : String(dto.fixedAmount);
+    if (dto.hoursLabel !== undefined) worker.salaryHoursLabel = dto.hoursLabel || 'Horas de trabajo';
+    if (dto.hourRate !== undefined) worker.salaryHourRate = dto.hourRate == null ? null : String(dto.hourRate);
+    await this.workerRepo.save(worker);
+    return this.getWorkerSalaryConfig(workerId);
+  }
+
+  private async workedHoursForWorker(workerId: number, periodStart: string, periodEnd: string): Promise<number> {
+    const row = await this.dataSource.query(
+      `SELECT COALESCE(SUM(total_work_minutes), 0) AS minutes
+         FROM work_sessions
+        WHERE worker_id = $1
+          AND check_in_time >= $2
+          AND check_in_time < ($3::date + INTERVAL '1 day')`,
+      [workerId, periodStart, periodEnd],
+    );
+    const minutes = Number(row?.[0]?.minutes || 0);
+    return Math.round((minutes / 60) * 100) / 100;
+  }
+
+  private async employerIdForWorker(workerId: number): Promise<number | null> {
+    const link = await this.employerWorkerRepo.findOne({
+      where: { worker: { id: workerId } },
+      relations: ['employer'],
+    });
+    return link?.employer?.id || null;
+  }
+
+  private mapSalaryReceipt(r: SalaryReceipt) {
+    return {
+      id: r.publicId,
+      receiptNumber: r.receiptNumber,
+      issueDate: r.issueDate,
+      periodStart: r.periodStart,
+      periodEnd: r.periodEnd,
+      fixedLabel: r.fixedLabel,
+      fixedAmount: r.fixedAmount != null ? Number(r.fixedAmount) : null,
+      hoursLabel: r.hoursLabel,
+      hoursQty: this.num(r.hoursQty),
+      hourRate: this.num(r.hourRate),
+      hoursAmount: this.num(r.hoursAmount),
+      total: this.num(r.total),
+      status: r.status,
+      notes: r.notes,
+      createdAt: r.createdAt,
+    };
+  }
+
+  async getWorkerSalaryPreview(workerId: number, periodStart: string, periodEnd: string) {
+    if (!periodStart || !periodEnd) throw new BadRequestException('periodStart and periodEnd are required');
+    const cfg = await this.getWorkerSalaryConfig(workerId);
+    const link = await this.employerWorkerRepo.findOne({ where: { worker: { id: workerId } }, relations: ['employer'] });
+    const def: any = link?.employer || {};
+    const dn = (v: any) => (v != null ? Number(v) : null);
+    const hoursQty = await this.workedHoursForWorker(workerId, periodStart, periodEnd);
+    const hourRate = cfg.hourRate ?? dn(def.defSalaryHourRate) ?? 0;
+    const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
+    const fixedAmount = cfg.fixedAmount ?? dn(def.defSalaryFixedAmount);
+    const total = Math.round(((fixedAmount ?? 0) + hoursAmount) * 100) / 100;
+    return {
+      periodStart,
+      periodEnd,
+      fixedLabel: 'Gastos fijos',
+      fixedAmount,
+      hoursLabel: cfg.hoursLabel,
+      hoursQty,
+      hourRate,
+      hoursAmount,
+      total,
+    };
+  }
+
+  async listSalaryReceipts(workerId: number) {
+    const receipts = await this.salaryReceiptRepo.find({
+      where: { workerId },
+      order: { issueDate: 'DESC', createdAt: 'DESC' },
+    });
+    return receipts.map((r) => this.mapSalaryReceipt(r));
+  }
+
+  private async nextReceiptNumber(employerId: number): Promise<string> {
+    const year = new Date().getFullYear();
+    const count = await this.salaryReceiptRepo
+      .createQueryBuilder('r')
+      .where('r.employer_id = :employerId', { employerId })
+      .andWhere(`EXTRACT(YEAR FROM r.issue_date) = :year`, { year })
+      .getCount();
+    return `RS-${year}-${String(count + 1).padStart(4, '0')}`;
+  }
+
+  async createSalaryReceipt(
+    workerId: number,
+    body: {
+      receiptNumber?: string;
+      issueDate?: string;
+      periodStart?: string;
+      periodEnd?: string;
+      fixedAmount?: number | null;
+      hoursLabel?: string;
+      hoursQty?: number;
+      hourRate?: number;
+      status?: string;
+      notes?: string;
+    },
+    userId: number | undefined,
+  ) {
+    const worker = await this.workerRepo.findOne({ where: { id: workerId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+    if (!body.periodStart || !body.periodEnd) throw new BadRequestException('A pay period is required');
+
+    const employerId = await this.employerIdForWorker(workerId);
+    if (!employerId) throw new BadRequestException('This worker is not linked to an employer');
+
+    const fixedAmount = body.fixedAmount != null ? Number(body.fixedAmount) : null;
+    const hoursQty = this.num(body.hoursQty);
+    const hourRate = this.num(body.hourRate);
+    const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
+    const total = Math.round(((fixedAmount ?? 0) + hoursAmount) * 100) / 100;
+
+    const rec = this.salaryReceiptRepo.create({
+      workerId,
+      employerId,
+      receiptNumber: body.receiptNumber?.trim() || (await this.nextReceiptNumber(employerId)),
+      issueDate: body.issueDate || new Date().toISOString().slice(0, 10),
+      periodStart: body.periodStart,
+      periodEnd: body.periodEnd,
+      fixedLabel: 'Gastos fijos',
+      fixedAmount: fixedAmount == null ? null : String(fixedAmount),
+      hoursLabel: body.hoursLabel || worker.salaryHoursLabel || 'Horas de trabajo',
+      hoursQty: String(hoursQty),
+      hourRate: String(hourRate),
+      hoursAmount: String(hoursAmount),
+      total: String(total),
+      status: body.status || 'pending',
+      notes: body.notes || null,
+      uploadedByUserId: userId || null,
+    });
+    const saved = await this.salaryReceiptRepo.save(rec);
+    return this.mapSalaryReceipt(saved);
+  }
+
+  async deleteSalaryReceipt(workerId: number, receiptPublicId: string): Promise<void> {
+    const r = await this.salaryReceiptRepo.findOne({
+      where: { publicId: receiptPublicId, workerId },
+    });
+    if (!r) throw new NotFoundException('Salary receipt not found');
+    await this.salaryReceiptRepo.delete(r.id);
+  }
+
+  async listAllSalaryReceiptsForEmployer(userId: number) {
+    const link = await this.employerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['employer'] });
+    const employerId = link?.employer?.id;
+    if (!employerId) throw new NotFoundException('Employer not found for this user');
+    const receipts = await this.salaryReceiptRepo.find({
+      where: { employerId },
+      relations: ['worker', 'worker.user'],
+      order: { issueDate: 'DESC', createdAt: 'DESC' },
+    });
+    return receipts.map((r) => ({ ...this.mapSalaryReceipt(r), workerName: r.worker?.user?.name || r.worker?.code || null }));
+  }
+
+  async listMySalaries(userId: number) {
+    const workerId = await this.findWorkerIdByUserId(userId);
+    return this.listSalaryReceipts(workerId);
+  }
+
+  async listMyDocuments(userId: number) {
+    const workerId = await this.findWorkerIdByUserId(userId);
+    return this.listWorkerDocuments(workerId);
+  }
+
+  async renderSalaryReceiptPdf(workerId: number, receiptPublicId: string): Promise<{ buffer: Buffer; fileName: string }> {
+    const r = await this.salaryReceiptRepo.findOne({ where: { publicId: receiptPublicId, workerId } });
+    if (!r) throw new NotFoundException('Salary receipt not found');
+    const worker: any = await this.workerRepo.findOne({ where: { id: workerId }, relations: ['user'] });
+    const employer: any = await this.employerRepo.findOne({ where: { id: r.employerId } });
+
+    const lines: DocLine[] = [];
+    if (r.fixedAmount != null) {
+      lines.push({ description: r.fixedLabel, quantity: 1, unitPrice: Number(r.fixedAmount), amount: Number(r.fixedAmount) });
+    }
+    lines.push({ description: r.hoursLabel, quantity: Number(r.hoursQty), unitPrice: Number(r.hourRate), amount: Number(r.hoursAmount) });
+
+    const buffer = await renderLineDocPdf({
+      docType: 'RECIBO DE SALARIO',
+      number: r.receiptNumber,
+      issueDate: r.issueDate,
+      periodStart: r.periodStart,
+      periodEnd: r.periodEnd,
+      issuer: {
+        name: employer?.name || 'Empleador',
+        taxId: employer?.taxId || null,
+        lines: [employer?.address, [employer?.postalCode, employer?.city].filter(Boolean).join(' '), employer?.province],
+      },
+      recipient: {
+        name: worker?.user?.name || worker?.code || 'Trabajador',
+        taxId: worker?.nif || null,
+        lines: [worker?.address, [worker?.postalCode, worker?.city].filter(Boolean).join(' '), worker?.province],
+      },
+      recipientHeading: 'Trabajador',
+      lines,
+      total: Number(r.total),
+      showVat: false,
+    });
+    return { buffer, fileName: `${r.receiptNumber}.pdf` };
+  }
 
   // Workers connected to a client *via the jobs they are assigned to*. This
   // is read-only / informational — the same worker may legitimately appear

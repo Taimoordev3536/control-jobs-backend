@@ -5,6 +5,7 @@ import { LessThanOrEqual, Repository } from 'typeorm';
 import { Employer } from '../../employers/entities/employer.entity';
 import { InvoiceService } from './invoice.service';
 import { RatePlanService } from './rate-plan.service';
+import { AutofacturaService } from './autofactura.service';
 
 /**
  * Scheduled jobs for the billing system.
@@ -22,6 +23,7 @@ export class BillingCronService {
     private readonly employerRepo: Repository<Employer>,
     private readonly invoices: InvoiceService,
     private readonly ratePlans: RatePlanService,
+    private readonly autofacturas: AutofacturaService,
   ) {}
 
   private get enabled(): boolean {
@@ -164,6 +166,27 @@ export class BillingCronService {
       }
     }
     this.logger.log('✅ Monthly billing job done');
+  }
+
+  /**
+   * Monthly commission self-invoices (autofacturas): runs at 00:10 on day 1,
+   * shortly after employer invoices are generated (00:01), so the commission
+   * base — the employers' invoices for the previous month — already exists.
+   * One autofactura per partner that has commissionable invoices in the period.
+   */
+  @Cron('10 0 1 * *', { name: 'billing-monthly-commissions' })
+  async generateMonthlyCommissions() {
+    if (!this.enabled) return;
+    this.logger.log('🔄 Monthly commissions job starting');
+    const now = new Date();
+    const periodStart = toIsoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+    const periodEnd = toIsoDate(new Date(now.getFullYear(), now.getMonth(), 0));
+    try {
+      const created = await this.autofacturas.generateMonthlyForAllPartners(periodStart, periodEnd);
+      this.logger.log(`✅ Monthly commissions job done — created ${created} autofactura(s)`);
+    } catch (err: any) {
+      this.logger.error(`Monthly commissions job failed: ${err.message}`, err.stack);
+    }
   }
 }
 

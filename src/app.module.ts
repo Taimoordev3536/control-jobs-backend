@@ -14,6 +14,7 @@ import { WorkCentersModule } from './modules/work-centers/work-centers.module';
 import { config } from 'dotenv';
 import { AlertsModule } from './modules/realtime/alerts.module';
 import { ManualAttendanceModule } from './modules/manual-attendance/manual-attendance.module';
+import { AbsencesModule } from './modules/absences/absences.module';
 import { SubUsersModule } from './modules/sub-users/sub-users.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { EmployerInvitationsModule } from './modules/employer-invitations/employer-invitations.module';
@@ -27,6 +28,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { AdminConfigModule } from './modules/admin/admin-config.module';
 import { FaqModule } from './modules/faq/faq.module';
 import { ImportModule } from './modules/import/import.module';
+import { BackupModule } from './modules/backup/backup.module';
 
 config();
 
@@ -67,6 +69,7 @@ config();
     WorkCentersModule,
     AlertsModule,
     ManualAttendanceModule,
+    AbsencesModule,
     SubUsersModule,
     BillingModule,
     EmployerInvitationsModule,
@@ -80,6 +83,7 @@ config();
     AdminConfigModule,
     FaqModule,
     ImportModule,
+    BackupModule,
   ],
 })
 export class AppModule { }

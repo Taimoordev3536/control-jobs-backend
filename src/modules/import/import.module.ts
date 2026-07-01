@@ -6,6 +6,7 @@ import { EmployerType } from '../employers/entities/employer-type.entity';
 import { EmployerSubType } from '../employers/entities/employer-sub-type.entity';
 import { Partner } from '../partners/entities/partner.entity';
 import { PartnerTier } from '../partners/entities/partner-type.entity';
+import { Gender } from '../../shared/entities/gender.entity';
 import { Role } from '../users/entities/role.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
@@ -25,6 +26,7 @@ import { ImportService } from './import.service';
       EmployerSubType,
       Partner,
       PartnerTier,
+      Gender,
       Role,
       User,
     ]),

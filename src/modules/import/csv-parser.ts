@@ -65,6 +65,13 @@ export function parseCsv(content: string): Record<string, string>[] {
   return out;
 }
 
+export function decodeCsvBuffer(buf: Buffer): string {
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf.toString('utf8');
+  const utf8 = buf.toString('utf8');
+  if (utf8.includes('�')) return buf.toString('latin1'); // Excel ANSI/Windows-1252 fallback
+  return utf8;
+}
+
 export function normalizeKey(s: string): string {
   return (s || '')
     .toLowerCase()

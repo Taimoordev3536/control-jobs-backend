@@ -15,6 +15,10 @@ export class QueryManualAttendanceRequestsDto {
   workerId?: string;
 
   @IsOptional()
+  @IsUUID()
+  clientId?: string;
+
+  @IsOptional()
   @IsDateString()
   startDate?: string;
 

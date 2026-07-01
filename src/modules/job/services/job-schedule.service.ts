@@ -213,6 +213,21 @@ export class JobScheduleService {
     return jobs.filter(job => this.isJobScheduledForDate(job, targetDate));
   }
 
+  /**
+   * Shifts that apply to a job on a given date (active season + matching weekday).
+   * Empty for FREE jobs or dates with no shift.
+   */
+  getShiftsForDate(job: Job, targetDate: Date): Shift[] {
+    if (!this.isJobScheduledForDate(job, targetDate)) return [];
+    if (job.scheduleType === ScheduleType.FREE) return [];
+    const schedule = this.getActiveSeasonalSchedule(job, targetDate);
+    if (!schedule?.shifts) return [];
+    const weekday = this.getWeekdayFromDate(targetDate);
+    return schedule.shifts.filter((s) =>
+      this.isWeekdayInShiftRange(weekday, s.startWeekday, s.endWeekday),
+    );
+  }
+
   getScheduledMinutesForDate(job: Job, targetDate: Date): number {
     if (!this.isJobScheduledForDate(job, targetDate)) return 0;
     if (job.scheduleType === ScheduleType.FREE) return 0;

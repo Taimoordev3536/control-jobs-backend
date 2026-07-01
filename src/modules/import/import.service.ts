@@ -10,6 +10,7 @@ import { EmployerType } from '../employers/entities/employer-type.entity';
 import { EmployerSubType } from '../employers/entities/employer-sub-type.entity';
 import { Partner } from '../partners/entities/partner.entity';
 import { PartnerTier } from '../partners/entities/partner-type.entity';
+import { Gender } from '../../shared/entities/gender.entity';
 import { Role } from '../users/entities/role.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
@@ -17,7 +18,7 @@ import { ClientsService } from '../clients/clients.service';
 import { WorkersService } from '../workers/workers.service';
 import { PartnersService } from '../partners/partners.service';
 import { EmployersService } from '../employers/employers.service';
-import { parseCsv, normalizeKey } from './csv-parser';
+import { parseCsv, normalizeKey, decodeCsvBuffer } from './csv-parser';
 
 export type ImportType = 'users' | 'partners' | 'employers' | 'clients' | 'workers';
 
@@ -41,6 +42,7 @@ export class ImportService {
     @InjectRepository(EmployerSubType) private readonly employerSubTypeRepo: Repository<EmployerSubType>,
     @InjectRepository(Partner) private readonly partnerRepo: Repository<Partner>,
     @InjectRepository(PartnerTier) private readonly partnerTierRepo: Repository<PartnerTier>,
+    @InjectRepository(Gender) private readonly genderRepo: Repository<Gender>,
     @InjectRepository(Role) private readonly roleRepo: Repository<Role>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly usersService: UsersService,
@@ -56,7 +58,7 @@ export class ImportService {
     }
     if (!file?.buffer) throw new BadRequestException('No CSV file uploaded');
 
-    const rows = parseCsv(file.buffer.toString('utf8'));
+    const rows = parseCsv(decodeCsvBuffer(file.buffer));
     if (rows.length === 0) throw new BadRequestException('The CSV file has no data rows');
 
     if (type === 'users') return this.importUsers(rows);
@@ -204,11 +206,15 @@ export class ImportService {
             type,
             taxId: this.field(row, ['NIF', 'taxId', 'cif']),
             code: this.field(row, ['Código', 'Codigo', 'code']) || `IMP-C-${Date.now()}-${rowNo}`,
+            responsible: this.field(row, ['Responsable', 'responsible']),
             address: this.field(row, ['Dirección', 'Direccion', 'address']),
+            floorDoor: this.field(row, ['Piso&Portal', 'Piso y Portal', 'floorDoor']),
             city: this.field(row, ['Localidad', 'city']),
             province: this.field(row, ['Provincia', 'province']),
+            country: this.field(row, ['País', 'Pais', 'country']),
             postalCode: this.field(row, ['Código Postal', 'Codigo Postal', 'postalCode', 'cp']),
-            mobile: this.field(row, ['Teléfono', 'Telefono', 'mobile', 'phone']),
+            mobile: this.field(row, ['Móvil', 'Movil', 'mobile']),
+            landline: this.field(row, ['Teléfono', 'Telefono', 'landline']),
             active: this.parseBool(this.field(row, ['Activo', 'active'])),
             accessAccountStatus: 'postpone',
           },
@@ -234,12 +240,15 @@ export class ImportService {
     for (let i = 0; i < rows.length; i++) {
       const rowNo = i + 1;
       const row = rows[i];
-      const name = this.field(row, ['Nombre', 'name']);
-      const lastName = this.field(row, ['Apellidos', 'lastName']);
+      const nombre = this.field(row, ['Nombre', 'name']);
+      const apellidos = this.field(row, ['Apellidos', 'lastName']);
+      const combined = this.field(row, ['Apellidos&Nombre', 'Apellidos y Nombre', 'Apellidos Nombre', 'fullName']);
+      const name = nombre || combined;
+      const lastName = nombre ? apellidos : '';
       const email = this.field(row, ['Email', 'correo']).toLowerCase();
       const employerText = this.field(row, ['Empleador', 'employer']);
 
-      if (!name) { this.fail(result, rowNo, 'Nombre is required', email); continue; }
+      if (!name) { this.fail(result, rowNo, 'Nombre / Apellidos&Nombre is required', email); continue; }
       if (!this.isValidEmail(email)) { this.fail(result, rowNo, 'A valid Email is required', email); continue; }
       if (!employerText) { this.fail(result, rowNo, 'Empleador is required', email); continue; }
 
@@ -258,6 +267,7 @@ export class ImportService {
       }
       if (!owner) { this.fail(result, rowNo, `Employer "${employerText}" has no account to attach to`, email); continue; }
 
+      const genderId = await this.resolveGenderId(this.field(row, ['Sexo', 'gender', 'sex']))
       try {
         await this.workersService.createByEmployer(
           {
@@ -267,11 +277,16 @@ export class ImportService {
             code: this.field(row, ['Código', 'Codigo', 'code']) || `IMP-W-${Date.now()}-${rowNo}`,
             nif: this.field(row, ['NIF', 'nif']),
             occupation: this.field(row, ['Ocupación', 'Ocupacion', 'occupation']),
+            gender: genderId != null ? String(genderId) : undefined,
+            birthday: this.parseDate(this.field(row, ['F. Nacimiento', 'Fecha Nacimiento', 'F Nacimiento', 'birthday'])),
             address: this.field(row, ['Dirección', 'Direccion', 'address']),
+            floorDoor: this.field(row, ['Piso&Portal', 'Piso y Portal', 'floorDoor']),
             city: this.field(row, ['Localidad', 'city']),
             province: this.field(row, ['Provincia', 'province']),
+            country: this.field(row, ['País', 'Pais', 'country']),
             postalCode: this.field(row, ['Código Postal', 'Codigo Postal', 'postalCode', 'cp']),
-            mobile: this.field(row, ['Teléfono', 'Telefono', 'mobile', 'phone']),
+            mobile: this.field(row, ['Móvil', 'Movil', 'mobile']),
+            landline: this.field(row, ['Teléfono', 'Telefono', 'landline']),
             active: this.parseBool(this.field(row, ['Activo', 'active'])),
             accessAccountStatus: 'postpone',
           } as any,
@@ -304,39 +319,53 @@ export class ImportService {
     return map[normalizeKey(text)] ?? null;
   }
 
-  private resolvePaymentMethod(text: string): string {
-    const map: Record<string, string> = {
-      transfer: 'Transfer', transferencia: 'Transfer',
-      directdebit: 'Direct Debit', domiciliacion: 'Direct Debit', recibo: 'Direct Debit',
-      card: 'Card', tarjeta: 'Card',
-      paypal: 'PayPal',
-      others: 'Others', otros: 'Others',
-    };
-    return map[normalizeKey(text)] ?? 'Transfer';
-  }
-
-  private async resolveEmployerTypeId(text: string): Promise<number | null> {
+  private employerTypeName(text: string): string | null {
     const map: Record<string, string> = {
       home: 'HOME', hogar: 'HOME', domicilio: 'HOME',
       static: 'STATIC', estatico: 'STATIC', fijo: 'STATIC',
       remote: 'REMOTE', remoto: 'REMOTE',
     };
-    const enumVal = map[normalizeKey(text)];
-    if (!enumVal) return null;
-    const row = await this.employerTypeRepo.findOne({ where: { name: enumVal as any } });
-    return row?.id ?? null;
+    return map[normalizeKey(text)] ?? null;
   }
 
-  private async resolveEmployerSubTypeId(text: string): Promise<number | null> {
+  private employerSubTypeName(text: string): string | null {
     const map: Record<string, string> = {
-      individual: 'INDIVIDUAL', particular: 'INDIVIDUAL',
-      freelancer: 'FREELANCER', freelance: 'FREELANCER', autonomo: 'FREELANCER',
-      company: 'COMPANY', empresa: 'COMPANY', compania: 'COMPANY',
+      individual: 'INDIVIDUAL', particular: 'INDIVIDUAL', particulares: 'INDIVIDUAL',
+      freelancer: 'FREELANCER', freelance: 'FREELANCER', autonomo: 'FREELANCER', autonomos: 'FREELANCER',
+      company: 'COMPANY', empresa: 'COMPANY', empresas: 'COMPANY', compania: 'COMPANY',
+    };
+    return map[normalizeKey(text)] ?? null;
+  }
+
+  // Clase (subtype) ↔ Tarifa (type) coherence the client requires:
+  // Particular→Home, Empresa/Autónomo→Static|Remote.
+  private isCoherentEmployer(sub: string, type: string): boolean {
+    if (sub === 'INDIVIDUAL') return type === 'HOME';
+    return type === 'STATIC' || type === 'REMOTE';
+  }
+
+  private async resolveGenderId(text: string): Promise<number | null> {
+    if (!text) return null;
+    const map: Record<string, string> = {
+      male: 'MALE', hombre: 'MALE', h: 'MALE', masculino: 'MALE', m: 'MALE', man: 'MALE',
+      female: 'FEMALE', mujer: 'FEMALE', f: 'FEMALE', femenino: 'FEMALE', woman: 'FEMALE',
     };
     const enumVal = map[normalizeKey(text)];
     if (!enumVal) return null;
-    const row = await this.employerSubTypeRepo.findOne({ where: { name: enumVal as any } });
+    const row = await this.genderRepo.findOne({ where: { name: enumVal as any } });
     return row?.id ?? null;
+  }
+
+  private parseDate(v: string): string | undefined {
+    if (!v) return undefined;
+    const s = v.trim();
+    const dmy = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
+    if (dmy) {
+      const [, d, m, y] = dmy;
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    return undefined;
   }
 
   private async importPartners(rows: Record<string, string>[]): Promise<ImportResult> {
@@ -352,20 +381,20 @@ export class ImportService {
       const name = this.field(row, ['Nombre', 'name']);
       const email = this.field(row, ['Email', 'correo']).toLowerCase();
       const address = this.field(row, ['Dirección', 'Direccion', 'address']);
-      const mobile = this.field(row, ['Teléfono', 'Telefono', 'Móvil', 'Movil', 'mobile', 'phone']);
+      const mobile = this.field(row, ['Móvil', 'Movil', 'mobile']);
       const nif = this.field(row, ['NIF', 'nif', 'cif']);
       const typeOfPartner = this.resolvePartnerType(this.field(row, ['Tipo', 'type']));
-      const tierText = this.field(row, ['Tarifa', 'Tier', 'Nivel', 'tier']);
 
       if (!name) { this.fail(result, rowNo, 'Nombre is required', email); continue; }
       if (!this.isValidEmail(email)) { this.fail(result, rowNo, 'A valid Email is required', email); continue; }
       if (!address) { this.fail(result, rowNo, 'Dirección is required', email); continue; }
-      if (!mobile) { this.fail(result, rowNo, 'Teléfono is required', email); continue; }
+      if (!mobile) { this.fail(result, rowNo, 'Móvil is required', email); continue; }
       if (!nif) { this.fail(result, rowNo, 'NIF is required', email); continue; }
       if (!typeOfPartner) { this.fail(result, rowNo, 'Unknown/empty Tipo (Gold/Silver/Bronze/Affiliate)', email); continue; }
 
-      const tier = tierText ? tierByKey.get(normalizeKey(tierText)) : (tiers.length === 1 ? tiers[0] : undefined);
-      if (!tier) { this.fail(result, rowNo, tierText ? `Unknown Tarifa "${tierText}"` : 'Tarifa is required', email); continue; }
+      // Tier is derived from Tipo (Gold/Silver/Bronze/Affiliate match a partner tier of the same name).
+      const tier = tierByKey.get(normalizeKey(typeOfPartner)) ?? (tiers.length === 1 ? tiers[0] : undefined);
+      if (!tier) { this.fail(result, rowNo, `No partner tier matching Tipo "${typeOfPartner}"`, email); continue; }
 
       if (seen.has(email) || (await this.userRepo.findOne({ where: { email } }))) {
         this.skip(result, rowNo, 'Email already exists', email);
@@ -378,17 +407,19 @@ export class ImportService {
           email,
           address,
           mobile,
+          landline: this.field(row, ['Teléfono', 'Telefono', 'landline']),
           nif,
+          responsible: this.field(row, ['Responsable', 'responsible']),
           typeOfPartner,
           partnerTierId: tier.id,
           commission: this.parseNum(this.field(row, ['Comisión', 'Comision', 'commission'])),
           retention: this.parseNum(this.field(row, ['Retención', 'Retencion', 'retention'])),
-          paymentMethod: this.resolvePaymentMethod(this.field(row, ['Método de pago', 'Metodo de pago', 'paymentMethod'])),
+          paymentMethod: 'Transfer',
+          floorDoor: this.field(row, ['Piso&Puerta', 'Piso y Puerta', 'floorDoor']),
+          postalCode: this.field(row, ['Código Postal', 'Codigo Postal', 'postalCode', 'cp']),
           city: this.field(row, ['Localidad', 'city']),
           province: this.field(row, ['Provincia', 'province']),
-          postalCode: this.field(row, ['Código Postal', 'Codigo Postal', 'postalCode', 'cp']),
-          accountIban: this.field(row, ['IBAN', 'iban']),
-          bicSwift: this.field(row, ['SWIFT', 'BIC', 'swiftBic']),
+          country: this.field(row, ['País', 'Pais', 'country']),
           accessAccountStatus: 'postpone',
         } as any);
         seen.add(email);
@@ -420,8 +451,8 @@ export class ImportService {
       const address = this.field(row, ['Dirección', 'Direccion', 'address']);
       const email = this.field(row, ['Email', 'correo']).toLowerCase();
       const partnerText = this.field(row, ['Partner', 'Socio', 'partner']);
-      const typeText = this.field(row, ['Tipo', 'type']);
-      const subTypeText = this.field(row, ['SubTipo', 'Subtipo', 'Tipo de empresa', 'subType']);
+      const subTypeName = this.employerSubTypeName(this.field(row, ['Clase', 'class', 'SubTipo', 'subType']));
+      const typeName = this.employerTypeName(this.field(row, ['Tarifa', 'Tipo', 'type']));
 
       if (!name) { this.fail(result, rowNo, 'Nombre is required', email); continue; }
       if (!taxId) { this.fail(result, rowNo, 'NIF is required', email); continue; }
@@ -432,10 +463,24 @@ export class ImportService {
       const partner = partnerByKey.get(normalizeKey(partnerText));
       if (!partner) { this.fail(result, rowNo, `Partner "${partnerText}" not found`, email); continue; }
 
-      const typeId = await this.resolveEmployerTypeId(typeText);
-      if (!typeId) { this.fail(result, rowNo, 'Unknown/empty Tipo (HOME/STATIC/REMOTE)', email); continue; }
-      const subTypeId = await this.resolveEmployerSubTypeId(subTypeText);
-      if (!subTypeId) { this.fail(result, rowNo, 'Unknown/empty SubTipo (INDIVIDUAL/FREELANCER/COMPANY)', email); continue; }
+      if (!subTypeName) { this.fail(result, rowNo, 'Unknown/empty Clase (Particular/Empresa/Autónomo)', email); continue; }
+      if (!typeName) { this.fail(result, rowNo, 'Unknown/empty Tarifa (Home/Static/Remote)', email); continue; }
+      if (!this.isCoherentEmployer(subTypeName, typeName)) {
+        this.fail(result, rowNo, 'Incoherent Clase/Tarifa: Particular→Home, Empresa/Autónomo→Static or Remote', email);
+        continue;
+      }
+
+      const discount = this.parseNum(this.field(row, ['%Dto', '% Dto', 'Dto', 'discount']));
+      if (discount > Number(partner.commission ?? 0)) {
+        this.fail(result, rowNo, `%Dto (${discount}) exceeds partner commission (${partner.commission})`, email);
+        continue;
+      }
+
+      const [typeRow, subTypeRow] = await Promise.all([
+        this.employerTypeRepo.findOne({ where: { name: typeName as any } }),
+        this.employerSubTypeRepo.findOne({ where: { name: subTypeName as any } }),
+      ]);
+      if (!typeRow || !subTypeRow) { this.fail(result, rowNo, 'Employer type/sub-type not configured in system', email); continue; }
 
       if (seen.has(email) || (await this.userRepo.findOne({ where: { email } }))) {
         this.skip(result, rowNo, 'Email already exists', email);
@@ -448,17 +493,19 @@ export class ImportService {
           taxId,
           address,
           partnerId: partner.publicId,
-          typeId,
-          subTypeId,
-          user: {
-            email,
-            firstName: this.field(row, ['Nombre Contacto', 'firstName']),
-            lastName: this.field(row, ['Apellidos Contacto', 'lastName']),
-          },
+          typeId: typeRow.id,
+          subTypeId: subTypeRow.id,
+          discount,
+          probationPeriod: this.field(row, ['Prueba', 'probationPeriod']),
+          user: { email },
+          floorDoor: this.field(row, ['Piso&Portal', 'Piso y Portal', 'floorDoor']),
+          postalCode: this.field(row, ['Código Postal', 'Codigo Postal', 'postalCode', 'cp']),
           city: this.field(row, ['Localidad', 'city']),
           province: this.field(row, ['Provincia', 'province']),
-          postalCode: this.field(row, ['Código Postal', 'Codigo Postal', 'postalCode', 'cp']),
-          mobile: this.field(row, ['Teléfono', 'Telefono', 'mobile', 'phone']),
+          country: this.field(row, ['País', 'Pais', 'country']),
+          mobile: this.field(row, ['Móvil', 'Movil', 'mobile']),
+          landline: this.field(row, ['Teléfono', 'Telefono', 'landline']),
+          phone: this.field(row, ['Teléfono', 'Telefono', 'phone']),
           responsible: this.field(row, ['Responsable', 'responsible']),
           accessAccountStatus: 'postpone',
         } as any);

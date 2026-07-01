@@ -281,6 +281,10 @@ export class PartnersService {
         throw new NotFoundException(`Partner with ID ${id} not found`);
       }
 
+      const systemPartnerId = Number(process.env.SYSTEM_PARTNER_ID) || null;
+      (partner as any).isSystem =
+        systemPartnerId != null && partner.id === systemPartnerId;
+
       return {
         message: 'Partner retrieved successfully',
         data: partner,

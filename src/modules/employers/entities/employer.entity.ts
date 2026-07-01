@@ -275,6 +275,27 @@ export class Employer {
     | 'SUSPENDED'
     | 'CANCELLED';
 
+  @Column({ name: 'def_billing_fixed_amount', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  defBillingFixedAmount: string | null;
+
+  @Column({ name: 'def_billing_hours_label', length: 120, default: 'Horas de servicio' })
+  defBillingHoursLabel: string;
+
+  @Column({ name: 'def_billing_hour_rate', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  defBillingHourRate: string | null;
+
+  @Column({ name: 'def_billing_vat_pct', type: 'numeric', precision: 5, scale: 2, default: 21 })
+  defBillingVatPct: string;
+
+  @Column({ name: 'def_salary_fixed_amount', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  defSalaryFixedAmount: string | null;
+
+  @Column({ name: 'def_salary_hours_label', length: 120, default: 'Horas de trabajo' })
+  defSalaryHoursLabel: string;
+
+  @Column({ name: 'def_salary_hour_rate', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  defSalaryHourRate: string | null;
+
   @OneToMany(() => EmployerUser, (employerUser) => employerUser.employer)
   employerUsers: EmployerUser[];
 

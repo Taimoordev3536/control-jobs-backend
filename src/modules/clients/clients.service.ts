@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Client } from './entities/client.entity';
 import { ClientFile } from './entities/client-file.entity';
+import { ClientInvoice } from './entities/client-invoice.entity';
 import { ClientUser } from './entities/client-user.entity';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AssignClientUserDto } from './dto/assign-client-user.dto';
@@ -16,6 +17,7 @@ import * as bcrypt from 'bcryptjs';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
+import { renderLineDocPdf, DocLine } from '../../common/helpers/line-doc-pdf';
 import { In } from 'typeorm';
 
 @Injectable()
@@ -25,6 +27,8 @@ export class ClientsService {
     private clientRepo: Repository<Client>,
     @InjectRepository(ClientFile)
     private clientFileRepo: Repository<ClientFile>,
+    @InjectRepository(ClientInvoice)
+    private clientInvoiceRepo: Repository<ClientInvoice>,
     @InjectRepository(ClientUser)
     private clientUserRepo: Repository<ClientUser>,
     @InjectRepository(User)
@@ -35,6 +39,8 @@ export class ClientsService {
     private employerRepo: Repository<Employer>,
     @InjectRepository(EmployerClient)
     private employerClientRepo: Repository<EmployerClient>,
+    @InjectRepository(EmployerUser)
+    private employerUserRepo: Repository<EmployerUser>,
     private dataSource: DataSource,
   private readonly emailService: EmailService,
     private readonly cloudinaryService: CloudinaryService,
@@ -169,6 +175,255 @@ export class ClientsService {
     } catch {
       /* asset cleanup is best-effort */
     }
+  }
+
+  private num(v: string | number | null | undefined): number {
+    if (v == null) return 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  async getClientBillingConfig(clientId: number) {
+    const client = await this.clientRepo.findOne({ where: { id: clientId } });
+    if (!client) throw new NotFoundException('Client not found');
+    return {
+      fixedAmount: client.billingFixedAmount != null ? Number(client.billingFixedAmount) : null,
+      hoursLabel: client.billingHoursLabel || 'Horas de servicio',
+      hourRate: client.billingHourRate != null ? Number(client.billingHourRate) : null,
+      vatPct: client.billingVatPct != null ? Number(client.billingVatPct) : 21,
+    };
+  }
+
+  async updateClientBillingConfig(
+    clientId: number,
+    dto: { fixedAmount?: number | null; hoursLabel?: string; hourRate?: number | null; vatPct?: number },
+  ) {
+    const client = await this.clientRepo.findOne({ where: { id: clientId } });
+    if (!client) throw new NotFoundException('Client not found');
+    if (dto.fixedAmount !== undefined) client.billingFixedAmount = dto.fixedAmount == null ? null : String(dto.fixedAmount);
+    if (dto.hoursLabel !== undefined) client.billingHoursLabel = dto.hoursLabel || 'Horas de servicio';
+    if (dto.hourRate !== undefined) client.billingHourRate = dto.hourRate == null ? null : String(dto.hourRate);
+    if (dto.vatPct !== undefined) client.billingVatPct = String(dto.vatPct ?? 0);
+    await this.clientRepo.save(client);
+    return this.getClientBillingConfig(clientId);
+  }
+
+  private async workedHoursForClient(clientId: number, periodStart: string, periodEnd: string): Promise<number> {
+    const row = await this.dataSource.query(
+      `SELECT COALESCE(SUM(ws.total_work_minutes), 0) AS minutes
+         FROM work_sessions ws
+         JOIN job j ON j.id = ws.job_id
+        WHERE j."clientId" = $1
+          AND ws.check_in_time >= $2
+          AND ws.check_in_time < ($3::date + INTERVAL '1 day')`,
+      [clientId, periodStart, periodEnd],
+    );
+    const minutes = Number(row?.[0]?.minutes || 0);
+    return Math.round((minutes / 60) * 100) / 100;
+  }
+
+  private mapInvoice(i: ClientInvoice) {
+    return {
+      id: i.publicId,
+      invoiceNumber: i.invoiceNumber,
+      issueDate: i.issueDate,
+      dueDate: i.dueDate,
+      periodStart: i.periodStart,
+      periodEnd: i.periodEnd,
+      fixedLabel: i.fixedLabel,
+      fixedAmount: i.fixedAmount != null ? Number(i.fixedAmount) : null,
+      hoursLabel: i.hoursLabel,
+      hoursQty: this.num(i.hoursQty),
+      hourRate: this.num(i.hourRate),
+      hoursAmount: this.num(i.hoursAmount),
+      subtotal: this.num(i.subtotal),
+      vatPct: this.num(i.vatPct),
+      vatAmount: this.num(i.vatAmount),
+      total: this.num(i.total),
+      status: i.status,
+      notes: i.notes,
+      createdAt: i.createdAt,
+    };
+  }
+
+  async previewClientInvoice(clientId: number, periodStart: string, periodEnd: string) {
+    if (!periodStart || !periodEnd) throw new BadRequestException('periodStart and periodEnd are required');
+    const cfg = await this.getClientBillingConfig(clientId);
+    const link = await this.employerClientRepo.findOne({ where: { client: { id: clientId } }, relations: ['employer'] });
+    const def: any = link?.employer || {};
+    const dn = (v: any) => (v != null ? Number(v) : null);
+    const hoursQty = await this.workedHoursForClient(clientId, periodStart, periodEnd);
+    const hourRate = cfg.hourRate ?? dn(def.defBillingHourRate) ?? 0;
+    const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
+    const fixedAmount = cfg.fixedAmount ?? dn(def.defBillingFixedAmount);
+    const subtotal = Math.round(((fixedAmount ?? 0) + hoursAmount) * 100) / 100;
+    const vatPct = cfg.vatPct ?? dn(def.defBillingVatPct) ?? 0;
+    const vatAmount = Math.round(subtotal * (vatPct / 100) * 100) / 100;
+    const total = Math.round((subtotal + vatAmount) * 100) / 100;
+    return {
+      periodStart,
+      periodEnd,
+      fixedLabel: 'Gastos fijos',
+      fixedAmount,
+      hoursLabel: cfg.hoursLabel,
+      hoursQty,
+      hourRate,
+      hoursAmount,
+      subtotal,
+      vatPct,
+      vatAmount,
+      total,
+    };
+  }
+
+  async listClientInvoices(clientId: number) {
+    const invoices = await this.clientInvoiceRepo.find({
+      where: { clientId },
+      order: { issueDate: 'DESC', createdAt: 'DESC' },
+    });
+    return invoices.map((i) => this.mapInvoice(i));
+  }
+
+  private async nextInvoiceNumber(employerId: number, prefix: string): Promise<string> {
+    const year = new Date().getFullYear();
+    const count = await this.clientInvoiceRepo
+      .createQueryBuilder('i')
+      .where('i.employer_id = :employerId', { employerId })
+      .andWhere(`EXTRACT(YEAR FROM i.issue_date) = :year`, { year })
+      .getCount();
+    return `${prefix}-${year}-${String(count + 1).padStart(4, '0')}`;
+  }
+
+  async createClientInvoice(
+    clientId: number,
+    body: {
+      invoiceNumber?: string;
+      issueDate?: string;
+      dueDate?: string;
+      periodStart?: string;
+      periodEnd?: string;
+      fixedAmount?: number | null;
+      hoursLabel?: string;
+      hoursQty?: number;
+      hourRate?: number;
+      vatPct?: number;
+      status?: string;
+      notes?: string;
+    },
+    userId: number | undefined,
+  ) {
+    const client = await this.clientRepo.findOne({ where: { id: clientId } });
+    if (!client) throw new NotFoundException('Client not found');
+    if (!body.periodStart || !body.periodEnd) throw new BadRequestException('A billing period is required');
+
+    const link = await this.employerClientRepo.findOne({
+      where: { client: { id: clientId } },
+      relations: ['employer'],
+    });
+    const employerId = link?.employer?.id;
+    if (!employerId) throw new BadRequestException('This client is not linked to an employer');
+
+    const fixedAmount = body.fixedAmount != null ? Number(body.fixedAmount) : null;
+    const hoursQty = this.num(body.hoursQty);
+    const hourRate = this.num(body.hourRate);
+    const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
+    const subtotal = Math.round(((fixedAmount ?? 0) + hoursAmount) * 100) / 100;
+    const vatPct = this.num(body.vatPct);
+    const vatAmount = Math.round(subtotal * (vatPct / 100) * 100) / 100;
+    const total = Math.round((subtotal + vatAmount) * 100) / 100;
+
+    const rec = this.clientInvoiceRepo.create({
+      clientId,
+      employerId,
+      invoiceNumber: body.invoiceNumber?.trim() || (await this.nextInvoiceNumber(employerId, 'F')),
+      issueDate: body.issueDate || new Date().toISOString().slice(0, 10),
+      dueDate: body.dueDate || null,
+      periodStart: body.periodStart,
+      periodEnd: body.periodEnd,
+      fixedLabel: 'Gastos fijos',
+      fixedAmount: fixedAmount == null ? null : String(fixedAmount),
+      hoursLabel: body.hoursLabel || client.billingHoursLabel || 'Horas de servicio',
+      hoursQty: String(hoursQty),
+      hourRate: String(hourRate),
+      hoursAmount: String(hoursAmount),
+      subtotal: String(subtotal),
+      vatPct: String(vatPct),
+      vatAmount: String(vatAmount),
+      total: String(total),
+      status: body.status || 'pending',
+      notes: body.notes || null,
+      uploadedByUserId: userId || null,
+    });
+    const saved = await this.clientInvoiceRepo.save(rec);
+    return this.mapInvoice(saved);
+  }
+
+  async deleteClientInvoice(clientId: number, invoicePublicId: string): Promise<void> {
+    const i = await this.clientInvoiceRepo.findOne({
+      where: { publicId: invoicePublicId, clientId },
+    });
+    if (!i) throw new NotFoundException('Invoice not found');
+    await this.clientInvoiceRepo.delete(i.id);
+  }
+
+  private async employerIdForUser(userId: number): Promise<number> {
+    const link = await this.employerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['employer'] });
+    if (!link?.employer?.id) throw new NotFoundException('Employer not found for this user');
+    return link.employer.id;
+  }
+
+  async listAllClientInvoicesForEmployer(userId: number) {
+    const employerId = await this.employerIdForUser(userId);
+    const invoices = await this.clientInvoiceRepo.find({
+      where: { employerId },
+      relations: ['client'],
+      order: { issueDate: 'DESC', createdAt: 'DESC' },
+    });
+    return invoices.map((i) => ({ ...this.mapInvoice(i), clientName: i.client?.name || null }));
+  }
+
+  async listMyClientInvoices(userId: number) {
+    const clientId = await this.findClientIdByUserId(userId);
+    return this.listClientInvoices(clientId);
+  }
+
+  async renderClientInvoicePdf(clientId: number, invoicePublicId: string): Promise<{ buffer: Buffer; fileName: string }> {
+    const inv = await this.clientInvoiceRepo.findOne({ where: { publicId: invoicePublicId, clientId } });
+    if (!inv) throw new NotFoundException('Invoice not found');
+    const client = await this.clientRepo.findOne({ where: { id: clientId } });
+    const employer: any = await this.employerRepo.findOne({ where: { id: inv.employerId } });
+
+    const lines: DocLine[] = [];
+    if (inv.fixedAmount != null) {
+      lines.push({ description: inv.fixedLabel, quantity: 1, unitPrice: Number(inv.fixedAmount), amount: Number(inv.fixedAmount) });
+    }
+    lines.push({ description: inv.hoursLabel, quantity: Number(inv.hoursQty), unitPrice: Number(inv.hourRate), amount: Number(inv.hoursAmount) });
+
+    const buffer = await renderLineDocPdf({
+      docType: 'FACTURA',
+      number: inv.invoiceNumber,
+      issueDate: inv.issueDate,
+      periodStart: inv.periodStart,
+      periodEnd: inv.periodEnd,
+      issuer: {
+        name: employer?.name || 'Empleador',
+        taxId: employer?.taxId || null,
+        lines: [employer?.address, [employer?.postalCode, employer?.city].filter(Boolean).join(' '), employer?.province],
+      },
+      recipient: {
+        name: client?.name || 'Cliente',
+        taxId: client?.taxId || null,
+        lines: [client?.address, [client?.postalCode, client?.city].filter(Boolean).join(' '), client?.province],
+      },
+      recipientHeading: 'Cliente',
+      lines,
+      subtotal: Number(inv.subtotal),
+      vatPct: Number(inv.vatPct),
+      vatAmount: Number(inv.vatAmount),
+      total: Number(inv.total),
+      showVat: true,
+    });
+    return { buffer, fileName: `${inv.invoiceNumber}.pdf` };
   }
 
   async clearLogo(id: number): Promise<BaseResponse<null>> {

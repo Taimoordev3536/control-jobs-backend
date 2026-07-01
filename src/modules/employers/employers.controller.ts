@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Body,
   Patch,
   Param,
@@ -73,6 +74,36 @@ export class EmployersController {
   async updateMe(@Request() req, @Body() updateEmployerDto: UpdateEmployerDto) {
     const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
     return this.employersService.update(employerId, updateEmployerDto);
+  }
+
+  @Get('me/tariffs')
+  @UseGuards(JwtAuthGuard)
+  async getMyTariffs(@Request() req) {
+    return this.employersService.getMyTariffs(req.user.id);
+  }
+
+  @Put('me/tariffs')
+  @UseGuards(JwtAuthGuard)
+  async updateMyTariffs(@Request() req, @Body() body: { billing?: any; salary?: any }) {
+    return this.employersService.updateMyTariffs(req.user.id, body);
+  }
+
+  @Get('me/holidays')
+  @UseGuards(JwtAuthGuard)
+  async getMyHolidays(@Request() req) {
+    return this.employersService.getMyHolidays(req.user.id);
+  }
+
+  @Post('me/holidays')
+  @UseGuards(JwtAuthGuard)
+  async addMyHoliday(@Request() req, @Body() body: { date?: string; name?: string }) {
+    return this.employersService.addMyHoliday(req.user.id, body);
+  }
+
+  @Delete('me/holidays/:hid')
+  @UseGuards(JwtAuthGuard)
+  async deleteMyHoliday(@Request() req, @Param('hid', ParseUUIDPipe) hid: string) {
+    return this.employersService.deleteMyHoliday(req.user.id, hid);
   }
 
   // Admin/Partner: Get employer by UUID

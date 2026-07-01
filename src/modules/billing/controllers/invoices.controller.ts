@@ -40,7 +40,7 @@ export class InvoicesController {
     @Query('pageSize') pageSize?: string,
   ) {
     const scope = await this.access.resolveScope(req.user);
-    return this.invoices.list({
+    const res: any = await this.invoices.list({
       employerId: employerId ? Number(employerId) : undefined,
       partnerId: partnerId ? Number(partnerId) : undefined,
       status: status as InvoiceStatus | undefined,
@@ -48,6 +48,12 @@ export class InvoicesController {
       pageSize: pageSize ? Number(pageSize) : undefined,
       scope: scope as any,
     });
+    // The response interceptor only keeps `.data`, so surface the tier flag on
+    // each row (Bronze/Affiliate partners must not see employer identity).
+    if (this.access.hidesEmployer(scope) && Array.isArray(res?.data)) {
+      res.data = res.data.map((i: any) => ({ ...i, employerId: null, hideEmployer: true }));
+    }
+    return res;
   }
 
   @Get('form-context')
@@ -176,13 +182,19 @@ export class InvoicesController {
       (invoice as any).invoiceNumber,
     );
 
+    const hideEmployer = this.access.hidesEmployer(scope);
+    if (hideEmployer && context?.client) {
+      // Blank the employer identity for Bronze/Affiliate partners.
+      context.client = { name: null, taxId: null, address: null, floorDoor: null, postalCode: null, city: null, province: null, country: null } as any;
+    }
+
     if (level === 'page1Only') {
-      // Strip the page-2 snapshots so Bronze partners can't see worksite
+      // Strip the page-2 snapshots so Bronze/Affiliate partners can't see worksite
       // / worker names. The financial breakdown stays.
       const { workCenters: _wc, workers: _wk, ...page1 } = invoice as any;
-      return { data: { ...page1, ...context, accessLevel: 'page1Only', isLastInvoice } };
+      return { data: { ...page1, ...context, accessLevel: 'page1Only', hideEmployer, isLastInvoice } };
     }
-    return { data: { ...invoice, ...context, accessLevel: 'full', isLastInvoice } };
+    return { data: { ...invoice, ...context, accessLevel: 'full', hideEmployer, isLastInvoice } };
   }
 
   @Post(':publicId/payment-method')
@@ -273,14 +285,15 @@ export class InvoicesController {
     if (!ids.length) throw new BadRequestException('publicIds is required');
 
     const scope = await this.access.resolveScope(req.user);
-    const items: Array<{ publicId: string; level: 'full' | 'page1Only' }> = [];
+    const hideEmployer = this.access.hidesEmployer(scope);
+    const items: Array<{ publicId: string; level: 'full' | 'page1Only'; hideEmployer?: boolean }> = [];
     for (const publicId of ids) {
       const invoice = await this.invoices.findByPublicId(publicId);
       const level = await this.access.assertInvoiceDetailAccess(
         scope,
         invoice.employerId,
       );
-      items.push({ publicId, level });
+      items.push({ publicId, level, hideEmployer });
     }
 
     const buffer = await this.pdf.renderMany(items);
@@ -324,7 +337,7 @@ export class InvoicesController {
       scope,
       invoice.employerId,
     );
-    const buffer = await this.pdf.render(publicId, { level });
+    const buffer = await this.pdf.render(publicId, { level, hideEmployer: this.access.hidesEmployer(scope) });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',

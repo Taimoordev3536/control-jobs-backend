@@ -6,13 +6,16 @@ import {
   Body,
   Put,
   Delete,
+  Query,
   ParseUUIDPipe,
   UseGuards,
   Req,
+  Res,
   UseInterceptors,
   UploadedFile,
   Request,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ClientsService } from './clients.service';
 import { UpdateClientDto } from './dto/update-client.dto';
@@ -64,6 +67,29 @@ export class ClientsController {
   @Roles(UserRole.Employer)
   async findClientsForAddJob(@Req() req) {
     return this.clientsService.findClientsForAddJob(req.user);
+  }
+
+  @Get('all/invoices')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async listAllInvoices(@Req() req) {
+    return this.clientsService.listAllClientInvoicesForEmployer(req.user.id);
+  }
+
+  @Get('me/invoices')
+  @UseGuards(JwtAuthGuard)
+  async listMyInvoices(@Req() req) {
+    return this.clientsService.listMyClientInvoices(req.user.id);
+  }
+
+  @Get('me/invoices/:invoiceId/pdf')
+  @UseGuards(JwtAuthGuard)
+  async myInvoicePdf(@Req() req, @Param('invoiceId', ParseUUIDPipe) invoiceId: string, @Res() res: Response) {
+    const clientId = await this.clientsService.findClientIdByUserId(req.user.id);
+    const { buffer, fileName } = await this.clientsService.renderClientInvoicePdf(clientId, invoiceId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.send(buffer);
   }
 
   // Client self-service: upload/remove company logo. Declared before :id so
@@ -160,6 +186,84 @@ export class ClientsController {
     const clientId = await this.clientsService.resolvePublicId(id);
     await this.clientsService.deleteClientFile(clientId, fileId);
     return { isSuccess: true };
+  }
+
+  @Get(':id/billing-config')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async getBillingConfig(@Param('id', ParseUUIDPipe) id: string) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    return this.clientsService.getClientBillingConfig(clientId);
+  }
+
+  @Put(':id/billing-config')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async updateBillingConfig(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { fixedAmount?: number | null; hoursLabel?: string; hourRate?: number | null; vatPct?: number },
+  ) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    return this.clientsService.updateClientBillingConfig(clientId, body);
+  }
+
+  @Get(':id/invoices')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async listInvoices(@Param('id', ParseUUIDPipe) id: string) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    return this.clientsService.listClientInvoices(clientId);
+  }
+
+  @Get(':id/invoices/preview')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async previewInvoice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('periodStart') periodStart: string,
+    @Query('periodEnd') periodEnd: string,
+  ) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    return this.clientsService.previewClientInvoice(clientId, periodStart, periodEnd);
+  }
+
+  @Post(':id/invoices')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async createInvoice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: any,
+    @Req() req,
+  ) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    return this.clientsService.createClientInvoice(clientId, body, req.user?.id);
+  }
+
+  @Delete(':id/invoices/:invoiceId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async deleteInvoice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
+  ) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    await this.clientsService.deleteClientInvoice(clientId, invoiceId);
+    return { isSuccess: true };
+  }
+
+  @Get(':id/invoices/:invoiceId/pdf')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async invoicePdf(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
+    @Res() res: Response,
+  ) {
+    const clientId = await this.clientsService.resolvePublicId(id);
+    const { buffer, fileName } = await this.clientsService.renderClientInvoicePdf(clientId, invoiceId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.send(buffer);
   }
 
   @Get(':id')

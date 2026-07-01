@@ -73,6 +73,49 @@ async getTasksTabData(@Req() req) {
   return { message: 'Success', data, isSuccess: true, statusCode: 200 };
 }
 
+@UseGuards(JwtAuthGuard)
+@Get('control')
+async getControl(@Req() req, @Query('date') date?: string) {
+  const data = await this.jobService.getControlForDate(req.user.id, date);
+  return { message: 'Success', data, isSuccess: true, statusCode: 200 };
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('incidents')
+async getIncidents(@Req() req, @Query('date') date?: string) {
+  const data = await this.jobService.getIncidentsForDate(req.user.id, date);
+  return { message: 'Success', data, isSuccess: true, statusCode: 200 };
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('occupation')
+async getOccupation(
+  @Req() req,
+  @Query('start') start: string,
+  @Query('end') end: string,
+  @Query('workerIds') workerIds?: string,
+) {
+  return this.jobService.getEmployerOccupation(req.user.id, start, end, workerIds);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('worker/my-calendar')
+async getWorkerCalendar(@Req() req, @Query('start') start: string, @Query('end') end: string) {
+  return this.jobService.getWorkerCalendar(req.user.id, start, end);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('planner/nearby')
+async getPlannerNearby(
+  @Req() req,
+  @Query('lat') lat: string,
+  @Query('lng') lng: string,
+  @Query('radius') radius?: string,
+  @Query('date') date?: string,
+) {
+  return this.jobService.getNearbyAvailableWorkers(req.user.id, Number(lat), Number(lng), Number(radius), date);
+}
+
 
   @Get('raw')
   async getAllJobsRaw() {
@@ -110,6 +153,16 @@ async getAllJobsForClientFromToken(@Req() req) {
 @Get('by-client/:publicId')
 async getAllJobsByClientPublicId(@Param('publicId', ParseUUIDPipe) publicId: string) {
   return this.jobService.getAllJobsByClientPublicId(publicId);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('client-calendar/:publicId')
+async getClientCalendar(
+  @Param('publicId', ParseUUIDPipe) publicId: string,
+  @Query('start') start: string,
+  @Query('end') end: string,
+) {
+  return this.jobService.getClientCalendar(publicId, start, end);
 }
 
 

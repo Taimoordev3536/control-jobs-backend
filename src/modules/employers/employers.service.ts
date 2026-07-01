@@ -9,6 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Employer } from './entities/employer.entity';
+import { EmployerHoliday } from './entities/employer-holiday.entity';
 import { CreateEmployerDto } from './dto/create-employer.dto';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import * as bcrypt from 'bcryptjs';
@@ -32,6 +33,8 @@ export class EmployersService {
   constructor(
     @InjectRepository(Employer)
     private readonly employerRepository: Repository<Employer>,
+    @InjectRepository(EmployerHoliday)
+    private readonly holidayRepository: Repository<EmployerHoliday>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(EmployerUser)
@@ -65,6 +68,65 @@ export class EmployersService {
       throw new NotFoundException('No employer is linked to the current user');
     }
     return link.employer.id;
+  }
+
+  async getMyTariffs(userId: number) {
+    const id = await this.findEmployerIdByUserId(userId);
+    const e = await this.employerRepository.findOne({ where: { id } });
+    if (!e) throw new NotFoundException('Employer not found');
+    const n = (v: any) => (v != null ? Number(v) : null);
+    return {
+      billing: { fixedAmount: n(e.defBillingFixedAmount), hoursLabel: e.defBillingHoursLabel || 'Horas de servicio', hourRate: n(e.defBillingHourRate), vatPct: n(e.defBillingVatPct) ?? 21 },
+      salary: { fixedAmount: n(e.defSalaryFixedAmount), hoursLabel: e.defSalaryHoursLabel || 'Horas de trabajo', hourRate: n(e.defSalaryHourRate) },
+    };
+  }
+
+  async updateMyTariffs(userId: number, body: { billing?: any; salary?: any }) {
+    const id = await this.findEmployerIdByUserId(userId);
+    const e = await this.employerRepository.findOne({ where: { id } });
+    if (!e) throw new NotFoundException('Employer not found');
+    const s = (v: any) => (v == null || v === '' ? null : String(v));
+    if (body.billing) {
+      if (body.billing.fixedAmount !== undefined) e.defBillingFixedAmount = s(body.billing.fixedAmount);
+      if (body.billing.hoursLabel !== undefined) e.defBillingHoursLabel = body.billing.hoursLabel || 'Horas de servicio';
+      if (body.billing.hourRate !== undefined) e.defBillingHourRate = s(body.billing.hourRate);
+      if (body.billing.vatPct !== undefined) e.defBillingVatPct = String(body.billing.vatPct ?? 0);
+    }
+    if (body.salary) {
+      if (body.salary.fixedAmount !== undefined) e.defSalaryFixedAmount = s(body.salary.fixedAmount);
+      if (body.salary.hoursLabel !== undefined) e.defSalaryHoursLabel = body.salary.hoursLabel || 'Horas de trabajo';
+      if (body.salary.hourRate !== undefined) e.defSalaryHourRate = s(body.salary.hourRate);
+    }
+    await this.employerRepository.save(e);
+    return this.getMyTariffs(userId);
+  }
+
+  async getMyHolidays(userId: number) {
+    const employerId = await this.findEmployerIdByUserId(userId);
+    const rows = await this.holidayRepository.find({ where: { employerId }, order: { date: 'ASC' } });
+    return rows.map((h) => ({ id: h.publicId, date: h.date, name: h.name }));
+  }
+
+  async addMyHoliday(userId: number, body: { date?: string; name?: string }) {
+    const employerId = await this.findEmployerIdByUserId(userId);
+    if (!body.date) throw new BadRequestException('date is required');
+    const existing = await this.holidayRepository.findOne({ where: { employerId, date: body.date } });
+    if (existing) {
+      existing.name = body.name || existing.name;
+      await this.holidayRepository.save(existing);
+      return { id: existing.publicId, date: existing.date, name: existing.name };
+    }
+    const rec = this.holidayRepository.create({ employerId, date: body.date, name: body.name || null });
+    const saved = await this.holidayRepository.save(rec);
+    return { id: saved.publicId, date: saved.date, name: saved.name };
+  }
+
+  async deleteMyHoliday(userId: number, publicId: string) {
+    const employerId = await this.findEmployerIdByUserId(userId);
+    const h = await this.holidayRepository.findOne({ where: { publicId, employerId } });
+    if (!h) throw new NotFoundException('Holiday not found');
+    await this.holidayRepository.delete(h.id);
+    return { isSuccess: true };
   }
 
   async setLogo(

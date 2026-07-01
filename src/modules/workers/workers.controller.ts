@@ -11,10 +11,12 @@ import {
   Query,
   UseGuards,
   Req,
+  Res,
   UseInterceptors,
   UploadedFile,
   Request,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { WorkersService } from './workers.service';
 import { CreateWorkerDto } from './dto/create-worker.dto';
@@ -32,6 +34,35 @@ export class WorkersController {
   @Post('/assign-user')
   assignUser(@Body() dto: AssignWorkerUserDto) {
     return this.workersService.assignUser(dto);
+  }
+
+  @Get('all/salaries')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async listAllSalaries(@Req() req) {
+    return this.workersService.listAllSalaryReceiptsForEmployer(req.user.id);
+  }
+
+  @Get('me/salaries')
+  @UseGuards(JwtAuthGuard)
+  async listMySalaries(@Req() req) {
+    return this.workersService.listMySalaries(req.user.id);
+  }
+
+  @Get('me/salaries/:salaryId/pdf')
+  @UseGuards(JwtAuthGuard)
+  async mySalaryPdf(@Req() req, @Param('salaryId', ParseUUIDPipe) salaryId: string, @Res() res: Response) {
+    const workerId = await this.workersService.findWorkerIdByUserId(req.user.id);
+    const { buffer, fileName } = await this.workersService.renderSalaryReceiptPdf(workerId, salaryId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.send(buffer);
+  }
+
+  @Get('me/documents')
+  @UseGuards(JwtAuthGuard)
+  async listMyDocuments(@Req() req) {
+    return this.workersService.listMyDocuments(req.user.id);
   }
 
   @Get(':id/users')
@@ -101,6 +132,118 @@ export class WorkersController {
   async deleteLogo(@Param('id', ParseUUIDPipe) id: string) {
     const numericId = await this.workersService.resolvePublicId(id);
     return this.workersService.clearLogo(numericId);
+  }
+
+  @Get(':id/documents')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async listDocuments(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.listWorkerDocuments(numericId);
+  }
+
+  @Post(':id/documents')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('description') description: string,
+    @Req() req,
+  ) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.uploadWorkerDocument(numericId, file, description, req.user?.id);
+  }
+
+  @Delete(':id/documents/:docId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async deleteDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('docId', ParseUUIDPipe) docId: string,
+  ) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    await this.workersService.deleteWorkerDocument(numericId, docId);
+    return { isSuccess: true };
+  }
+
+  @Get(':id/salary-config')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async getSalaryConfig(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.getWorkerSalaryConfig(numericId);
+  }
+
+  @Put(':id/salary-config')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async updateSalaryConfig(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { fixedAmount?: number | null; hoursLabel?: string; hourRate?: number | null },
+  ) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.updateWorkerSalaryConfig(numericId, body);
+  }
+
+  @Get(':id/salaries')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async listSalaries(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.listSalaryReceipts(numericId);
+  }
+
+  @Get(':id/salaries/preview')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async previewSalary(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('periodStart') periodStart: string,
+    @Query('periodEnd') periodEnd: string,
+  ) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.getWorkerSalaryPreview(numericId, periodStart, periodEnd);
+  }
+
+  @Post(':id/salaries')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async createSalary(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: any,
+    @Req() req,
+  ) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    return this.workersService.createSalaryReceipt(numericId, body, req.user?.id);
+  }
+
+  @Delete(':id/salaries/:salaryId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async deleteSalary(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('salaryId', ParseUUIDPipe) salaryId: string,
+  ) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    await this.workersService.deleteSalaryReceipt(numericId, salaryId);
+    return { isSuccess: true };
+  }
+
+  @Get(':id/salaries/:salaryId/pdf')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async salaryPdf(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('salaryId', ParseUUIDPipe) salaryId: string,
+    @Res() res: Response,
+  ) {
+    const numericId = await this.workersService.resolvePublicId(id);
+    const { buffer, fileName } = await this.workersService.renderSalaryReceiptPdf(numericId, salaryId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.send(buffer);
   }
 
   @Get('me')

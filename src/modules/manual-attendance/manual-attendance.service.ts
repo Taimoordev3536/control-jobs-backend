@@ -741,6 +741,9 @@ export class ManualAttendanceService {
       const workerId = await this.resolveWorkerPublicId(query.workerId);
       qb.andWhere('r.worker_id = :workerId', { workerId });
     }
+    if (query.clientId) {
+      qb.andWhere('client.publicId = :clientPublicId', { clientPublicId: query.clientId });
+    }
     if (query.startDate) {
       qb.andWhere('r.requested_date >= :startDate', { startDate: query.startDate });
     }

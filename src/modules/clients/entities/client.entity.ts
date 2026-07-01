@@ -97,4 +97,16 @@ export class Client {
 
   @Column({ name: 'logo_url', length: 500, nullable: true })
   logoUrl: string | null;
+
+  @Column({ name: 'billing_fixed_amount', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  billingFixedAmount: string | null;
+
+  @Column({ name: 'billing_hours_label', length: 120, default: 'Horas de servicio' })
+  billingHoursLabel: string;
+
+  @Column({ name: 'billing_hour_rate', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  billingHourRate: string | null;
+
+  @Column({ name: 'billing_vat_pct', type: 'numeric', precision: 5, scale: 2, default: 21 })
+  billingVatPct: string;
 }

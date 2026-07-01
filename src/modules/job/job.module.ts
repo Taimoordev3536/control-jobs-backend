@@ -16,6 +16,8 @@ import { WorkCenter } from '../work-centers/entities/work-center.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { Survey } from '../survey/entities/survey.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
+import { EmployerWorker } from '../employers/entities/employer-worker.entity';
+import { EmployerHoliday } from '../employers/entities/employer-holiday.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
 import { AlertsModule } from '../realtime/alerts.module';
@@ -41,6 +43,8 @@ import { JobScheduleService } from './services/job-schedule.service';
       Employer,
       Survey,
       EmployerUser,
+      EmployerWorker,
+      EmployerHoliday,
       WorkerUser,
       ClientUser,
     ]),

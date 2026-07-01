@@ -166,13 +166,23 @@ export class BillingAccessService {
     await this.assertCanViewEmployer(scope, employerId);
 
     if (scope.kind === 'partner') {
-      if (scope.partnerTier === 'Affiliate') {
-        throw new ForbiddenException(
-          'Affiliate partners cannot open invoice details',
-        );
+      // Per spec: Bronze AND Affiliate see only page 1 (no worksite/worker page 2)
+      // and with the employer's data hidden (see hidesEmployer).
+      if (scope.partnerTier === 'Bronze' || scope.partnerTier === 'Affiliate') {
+        return 'page1Only';
       }
-      if (scope.partnerTier === 'Bronze') return 'page1Only';
     }
     return 'full';
+  }
+
+  /**
+   * Whether the caller must NOT see the employer's identity/data on invoices and
+   * commission self-invoices. True for Bronze & Affiliate partners (spec p9).
+   */
+  hidesEmployer(scope: BillingScope): boolean {
+    return (
+      scope.kind === 'partner' &&
+      (scope.partnerTier === 'Bronze' || scope.partnerTier === 'Affiliate')
+    );
   }
 }

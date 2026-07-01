@@ -143,7 +143,7 @@ export class InvoicePdfService {
    */
   async render(
     publicId: string,
-    opts?: { level?: 'full' | 'page1Only' },
+    opts?: { level?: 'full' | 'page1Only'; hideEmployer?: boolean },
   ): Promise<Buffer> {
     const level = opts?.level ?? 'full';
     const invoice = await this.loadInvoice(publicId);
@@ -157,14 +157,14 @@ export class InvoicePdfService {
 
     const doc = new PDFDocument({ size: 'A4', margin: 48 });
     const done = this.collect(doc);
-    this.drawInvoice(doc, invoice, employer, config, company, level, extras);
+    this.drawInvoice(doc, invoice, employer, config, company, level, extras, !!opts?.hideEmployer);
     doc.end();
     return done;
   }
 
   /** Merge several invoices into one multi-page PDF (accounting ledger). */
   async renderMany(
-    items: Array<{ publicId: string; level?: 'full' | 'page1Only' }>,
+    items: Array<{ publicId: string; level?: 'full' | 'page1Only'; hideEmployer?: boolean }>,
   ): Promise<Buffer> {
     const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
     const company = await resolveCompanyIdentity(this.adminUserRepo);
@@ -180,7 +180,7 @@ export class InvoicePdfService {
       const extras = await this.buildExtras(invoice, employer);
       if (!first) doc.addPage();
       first = false;
-      this.drawInvoice(doc, invoice, employer, config, company, item.level ?? 'full', extras);
+      this.drawInvoice(doc, invoice, employer, config, company, item.level ?? 'full', extras, !!item.hideEmployer);
     }
     doc.end();
     return done;
@@ -344,6 +344,7 @@ export class InvoicePdfService {
     company: CompanyIdentity | null,
     level: 'full' | 'page1Only',
     extras?: { paymentText: string | null; tariffText: string | null },
+    hideEmployer = false,
   ): void {
     const MARGIN = 48;
     const PAGE_WIDTH = doc.page.width;
@@ -437,18 +438,20 @@ export class InvoicePdfService {
     rightY += 38;
 
     doc.fontSize(11).fillColor(TEXT_DARK).font('Helvetica-Bold');
-    doc.text(employer?.name || `Empleador #${invoice.employerId}`, RIGHT_X, rightY, {
+    doc.text(hideEmployer ? '—' : employer?.name || `Empleador #${invoice.employerId}`, RIGHT_X, rightY, {
       width: RIGHT_W,
     });
     rightY = doc.y + 3;
     doc.fontSize(9).fillColor(TEXT_DARK).font('Helvetica');
-    const clientLines = [
-      employer?.taxId ? `CIF/NIF: ${employer.taxId}` : null,
-      [employer?.address, employer?.floorDoor].filter(Boolean).join(' ') || null,
-      [employer?.postalCode, employer?.city].filter(Boolean).join(' ') || null,
-      employer?.province || null,
-      employer?.country || null,
-    ];
+    const clientLines = hideEmployer
+      ? []
+      : [
+          employer?.taxId ? `CIF/NIF: ${employer.taxId}` : null,
+          [employer?.address, employer?.floorDoor].filter(Boolean).join(' ') || null,
+          [employer?.postalCode, employer?.city].filter(Boolean).join(' ') || null,
+          employer?.province || null,
+          employer?.country || null,
+        ];
     for (const lineText of clientLines) {
       if (!lineText) continue;
       doc.text(lineText, RIGHT_X, rightY, { width: RIGHT_W });
