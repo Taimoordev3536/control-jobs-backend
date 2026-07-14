@@ -299,11 +299,36 @@ export class ChatService {
       };
     });
 
-    return result.sort((a, b) => {
-      const at = a.lastMessageAt?.getTime() || a.createdAt.getTime();
-      const bt = b.lastMessageAt?.getTime() || b.createdAt.getTime();
-      return bt - at;
-    });
+    // Collapse duplicate direct conversations with the same other participant
+    // (can arise from races / legacy data). Keep the one that has messages,
+    // otherwise the most recently active.
+    const collapsed: typeof result = [];
+    const byKey = new Map<string, number>();
+    const activity = (x: (typeof result)[number]) => x.lastMessageAt?.getTime() || x.createdAt.getTime();
+    for (const r of result) {
+      if (r.kind === ConversationKind.Group) {
+        collapsed.push(r);
+        continue;
+      }
+      const others = r.participants.filter(
+        (p) => !(p.type === scope.participantType && p.entityId === scope.participantEntityId),
+      );
+      const key = 'D|' + others.map((p) => `${p.type}:${p.entityId}`).sort().join(',');
+      const idx = byKey.get(key);
+      if (idx === undefined) {
+        byKey.set(key, collapsed.length);
+        collapsed.push(r);
+      } else {
+        const cur = collapsed[idx];
+        const rScore = r.lastMessage ? 1 : 0;
+        const curScore = cur.lastMessage ? 1 : 0;
+        if (rScore > curScore || (rScore === curScore && activity(r) > activity(cur))) {
+          collapsed[idx] = r;
+        }
+      }
+    }
+
+    return collapsed.sort((a, b) => activity(b) - activity(a));
   }
 
   async getMessages(requester: any, conversationPublicId: string, beforePublicId?: string, limit = MESSAGE_PAGE_SIZE) {

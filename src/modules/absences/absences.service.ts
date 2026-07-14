@@ -5,6 +5,7 @@ import { AbsenceRequest } from './entities/absence-request.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { EmployerWorker } from '../employers/entities/employer-worker.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
+import { AlertsService } from '../realtime/alerts.service';
 
 @Injectable()
 export class AbsencesService {
@@ -13,7 +14,12 @@ export class AbsencesService {
     @InjectRepository(EmployerUser) private employerUserRepo: Repository<EmployerUser>,
     @InjectRepository(EmployerWorker) private employerWorkerRepo: Repository<EmployerWorker>,
     @InjectRepository(WorkerUser) private workerUserRepo: Repository<WorkerUser>,
+    private readonly alerts: AlertsService,
   ) {}
+
+  private typeEs(type: string): string {
+    return ({ vacation: 'Vacaciones', permit: 'Permiso', sick: 'Baja', other: 'Otro' } as Record<string, string>)[type] || type;
+  }
 
   private map(a: AbsenceRequest) {
     return {
@@ -59,6 +65,23 @@ export class AbsencesService {
     a.reviewedByUserId = userId;
     a.reviewedAt = new Date();
     await this.absenceRepo.save(a);
+
+    // Notify the worker of the decision.
+    if (body.status !== 'pending') {
+      try {
+        const workerUserId = a.worker?.user?.id;
+        if (workerUserId) {
+          await this.alerts.createAndEmitForUser({
+            userId: workerUserId,
+            role: 'WORKER',
+            type: 'ABSENCE_REQUEST_REVIEWED',
+            message: `Tu solicitud de ausencia (${this.typeEs(a.type)}) fue ${a.status === 'approved' ? 'aprobada' : 'rechazada'}`,
+            meta: { absencePublicId: a.publicId, status: a.status },
+          });
+        }
+      } catch {}
+    }
+
     return this.map(a);
   }
 
@@ -67,7 +90,7 @@ export class AbsencesService {
     if (!body.startDate || !body.endDate) throw new BadRequestException('startDate and endDate are required');
     if (body.endDate < body.startDate) throw new BadRequestException('endDate must be on or after startDate');
 
-    const link = await this.employerWorkerRepo.findOne({ where: { worker: { id: workerId } }, relations: ['employer'] });
+    const link = await this.employerWorkerRepo.findOne({ where: { worker: { id: workerId } }, relations: ['employer', 'worker', 'worker.user'] });
     const employerId = link?.employer?.id;
     if (!employerId) throw new BadRequestException('This worker is not linked to an employer');
 
@@ -82,6 +105,23 @@ export class AbsencesService {
       requestedByUserId: userId,
     });
     const saved = await this.absenceRepo.save(rec);
+
+    // Notify the employer about the new absence request.
+    try {
+      const empLink = await this.employerUserRepo.findOne({ where: { employer: { id: employerId } }, relations: ['user'] });
+      const employerUserId = empLink?.user?.id;
+      if (employerUserId) {
+        const workerName = link?.worker?.user?.name || 'Un trabajador';
+        await this.alerts.createAndEmitForUser({
+          userId: employerUserId,
+          role: 'EMPLOYER',
+          type: 'ABSENCE_REQUEST_CREATED',
+          message: `Nueva solicitud de ausencia de ${workerName}: ${this.typeEs(saved.type)}`,
+          meta: { absencePublicId: saved.publicId, absenceType: saved.type },
+        });
+      }
+    } catch {}
+
     return this.map(saved);
   }
 

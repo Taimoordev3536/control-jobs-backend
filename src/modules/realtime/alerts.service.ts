@@ -17,7 +17,12 @@ export type AlertType =
   | 'SUPPORT_REQUEST'
   | 'SUPPORT_REPLY'
   | 'SUGGESTION'
-  | 'SURVEY_ALERT';
+  | 'SURVEY_ALERT'
+  | 'CLIENT_REQUEST_CREATED'
+  | 'CLIENT_REQUEST_REVIEWED'
+  | 'ABSENCE_REQUEST_CREATED'
+  | 'ABSENCE_REQUEST_REVIEWED'
+  | 'SURVEY_PUBLISHED';
 export interface AlertPayload {
   type: AlertType;
   jobId: number;

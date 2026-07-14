@@ -57,6 +57,12 @@ export class ClientRequest {
   @Column({ name: 'reviewer_notes', type: 'text', nullable: true })
   reviewerNotes: string | null;
 
+  @Column({ name: 'reviewed_by_user_id', nullable: true })
+  reviewedByUserId: number | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

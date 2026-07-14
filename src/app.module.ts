@@ -19,6 +19,7 @@ import { AlertsModule } from './modules/realtime/alerts.module';
 import { ManualAttendanceModule } from './modules/manual-attendance/manual-attendance.module';
 import { AbsencesModule } from './modules/absences/absences.module';
 import { ClientRequestsModule } from './modules/client-requests/client-requests.module';
+import { SurveysModule } from './modules/surveys/surveys.module';
 import { SubUsersModule } from './modules/sub-users/sub-users.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -84,6 +85,7 @@ config();
     ManualAttendanceModule,
     AbsencesModule,
     ClientRequestsModule,
+    SurveysModule,
     SubUsersModule,
     BillingModule,
     DashboardModule,
