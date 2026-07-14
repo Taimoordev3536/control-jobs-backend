@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThanOrEqual, Repository } from 'typeorm';
 import { Employer } from '../../employers/entities/employer.entity';
+import { BUSINESS_TZ, previousMonthRangeMadrid, madridDateKey } from '../../../common/helpers/business-time';
 import { InvoiceService } from './invoice.service';
 import { RatePlanService } from './rate-plan.service';
 import { AutofacturaService } from './autofactura.service';
@@ -16,7 +17,7 @@ import { BankOperationsService } from './bank-operations.service';
  * real financial records until the operator flips the flag.
  */
 @Injectable()
-export class BillingCronService {
+export class BillingCronService implements OnApplicationBootstrap {
   private readonly logger = new Logger(BillingCronService.name);
 
   constructor(
@@ -33,6 +34,44 @@ export class BillingCronService {
   }
 
   /**
+   * Test/recovery hook: when BILLING_RUN_ON_BOOT=true, run the full monthly
+   * close once on startup instead of waiting for day-1. Uses the exact cron
+   * methods, so it targets the previous calendar month (e.g. boot in July →
+   * bills June). Idempotent — safe to restart repeatedly. Remove the env var
+   * after testing.
+   */
+  async onApplicationBootstrap() {
+    if (String(process.env.BILLING_RUN_ON_BOOT || '').toLowerCase() !== 'true') return;
+    if (!this.enabled) {
+      this.logger.warn('BILLING_RUN_ON_BOOT set but BILLING_CRON_ENABLED is not true — skipping boot run.');
+      return;
+    }
+    this.logger.log('🚀 BILLING_RUN_ON_BOOT: running previous-month close now (invoices → commissions → bank tasks)');
+    try {
+      await this.generateMonthlyInvoices();
+      await this.generateMonthlyCommissions();
+      await this.generateMonthlyBankTasks();
+      this.logger.log('🚀 BILLING_RUN_ON_BOOT: done');
+    } catch (err: any) {
+      this.logger.error(`BILLING_RUN_ON_BOOT failed: ${err.message}`, err.stack);
+    }
+  }
+
+  /**
+   * Manual admin recovery: run the previous-month close now (invoices →
+   * commissions → bank tasks), regardless of the BILLING_CRON_ENABLED flag.
+   * Idempotent — only creates what's missing, never deletes/overwrites an
+   * already-issued record (keeps invoice numbering correlative).
+   */
+  async runMonthlyCloseNow() {
+    this.logger.log('🖐️ Manual monthly close requested (admin)');
+    await this.generateMonthlyInvoices(true);
+    await this.generateMonthlyCommissions(true);
+    await this.generateMonthlyBankTasks(true);
+    this.logger.log('🖐️ Manual monthly close done');
+  }
+
+  /**
    * Daily trial-end handler: every TRIAL employer whose trial has ended is
    * flipped to AWAITING_PAYMENT_METHOD. The system does NOT auto-issue an
    * invoice or auto-activate them — per spec §6, the employer must add a
@@ -42,7 +81,7 @@ export class BillingCronService {
    *
    * Runs at 04:00 every day.
    */
-  @Cron('0 3 * * *', { name: 'billing-promote-rate-plans' })
+  @Cron('0 3 * * *', { name: 'billing-promote-rate-plans', timeZone: BUSINESS_TZ })
   async promotePendingRatePlans() {
     if (!this.enabled) return;
     const promoted = await this.ratePlans.promoteDuePending();
@@ -51,7 +90,7 @@ export class BillingCronService {
     }
   }
 
-  @Cron('0 4 * * *', { name: 'billing-promote-trials' })
+  @Cron('0 4 * * *', { name: 'billing-promote-trials', timeZone: BUSINESS_TZ })
   async promoteTrialsToActive() {
     if (!this.enabled) return;
     this.logger.log('🔄 Trial-end job starting');
@@ -109,15 +148,13 @@ export class BillingCronService {
    * employer's reactivation date (`paymentMethodAddedAt`) falls inside
    * the previous month, we prorate from that date instead of from day 1.
    */
-  @Cron('1 0 1 * *', { name: 'billing-monthly-invoices' })
-  async generateMonthlyInvoices() {
-    if (!this.enabled) return;
+  @Cron('1 0 1 * *', { name: 'billing-monthly-invoices', timeZone: BUSINESS_TZ })
+  async generateMonthlyInvoices(force = false) {
+    if (!this.enabled && !force) return;
     this.logger.log('🔄 Monthly billing job starting');
 
-    const now = new Date();
-    // Invoices cover the previous month.
-    const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const periodEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+    // Invoices cover the previous month (anchored to Europe/Madrid).
+    const { startDate: periodStart, endDate: periodEnd, startIso: periodStartIso, endIso: periodEndIso } = previousMonthRangeMadrid();
 
     const employers = await this.employerRepo.find({
       where: { billingStatus: 'ACTIVE' },
@@ -129,7 +166,7 @@ export class BillingCronService {
         // Idempotency: skip if an invoice already exists for this period.
         const existing = await this.invoices.findByEmployer(employer.id);
         const alreadyExists = existing.find(
-          (i) => i.periodStart === toIsoDate(periodStart),
+          (i) => i.periodStart === periodStartIso,
         );
         if (alreadyExists) continue;
 
@@ -139,19 +176,22 @@ export class BillingCronService {
         let daysInMonth: number | undefined;
 
         // If the employer activated mid-period (paymentMethodAddedAt sits
-        // inside the previous month), prorate from that date so we only
-        // bill for days the service was actually active.
+        // inside the previous month), prorate from that date so we only bill
+        // for days the service was actually active. The reactivation day is
+        // taken as its Madrid civil day so a card added just after Madrid
+        // midnight isn't attributed to the previous (UTC) day.
         const reactivation = employer.paymentMethodAddedAt
-          ? new Date(employer.paymentMethodAddedAt)
+          ? madridDateKey(new Date(employer.paymentMethodAddedAt))
           : null;
         if (
           reactivation &&
-          reactivation > periodStart &&
-          reactivation <= periodEnd
+          reactivation > periodStartIso &&
+          reactivation <= periodEndIso
         ) {
-          invoiceStart = reactivation;
+          const reactDay = Number(reactivation.slice(8, 10));
+          invoiceStart = new Date(periodStart.getFullYear(), periodStart.getMonth(), reactDay);
           daysInMonth = periodEnd.getDate();
-          proratedDays = daysInMonth - reactivation.getDate() + 1;
+          proratedDays = daysInMonth - reactDay + 1;
         }
 
         await this.invoices.createForEmployer(employer, {
@@ -176,13 +216,11 @@ export class BillingCronService {
    * base — the employers' invoices for the previous month — already exists.
    * One autofactura per partner that has commissionable invoices in the period.
    */
-  @Cron('10 0 1 * *', { name: 'billing-monthly-commissions' })
-  async generateMonthlyCommissions() {
-    if (!this.enabled) return;
+  @Cron('10 0 1 * *', { name: 'billing-monthly-commissions', timeZone: BUSINESS_TZ })
+  async generateMonthlyCommissions(force = false) {
+    if (!this.enabled && !force) return;
     this.logger.log('🔄 Monthly commissions job starting');
-    const now = new Date();
-    const periodStart = toIsoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-    const periodEnd = toIsoDate(new Date(now.getFullYear(), now.getMonth(), 0));
+    const { startIso: periodStart, endIso: periodEnd } = previousMonthRangeMadrid();
     try {
       const created = await this.autofacturas.generateMonthlyForAllPartners(periodStart, periodEnd);
       this.logger.log(`✅ Monthly commissions job done — created ${created} autofactura(s)`);
@@ -196,13 +234,11 @@ export class BillingCronService {
    * the Admin and each Employer must order with their bank for the previous month.
    * Runs at 00:20 on day 1, after invoices (00:01) and commissions (00:10).
    */
-  @Cron('20 0 1 * *', { name: 'billing-monthly-bank-tasks' })
-  async generateMonthlyBankTasks() {
-    if (!this.enabled) return;
+  @Cron('20 0 1 * *', { name: 'billing-monthly-bank-tasks', timeZone: BUSINESS_TZ })
+  async generateMonthlyBankTasks(force = false) {
+    if (!this.enabled && !force) return;
     this.logger.log('🔄 Monthly bank-tasks job starting');
-    const now = new Date();
-    const periodStart = toIsoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-    const periodEnd = toIsoDate(new Date(now.getFullYear(), now.getMonth(), 0));
+    const { startIso: periodStart, endIso: periodEnd } = previousMonthRangeMadrid();
     try {
       // Admin: collections (Facturas) + partner payments (Comisiones).
       await this.bankOps.closeMonth({ kind: 'all' } as any, 'FACTURAS', periodStart, periodEnd, 'AUTO');
@@ -219,11 +255,4 @@ export class BillingCronService {
       this.logger.error(`Monthly bank-tasks job failed: ${err.message}`, err.stack);
     }
   }
-}
-
-function toIsoDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
 }

@@ -109,4 +109,14 @@ export class Client {
 
   @Column({ name: 'billing_vat_pct', type: 'numeric', precision: 5, scale: 2, default: 21 })
   billingVatPct: string;
+
+  // Bank account for receiving payments ("Cuenta bancaria para cobros").
+  @Column({ name: 'bank_iban', length: 40, nullable: true })
+  bankIban: string | null;
+
+  @Column({ name: 'bank_swift', length: 20, nullable: true })
+  bankSwift: string | null;
+
+  @Column({ name: 'bank_holder', length: 150, nullable: true })
+  bankHolder: string | null;
 }

@@ -22,6 +22,7 @@ import { resolveCompanyIdentity } from '../helpers/company-identity';
 import { PaymentMethod } from '../../../shared/entities/payment-method.entity';
 import { PricingService } from './pricing.service';
 import { RatePlanService } from './rate-plan.service';
+import { madridCivilToday } from '../../../common/helpers/business-time';
 
 interface CreateInvoiceOptions {
   /** Period start date — first day this invoice covers. */
@@ -75,7 +76,7 @@ export class InvoiceService {
     employer: Employer,
     options: CreateInvoiceOptions,
   ): Promise<Invoice> {
-    const issueDate = options.issueDate ?? new Date();
+    const issueDate = options.issueDate ?? madridCivilToday();
     const dueDays = options.dueDays ?? 30;
     const dueDate = addDays(issueDate, dueDays);
 
@@ -381,7 +382,7 @@ export class InvoiceService {
    * preview the upcoming invoice number in the form. The number is only
    * reserved when the invoice is actually created.
    */
-  async previewNextInvoiceNumber(issueDate: Date = new Date()): Promise<string> {
+  async previewNextInvoiceNumber(issueDate: Date = madridCivilToday()): Promise<string> {
     const config = (await this.adminConfigRepo.find({ take: 1 }))[0];
     const series = config?.invoiceSeries || 'CJOBS';
     const yyyy = issueDate.getFullYear();

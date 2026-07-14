@@ -20,6 +20,6 @@ export class BackupSettings {
   @Column({ name: 'local_path', type: 'text', nullable: true })
   localPath: string | null;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 }

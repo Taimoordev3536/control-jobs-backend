@@ -40,13 +40,13 @@ export class Conversation {
   @JoinColumn({ name: 'created_by_user_id' })
   createdBy: User | null;
 
-  @Column({ name: 'last_message_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'last_message_at', type: 'timestamptz', nullable: true })
   lastMessageAt: Date | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
   @OneToMany(() => ConversationParticipant, (p) => p.conversation)

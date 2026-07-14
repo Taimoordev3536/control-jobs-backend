@@ -31,6 +31,6 @@ export class ConversationParticipant {
   @Column({ name: 'participant_entity_id' })
   participantEntityId: number;
 
-  @CreateDateColumn({ name: 'joined_at' })
+  @CreateDateColumn({ name: 'joined_at', type: 'timestamptz' })
   joinedAt: Date;
 }

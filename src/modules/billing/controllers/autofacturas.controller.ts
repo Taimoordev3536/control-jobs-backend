@@ -4,6 +4,7 @@ import { AutofacturaService } from '../services/autofactura.service';
 import { AutofacturaPdfService } from '../services/autofactura-pdf.service';
 import { BillingAccessService } from '../services/billing-access.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { previousMonthRangeMadrid } from '../../../common/helpers/business-time';
 
 @Controller('commissions')
 @UseGuards(JwtAuthGuard)
@@ -46,12 +47,12 @@ export class AutofacturasController {
     await this.assertAdmin(req);
     let { periodStart, periodEnd } = body || ({} as any);
     if (!periodStart || !periodEnd) {
-      const now = new Date();
-      const ps = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const pe = new Date(now.getFullYear(), now.getMonth(), 0);
-      const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      periodStart = iso(ps);
-      periodEnd = iso(pe);
+      // Default to the previous calendar month anchored to Madrid — the same
+      // source of truth the monthly cron uses — so a manual run on day 1 in the
+      // post-midnight window doesn't bill the month-before-last.
+      const range = previousMonthRangeMadrid();
+      periodStart = range.startIso;
+      periodEnd = range.endIso;
     }
     const created = await this.service.generateMonthlyForAllPartners(periodStart, periodEnd);
     return { message: 'Generated', data: { created, periodStart, periodEnd }, isSuccess: true, statusCode: 201 };

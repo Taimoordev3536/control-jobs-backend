@@ -55,6 +55,6 @@ export class AbsenceRequest {
   @Column({ name: 'requested_by_user_id', nullable: true })
   requestedByUserId: number | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

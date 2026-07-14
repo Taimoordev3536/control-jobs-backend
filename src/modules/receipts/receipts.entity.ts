@@ -40,7 +40,7 @@ export class Receipt {
   @Column({ nullable: true })
   approvedOrRejectedBy!: number;
 
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  @Column({ type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
   createdAt!: Date;
 
   @Column({ nullable: true })

@@ -25,10 +25,10 @@ export class RefreshToken {
   @Column({ name: 'token_hash', length: 64 })
   tokenHash: string;
 
-  @Column({ name: 'expires_at', type: 'timestamp' })
+  @Column({ name: 'expires_at', type: 'timestamptz' })
   expiresAt: Date;
 
-  @Column({ name: 'revoked_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'revoked_at', type: 'timestamptz', nullable: true })
   revokedAt: Date | null;
 
   @Column({ name: 'replaced_by_token_hash', length: 64, nullable: true })
@@ -40,9 +40,9 @@ export class RefreshToken {
   @Column({ name: 'ip_address', length: 64, nullable: true })
   ipAddress: string | null;
 
-  @Column({ name: 'last_used_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'last_used_at', type: 'timestamptz', nullable: true })
   lastUsedAt: Date | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

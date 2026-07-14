@@ -23,6 +23,9 @@ pgTypes.setTypeParser(1114, (str: string) => new Date(`${str}Z`));
 
 async function bootstrap() {
   const server = express();
+  // Trust the platform proxy (Render/etc.) so req.ip reflects the real client IP
+  // for IP-based check-in validation, not the proxy's address.
+  server.set('trust proxy', true);
   const app = await NestFactory.create(AppModule, new ExpressAdapter(server), {
     cors: true,
   });

@@ -36,6 +36,6 @@ export class InvoiceWorkCenter {
   @Column({ length: 255 })
   name: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

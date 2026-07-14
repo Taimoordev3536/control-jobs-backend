@@ -440,9 +440,6 @@ export class EmployersService {
               ? providedPassword
               : randomBytes(6).toString('base64').slice(0, 10);
           const hashedPassword = await bcrypt.hash(rawPassword, 10);
-          if (!providedPassword) {
-            console.log(`Generated password for employer: ${rawPassword}`);
-          }
 
           // Create user (now required)
           const user = manager.create(User, {

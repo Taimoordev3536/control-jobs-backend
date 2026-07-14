@@ -150,10 +150,11 @@ export class WorkersController {
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: Express.Multer.File,
     @Body('description') description: string,
+    @Body('category') category: string,
     @Req() req,
   ) {
     const numericId = await this.workersService.resolvePublicId(id);
-    return this.workersService.uploadWorkerDocument(numericId, file, description, req.user?.id);
+    return this.workersService.uploadWorkerDocument(numericId, file, description, req.user?.id, category);
   }
 
   @Delete(':id/documents/:docId')

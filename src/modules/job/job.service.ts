@@ -2,8 +2,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { DateTime } from 'luxon';
+import { createHash } from 'crypto';
+import { ManualAttendanceRequest } from '../manual-attendance/entities/manual-attendance-request.entity';
+import { ManualAttendanceRequestType } from '../manual-attendance/enums/request-type.enum';
 import { InjectRepository } from '@nestjs/typeorm';
 import { convertDurationToMinutes, convertMinutesToDuration } from './helpers/duration-converter';
+import { madridNow, madridTodayKey } from '../../common/helpers/business-time';
 
 // Mock WorkCenter data (used for every client)
 const MOCK_WORK_CENTER = { id: 1, name: 'WorkCenter 1' };
@@ -42,6 +46,8 @@ import { JobStatus } from './enums/job-status.enum';
 import * as QRCode from 'qrcode';
 import { AlertsService } from '../realtime/alerts.service';
 import { QrValidationService } from '../qr-code/services/qr-validation.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { WebauthnService } from '../webauthn/webauthn.service';
 import { QrMerger } from '../qr-code/helpers/qr-merger';
 import { JobScheduleService } from './services/job-schedule.service';
 
@@ -66,10 +72,13 @@ export class JobService {
     @InjectRepository(ClientUser) private clientUserRepo: Repository<ClientUser>,
   @InjectRepository(Survey) private surveyRepo: Repository<Survey>,
     @InjectRepository(WorkerUser) private workerUserRepo: Repository<WorkerUser>,
+    @InjectRepository(ManualAttendanceRequest) private manualRequestRepo: Repository<ManualAttendanceRequest>,
     private dataSource: DataSource,
     private alertsService: AlertsService,
     private qrValidationService: QrValidationService,
     private jobScheduleService: JobScheduleService,
+    private cloudinaryService: CloudinaryService,
+    private webauthnService: WebauthnService,
   ) {}
 
   // The platform serves the Spanish market, so all wall-clock display/comparison
@@ -94,7 +103,8 @@ export class JobService {
   }
 
   async resolvePublicId(publicId: string): Promise<number> {
-    const job = await this.jobRepo.findOne({ where: { publicId } });
+    const where: any = isUUID(publicId) ? { publicId } : { id: Number(publicId) };
+    const job = await this.jobRepo.findOne({ where });
     if (!job) throw new NotFoundException('Job not found');
     return job.id;
   }
@@ -106,7 +116,8 @@ export class JobService {
   }
 
   async resolveTaskPublicId(publicId: string): Promise<number> {
-    const task = await this.taskRepo.findOne({ where: { publicId } });
+    const where: any = isUUID(publicId) ? { publicId } : { id: Number(publicId) };
+    const task = await this.taskRepo.findOne({ where });
     if (!task) throw new NotFoundException('Task not found');
     return task.id;
   }
@@ -642,6 +653,7 @@ export class JobService {
           'client',
           'workCenters',
           'workers',
+          'workers.user',
           'signingMethods',
           'alerts',
           'tasks',
@@ -679,8 +691,25 @@ export class JobService {
         startDate: job.startDate,
         endDate: job.endDate,
         clientId: job.client?.publicId || job.client?.id || null,
+        clientName: job.client?.name || null,
         workCenterIds: job.workCenters?.map(wc => wc.publicId || wc.id) || [],
         workerIds: job.workers?.map(w => w.publicId || w.id) || [],
+        // Full read-view details (for the Job Detail page; edit form ignores these)
+        workCentersDetail: job.workCenters?.map((wc: any) => ({
+          id: wc.publicId || wc.id,
+          name: wc.name,
+          address: wc.address || wc.locality || null,
+          isGpsActive: wc.isGpsActive ?? false,
+          gpsRadius: wc.gpsRadius ?? null,
+          isIpActive: wc.isIpActive ?? false,
+          allowedIp: wc.allowedIp || null,
+        })) || [],
+        workersDetail: job.workers?.map((w: any) => ({
+          id: w.publicId || w.id,
+          name: w.user?.name || null,
+          code: w.code,
+          photoUrl: w.logoUrl || null,
+        })) || [],
         note: job.note || '',
         status: job.status,
         scheduleType: job.scheduleType,
@@ -1403,7 +1432,11 @@ async getControlForDate(userId: number, dateStr?: string) {
         relations: ['job', 'worker'],
       })
     : [];
+  // Aggregate a worker's sessions for the day. checkIn = earliest of the day; checkOut must be
+  // the checkout of the MOST RECENT check-in — so if the latest session is still open (worker
+  // re-checked-in after an earlier checkout today), checkOut stays null and the live view is correct.
   const checkInMap = new Map<string, { checkIn: Date; checkOut: Date | null }>();
+  const latestCheckIn = new Map<string, Date>();
   for (const s of sessions) {
     if (s.job?.id && s.worker?.id && s.checkInTime) {
       const key = `${s.job.id}:${s.worker.id}`;
@@ -1412,9 +1445,13 @@ async getControlForDate(userId: number, dateStr?: string) {
       const existing = checkInMap.get(key);
       if (!existing) {
         checkInMap.set(key, { checkIn: ci, checkOut: co });
+        latestCheckIn.set(key, ci);
       } else {
         if (ci < existing.checkIn) existing.checkIn = ci;
-        if (co && (!existing.checkOut || co > existing.checkOut)) existing.checkOut = co;
+        if (ci >= (latestCheckIn.get(key) as Date)) {
+          existing.checkOut = co;
+          latestCheckIn.set(key, ci);
+        }
       }
     }
   }
@@ -1776,6 +1813,8 @@ async getAllJobsByEmployerFromToken(userId: number) {
         publicId: job.publicId,
         jobName: job.jobName,
         jobStatus: job.status || JobStatus.SCHEDULED,
+        startDate: job.startDate,
+        endDate: job.endDate,
         clientName: job.client?.name || '',
         workCenters: job.workCenters?.map(w => ({ id: w.id, publicId: w.publicId, name: w.name, locality: (w as any).locality || null })) || [],
         totalShifts: job.seasonalSchedules?.reduce((acc, ss) => acc + (ss.shifts?.length || 0), 0) || 0,
@@ -1965,11 +2004,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
         publicId: job.publicId,
         jobName: job.jobName,
         jobStatus: job.status || JobStatus.SCHEDULED,
+        startDate: job.startDate,
+        endDate: job.endDate,
         clientName: job.client?.name || '',
         workCenters: job.workCenters?.map(w => ({ id: w.id, publicId: w.publicId, name: w.name, locality: (w as any).locality || null })) || [],
         workCenterNames: job.workCenters?.map(w => w.name).join(', ') || '',
-        startDate: job.startDate,
-        endDate: job.endDate,
         scheduleType,
         totalShifts: job.seasonalSchedules?.reduce((acc, ss) => acc + (ss.shifts?.length || 0), 0) || 0,
         expectedDuration: ((): number => {
@@ -2319,6 +2358,538 @@ async getAllJobsByWorkerFromToken(userId: number) {
       cursor.setDate(cursor.getDate() + 1);
     }
 
+    return { message: 'OK', data: days, isSuccess: true, statusCode: 200 };
+  }
+
+  /**
+   * The worker's jobs for a single Madrid civil day, with per-job check-in
+   * status — powers the worker "Jobs" screen (day selector + cards + the
+   * "solicitar fichaje manual" flow for days not yet clocked in).
+   */
+  async getWorkerJobsForDate(userId: number, dateStr?: string) {
+    const link = await this.workerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['worker'] });
+    const workerId = link?.worker?.id;
+    if (!workerId) throw new Error('Worker not found for this user');
+    const date = dateStr || madridTodayKey();
+
+    const empLink = await this.employerWorkerRepo.findOne({ where: { worker: { id: workerId } }, relations: ['employer'] });
+    const employerId = empLink?.employer?.id;
+    const holidays = employerId ? await this.loadHolidays(employerId, date, date) : new Map<string, string>();
+    const isHoliday = holidays.has(date);
+
+    const jobs = employerId
+      ? (await this.jobRepo.find({
+          where: { employer: { id: employerId } },
+          relations: ['workers', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
+        })).filter((j) => j.workers.some((w) => w.id === workerId))
+      : [];
+
+    const startInstant = DateTime.fromISO(date, { zone: 'Europe/Madrid' }).startOf('day').toJSDate();
+    const endInstant = DateTime.fromISO(date, { zone: 'Europe/Madrid' }).endOf('day').toJSDate();
+    const sessions = await this.workSessionRepo.find({
+      where: { worker: { id: workerId }, checkInTime: Between(startInstant, endInstant) },
+      relations: ['job'],
+    });
+    const sessionByJob = new Map<number, any>();
+    for (const s of sessions) if (s.job?.id) sessionByJob.set(s.job.id, s);
+
+    const absences = await this.dataSource.getRepository(AbsenceRequest).find({ where: { workerId, status: 'approved' } });
+    const absence = absences.find((a) => a.startDate <= date && date <= a.endDate) || null;
+
+    const dayDate = new Date(`${date}T12:00:00`);
+    const items: any[] = [];
+    for (const job of jobs) {
+      const scheduled = !isHoliday && !absence && this.jobScheduleService.isJobScheduledForDate(job, dayDate);
+      const session = sessionByJob.get(job.id) || null;
+      if (!scheduled && !session) continue;
+      const shifts = scheduled ? this.jobScheduleService.getShiftsForDate(job, dayDate) : [];
+      const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
+      const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
+      items.push({
+        id: job.id,
+        publicId: job.publicId,
+        jobName: job.jobName,
+        title: job.jobName,
+        workCenterName: (job.workCenters || []).map((wc) => wc.name).join(', '),
+        workCenters: (job.workCenters || []).map((wc) => ({ id: wc.id, publicId: wc.publicId, name: wc.name })),
+        workers: (job.workers || []).map((w) => ({ id: w.id, publicId: w.publicId })),
+        startTime: startTimes[0] || null,
+        endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
+        scheduled,
+        session: session
+          ? { id: session.id, checkInTime: session.checkInTime, checkOutTime: session.checkOutTime, isActive: session.isActive }
+          : null,
+      });
+    }
+
+    return {
+      message: 'OK',
+      data: {
+        date,
+        isHoliday,
+        holidayName: holidays.get(date) || null,
+        absence: absence ? { type: absence.type } : null,
+        jobs: items,
+      },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  /**
+   * Days in the recent past where the worker was scheduled but has no check-in
+   * ("Pendientes" tab) — each entry can be turned into a manual-attendance
+   * request. Holidays and approved absences are excluded; future days too.
+   */
+  async getWorkerPendingCheckins(userId: number, days = 30) {
+    const link = await this.workerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['worker'] });
+    const workerId = link?.worker?.id;
+    if (!workerId) throw new Error('Worker not found for this user');
+
+    const end = DateTime.fromISO(madridTodayKey(), { zone: 'Europe/Madrid' });
+    const start = end.minus({ days: Math.max(1, days) - 1 });
+    const startKey = start.toFormat('yyyy-MM-dd');
+    const todayKey = end.toFormat('yyyy-MM-dd');
+
+    const empLink = await this.employerWorkerRepo.findOne({ where: { worker: { id: workerId } }, relations: ['employer'] });
+    const employerId = empLink?.employer?.id;
+    const holidays = employerId ? await this.loadHolidays(employerId, startKey, todayKey) : new Map<string, string>();
+
+    const jobs = employerId
+      ? (await this.jobRepo.find({
+          where: { employer: { id: employerId } },
+          relations: ['workers', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
+        })).filter((j) => j.workers.some((w) => w.id === workerId))
+      : [];
+
+    const sessions = await this.workSessionRepo.find({
+      where: { worker: { id: workerId }, checkInTime: Between(start.startOf('day').toJSDate(), end.endOf('day').toJSDate()) },
+      relations: ['job'],
+    });
+    const fichado = new Set(sessions.filter((s) => s.job?.id).map((s) => `${s.job.id}|${this.madridDateKey(s.checkInTime)}`));
+
+    const absences = await this.dataSource.getRepository(AbsenceRequest).find({ where: { workerId, status: 'approved' } });
+    const absenceOn = (d: string) => absences.some((a) => a.startDate <= d && d <= a.endDate);
+
+    const pending: any[] = [];
+    let cursor = start;
+    while (cursor <= end) {
+      const dateKey = cursor.toFormat('yyyy-MM-dd');
+      if (!holidays.has(dateKey) && !absenceOn(dateKey)) {
+        const dayDate = new Date(`${dateKey}T12:00:00`);
+        for (const job of jobs) {
+          if (!this.jobScheduleService.isJobScheduledForDate(job, dayDate)) continue;
+          if (fichado.has(`${job.id}|${dateKey}`)) continue;
+          const starts = this.jobScheduleService.getShiftsForDate(job, dayDate).map((s) => s.baseStartTime).filter(Boolean).sort();
+          pending.push({
+            date: dateKey,
+            id: job.id,
+            publicId: job.publicId,
+            jobName: job.jobName,
+            title: job.jobName,
+            workCenterName: (job.workCenters || []).map((wc) => wc.name).join(', '),
+            workCenters: (job.workCenters || []).map((wc) => ({ id: wc.id, publicId: wc.publicId, name: wc.name })),
+            workers: (job.workers || []).map((w) => ({ id: w.id, publicId: w.publicId })),
+            shiftStart: starts[0] ? starts[0].slice(0, 5) : null,
+          });
+        }
+      }
+      cursor = cursor.plus({ days: 1 });
+    }
+    pending.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+    return { message: 'OK', data: pending, isSuccess: true, statusCode: 200 };
+  }
+
+  /**
+   * Client "Control" data for a day: the client's jobs scheduled/worked that
+   * day, each with per-worker check-in status. `running` flags whether a job
+   * is currently in execution (an active session today).
+   */
+  async getClientJobsForDate(userId: number, dateStr?: string) {
+    const clientUser = await this.clientUserRepo.findOne({ where: { user: { id: userId } }, relations: ['client'] });
+    const clientId = clientUser?.client?.id;
+    if (!clientId) throw new Error('Client not found for this user');
+    const date = dateStr || madridTodayKey();
+
+    const jobs = await this.jobRepo.find({
+      where: { client: { id: clientId } },
+      relations: ['employer', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
+    });
+    const employerId = jobs[0]?.employer?.id;
+    const holidays = employerId ? await this.loadHolidays(employerId, date, date) : new Map<string, string>();
+    const isHoliday = holidays.has(date);
+
+    const jobIds = jobs.map((j) => j.id);
+    const startInstant = DateTime.fromISO(date, { zone: 'Europe/Madrid' }).startOf('day').toJSDate();
+    const endInstant = DateTime.fromISO(date, { zone: 'Europe/Madrid' }).endOf('day').toJSDate();
+    const sessions = jobIds.length
+      ? await this.workSessionRepo.find({
+          where: { job: { id: In(jobIds) }, checkInTime: Between(startInstant, endInstant) },
+          relations: ['job', 'worker', 'worker.user'],
+        })
+      : [];
+    const byJob = new Map<number, any[]>();
+    for (const s of sessions) {
+      if (!s.job?.id) continue;
+      if (!byJob.has(s.job.id)) byJob.set(s.job.id, []);
+      byJob.get(s.job.id)!.push(s);
+    }
+
+    const dayDate = new Date(`${date}T12:00:00`);
+    const items: any[] = [];
+    for (const job of jobs) {
+      const scheduled = !isHoliday && this.jobScheduleService.isJobScheduledForDate(job, dayDate);
+      const js = byJob.get(job.id) || [];
+      if (!scheduled && js.length === 0) continue;
+      const workers = js.map((s) => ({
+        name: s.worker?.user?.name || (s.worker?.code ? `#${s.worker.code}` : 'Trabajador'),
+        checkInTime: s.checkInTime,
+        checkOutTime: s.checkOutTime,
+        active: !!(s.checkInTime && !s.checkOutTime && s.isActive),
+      }));
+      const active = workers.some((w) => w.active);
+      const allOut = workers.length > 0 && workers.every((w) => w.checkOutTime);
+      const status = active ? 'in_progress' : allOut ? 'completed' : 'scheduled';
+      items.push({ publicId: job.publicId, scheduled, status, workers });
+    }
+    const running = items.some((i) => i.status === 'in_progress');
+
+    return {
+      message: 'OK',
+      data: { date, isHoliday, holidayName: holidays.get(date) || null, running, jobs: items },
+      isSuccess: true,
+      statusCode: 200,
+    };
+  }
+
+  /** Attendance records (Presencia > Historial) for the client's jobs. */
+  async getClientWorkSessionRecords(userId: number, startDate?: string, endDate?: string, jobId?: string) {
+    const clientUser = await this.clientUserRepo.findOne({ where: { user: { id: userId } }, relations: ['client'] });
+    const clientId = clientUser?.client?.id;
+    if (!clientId) return { message: 'Client not found', data: [], isSuccess: false, statusCode: 404 };
+
+    const allJobs = await this.jobRepo.find({ where: { client: { id: clientId } }, relations: ['seasonalSchedules', 'seasonalSchedules.shifts'] });
+    const jobs = jobId ? allJobs.filter((j) => j.publicId === jobId || String(j.id) === jobId) : allJobs;
+    const jobIds = jobs.map((j) => j.id);
+    if (!jobIds.length) return { message: 'Success', data: [], isSuccess: true, statusCode: 200 };
+    const jobById = new Map(jobs.map((j) => [j.id, j]));
+
+    const query = this.workSessionRepo.createQueryBuilder('workSession')
+      .leftJoinAndSelect('workSession.job', 'job')
+      .leftJoinAndSelect('workSession.worker', 'worker')
+      .leftJoinAndSelect('worker.user', 'workerUser')
+      .leftJoinAndSelect('workSession.workCenter', 'workCenter')
+      .where('job.id IN (:...jobIds)', { jobIds });
+    if (startDate) query.andWhere('workSession.checkInTime >= :startDate', { startDate });
+    if (endDate) {
+      const e = new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1));
+      query.andWhere('workSession.checkInTime < :endDate', { endDate: e });
+    }
+    query.orderBy('workSession.checkInTime', 'DESC');
+    const sessions = await query.getMany();
+
+    const _wids = Array.from(new Set(sessions.map((s: any) => s.worker?.id).filter(Boolean)));
+    const _wus = _wids.length ? await this.workerUserRepo.find({ where: _wids.map((id: any) => ({ workerId: id })), relations: ['user'] }) : [];
+    const _nameBy = new Map<number, string>();
+    _wus.forEach((wu: any) => { if (wu.user?.name) _nameBy.set(wu.workerId, wu.user.name); });
+
+    const records = sessions.map((session) => {
+      const checkIn = new Date(session.checkInTime);
+      const checkOut = session.checkOutTime ? new Date(session.checkOutTime) : null;
+      const totalH = Math.floor(session.totalWorkMinutes / 60);
+      const totalM = session.totalWorkMinutes % 60;
+
+      let punctuality: 'early' | 'onTime' | 'late' | null = null;
+      let lateMinutes: number | null = null;
+      const job = jobById.get(session.job?.id);
+      if (job) {
+        const dayDate = new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`);
+        const starts = this.jobScheduleService.getShiftsForDate(job, dayDate).map((s) => s.baseStartTime).filter(Boolean).sort();
+        const shiftStart = starts[0] ? starts[0].slice(0, 5) : null;
+        if (shiftStart) {
+          const [sh, sm] = shiftStart.split(':').map(Number);
+          const diff = this.madridMinutes(session.checkInTime) - (sh * 60 + sm);
+          if (diff > 5) { punctuality = 'late'; lateMinutes = diff; }
+          else if (diff <= -15) { punctuality = 'early'; }
+          else { punctuality = 'onTime'; }
+        }
+      }
+
+      const _schedMin = job ? (this.jobScheduleService.getScheduledMinutesForDate(job, new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`)) || 0) : 0;
+      const _otMin = Math.max(0, (session.totalWorkMinutes || 0) - _schedMin);
+      const extra = _schedMin > 0 ? (_otMin > 0 ? `${Math.floor(_otMin / 60)}h ${_otMin % 60}m` : '0h') : '—';
+      const puntualidad = punctuality === 'late' ? `+${lateMinutes}m tarde` : punctuality === 'early' ? 'Adelantado' : punctuality === 'onTime' ? 'A tiempo' : '—';
+      return {
+        id: session.publicId || String(session.id),
+        recordId: session.publicId || session.id,
+        fecha: checkOut ? `${this.madridDate(checkIn)} - ${this.madridDate(checkOut)}` : `${this.madridDate(checkIn)} - En progreso`,
+        job: session.job?.jobName || 'N/A',
+        centro: (session as any).workCenter?.name || '—',
+        worker: _nameBy.get(session.worker?.id) || session.worker?.user?.name || (session.worker?.code ? `#${session.worker.code}` : 'Trabajador'),
+        entrada: this.madridTime(checkIn),
+        salida: checkOut ? this.madridTime(checkOut) : (session.isActive ? 'En progreso' : '-'),
+        total: `${totalH}h ${totalM}m`,
+        extra,
+        metodo: session.checkInMethod || '—',
+        puntualidad,
+        punctuality,
+        lateMinutes,
+        checkInTime: session.checkInTime,
+        checkOutTime: session.checkOutTime,
+      };
+    });
+    return { message: 'Success', data: records, isSuccess: true, statusCode: 200 };
+  }
+
+  private calcPunctuality(shiftTime: string | null, actualMinutes: number, isCheckout = false) {
+    if (!shiftTime) return null;
+    const [h, m] = shiftTime.split(':').map(Number);
+    const diff = actualMinutes - (h * 60 + m);
+    if (!isCheckout) {
+      if (diff > 5) return { status: 'late', minutes: diff };
+      if (diff <= -15) return { status: 'early', minutes: Math.abs(diff) };
+      return { status: 'onTime', minutes: 0 };
+    }
+    if (diff < -5) return { status: 'early', minutes: Math.abs(diff) };
+    if (diff > 5) return { status: 'late', minutes: diff };
+    return { status: 'onTime', minutes: 0 };
+  }
+
+  /** Full detail of a single work session (record) for the tabbed detail page — role-agnostic, by publicId. */
+  async getRecordDetail(recordId: string) {
+    const session = await this.workSessionRepo.findOne({
+      where: { publicId: recordId },
+      relations: ['worker', 'worker.user', 'job', 'job.tasks', 'job.client', 'workCenter'],
+    });
+    if (!session) return { message: 'Record not found', data: null, isSuccess: false, statusCode: 404 };
+
+    let workerName = session.worker?.user?.name || null;
+    if (!workerName && session.worker?.id) {
+      const _wu = await this.workerUserRepo.findOne({ where: { workerId: session.worker.id }, relations: ['user'] });
+      workerName = _wu?.user?.name || null;
+    }
+
+    const job = session.job;
+    const checkOut = session.checkOutTime ? new Date(session.checkOutTime) : null;
+    const dayKey = this.madridDateKey(session.checkInTime);
+    const dayDate = new Date(`${dayKey}T12:00:00`);
+    // Buffer the window: the check-in scan is written a few hundred ms BEFORE the
+    // work session's checkInTime, and the checkout scan slightly before checkOutTime.
+    const scanStart = new Date(new Date(session.checkInTime).getTime() - 60000);
+    const scanEnd = new Date((checkOut ? checkOut.getTime() : Date.now()) + 60000);
+
+    const scanLogs = await this.scanLogRepo.createQueryBuilder('s')
+      .leftJoinAndSelect('s.workCenter', 'wc')
+      .where('s.job = :jobId', { jobId: job.id })
+      .andWhere('s.worker = :workerId', { workerId: session.worker.id })
+      .andWhere('s.scanTime >= :start', { start: scanStart })
+      .andWhere('s.scanTime <= :end', { end: scanEnd })
+      .orderBy('s.scanTime', 'ASC')
+      .getMany();
+
+    const scans = scanLogs.map((s) => ({
+      scanType: s.scanType,
+      time: this.madridTime(s.scanTime),
+      scanTime: s.scanTime,
+      method: s.signingMethod || null,
+      location: s.location || null,
+      latitude: s.latitude ?? null,
+      longitude: s.longitude ?? null,
+      ipAddress: s.ipAddress || null,
+      workCenter: s.workCenter?.name || null,
+      notes: s.notes || null,
+      selfieUrl: s.selfieUrl || null,
+      webauthnVerified: !!s.webauthnVerified,
+      locationUnavailable: !!s.locationUnavailable,
+    }));
+
+    const breaks: any[] = [];
+    let bs: any = null;
+    for (const s of scanLogs) {
+      if (s.scanType === 'break-start') bs = s;
+      else if (s.scanType === 'break-end' && bs) {
+        breaks.push({
+          start: this.madridTime(bs.scanTime),
+          end: this.madridTime(s.scanTime),
+          durationMinutes: Math.floor((new Date(s.scanTime).getTime() - new Date(bs.scanTime).getTime()) / 60000),
+          notes: bs.notes || null,
+        });
+        bs = null;
+      }
+    }
+
+    const taskHistories = await this.taskHistoryRepo.createQueryBuilder('th')
+      .leftJoinAndSelect('th.task', 'task')
+      .leftJoinAndSelect('th.completedBy', 'w')
+      .leftJoinAndSelect('w.user', 'wu')
+      .where('th.jobId = :jobId', { jobId: job.id })
+      .andWhere('th.date = :date', { date: dayKey })
+      .getMany();
+    const thByTask = new Map<number, any>();
+    // A day can hold duplicate history rows per task (one pending, one completed) — keep the completed one.
+    taskHistories.forEach((th: any) => {
+      if (!th.task) return;
+      const prev = thByTask.get(th.task.id);
+      if (!prev || (th.isCompleted && !prev.isCompleted)) thByTask.set(th.task.id, th);
+    });
+    const tasks = (job.tasks || []).map((t: any) => {
+      const th: any = thByTask.get(t.id);
+      const completedByName = th?.completedBy?.user?.name
+        || (th?.completedByWorkerId === session.worker?.id ? workerName : null);
+      return {
+        name: t.name,
+        completed: th ? !!th.isCompleted : false,
+        completedAt: th && th.isCompleted ? this.madridTime(th.completedAt || session.checkInTime) : null,
+        completedBy: th && th.isCompleted ? completedByName : null,
+      };
+    });
+
+    const shifts = this.jobScheduleService.getShiftsForDate(job, dayDate);
+    const starts = shifts.map((s: any) => s.baseStartTime).filter(Boolean).sort();
+    const ends = shifts.map((s: any) => s.baseEndTime).filter(Boolean).sort();
+    const shiftStart = starts[0] ? starts[0].slice(0, 5) : null;
+    const shiftEnd = ends.length ? ends[ends.length - 1].slice(0, 5) : null;
+
+    const scheduledMinutes = this.jobScheduleService.getScheduledMinutesForDate(job, dayDate) || 0;
+    const workedMinutes = session.totalWorkMinutes || 0;
+
+    // Compliance — tamper-evident integrity seal over the immutable fields of the record.
+    // Any later change to times/minutes/worker/job yields a different hash.
+    const integrityHash = createHash('sha256')
+      .update([
+        session.publicId,
+        session.worker?.id,
+        job.id,
+        session.checkInTime ? new Date(session.checkInTime).toISOString() : '',
+        session.checkOutTime ? new Date(session.checkOutTime).toISOString() : '',
+        workedMinutes,
+        session.totalBreakMinutes || 0,
+        session.source || 'SCAN',
+      ].join('|'))
+      .digest('hex');
+
+    // Compliance — correction audit trail: approved manual edits that touched this session.
+    const corrections = await this.manualRequestRepo.find({
+      where: [
+        { existingWorkSessionId: session.id, requestType: ManualAttendanceRequestType.EDIT_EXISTING },
+        { resultWorkSessionId: session.id },
+      ],
+      relations: ['reviewedByUser', 'requestedByUser'],
+      order: { createdAt: 'DESC' },
+    });
+    const correctionHistory = corrections.map((r) => ({
+      status: r.status,
+      requestedByRole: r.requestedByRole,
+      reason: r.reason || null,
+      reviewerNotes: r.reviewerNotes || null,
+      reviewedAt: r.reviewedAt || null,
+      reviewedByRole: r.reviewedByRole || null,
+      originalCheckIn: r.originalCheckIn ? this.madridTime(r.originalCheckIn) : null,
+      originalCheckOut: r.originalCheckOut ? this.madridTime(r.originalCheckOut) : null,
+      requestedCheckIn: r.requestedCheckIn ? this.madridTime(r.requestedCheckIn) : null,
+      requestedCheckOut: r.requestedCheckOut ? this.madridTime(r.requestedCheckOut) : null,
+      createdAt: r.createdAt,
+    }));
+
+    return {
+      message: 'Success', isSuccess: true, statusCode: 200,
+      data: {
+        recordId: session.publicId,
+        integrityHash,
+        correctionHistory,
+        worker: { name: workerName, code: session.worker.code, photoUrl: session.worker.logoUrl || null },
+        job: { name: job.jobName, publicId: job.publicId },
+        client: job.client?.name || null,
+        workCenter: session.workCenter?.name || null,
+        date: dayKey,
+        checkIn: this.madridTime(session.checkInTime),
+        checkOut: checkOut ? this.madridTime(session.checkOutTime) : null,
+        checkInMethod: session.checkInMethod || null,
+        checkOutMethod: session.checkOutMethod || null,
+        isActive: session.isActive,
+        source: session.source,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        shift: { start: shiftStart, end: shiftEnd },
+        hours: {
+          // Overtime only applies to jobs with a real schedule. Free jobs have no fixed hours,
+          // so all worked time is just "worked" — never overtime.
+          hasSchedule: scheduledMinutes > 0,
+          scheduledMinutes,
+          workedMinutes,
+          breakMinutes: session.totalBreakMinutes || 0,
+          overtimeMinutes: scheduledMinutes > 0 ? Math.max(0, workedMinutes - scheduledMinutes) : 0,
+        },
+        punctuality: {
+          in: this.calcPunctuality(shiftStart, this.madridMinutes(session.checkInTime)),
+          out: checkOut ? this.calcPunctuality(shiftEnd, this.madridMinutes(session.checkOutTime), true) : null,
+        },
+        selfieUrl: scanLogs.find((s) => s.scanType === 'check-in')?.selfieUrl || null,
+        webauthnVerified: !!scanLogs.find((s) => s.scanType === 'check-in')?.webauthnVerified,
+        locationUnavailable: !!scanLogs.find((s) => s.scanType === 'check-in')?.locationUnavailable,
+        scans,
+        breaks,
+        tasks,
+      },
+    };
+  }
+
+  /** Client schedule/programación calendar for the client's own jobs. */
+  async getClientMyCalendar(userId: number, start: string, end: string) {
+    if (!start || !end) throw new Error('start and end are required');
+    const clientUser = await this.clientUserRepo.findOne({ where: { user: { id: userId } }, relations: ['client'] });
+    const clientId = clientUser?.client?.id;
+    if (!clientId) throw new Error('Client not found for this user');
+
+    const jobs = await this.jobRepo.find({ where: { client: { id: clientId } }, relations: ['employer', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'] });
+    const employerId = jobs[0]?.employer?.id;
+    const holidays = employerId ? await this.loadHolidays(employerId, start, end) : new Map<string, string>();
+
+    const jobIds = jobs.map((j) => j.id);
+    const startInstant = DateTime.fromISO(start, { zone: 'Europe/Madrid' }).startOf('day').toJSDate();
+    const endInstant = DateTime.fromISO(end, { zone: 'Europe/Madrid' }).endOf('day').toJSDate();
+    const sessions = jobIds.length
+      ? await this.workSessionRepo.find({ where: { job: { id: In(jobIds) }, checkInTime: Between(startInstant, endInstant) }, relations: ['job'] })
+      : [];
+    const workedByDate = new Map<string, Set<number>>();
+    for (const s of sessions) {
+      if (!s.job?.id) continue;
+      const k = this.madridDateKey(s.checkInTime);
+      if (!workedByDate.has(k)) workedByDate.set(k, new Set());
+      workedByDate.get(k)!.add(s.job.id);
+    }
+
+    const p = (n: number) => String(n).padStart(2, '0');
+    const cursor = new Date(`${start}T12:00:00`);
+    const last = new Date(`${end}T12:00:00`);
+    const days: any[] = [];
+    let guard = 0;
+    while (cursor <= last && guard < 400) {
+      guard++;
+      const dateStr = `${cursor.getFullYear()}-${p(cursor.getMonth() + 1)}-${p(cursor.getDate())}`;
+      const holiday = holidays.has(dateStr);
+      const workedIds = workedByDate.get(dateStr);
+      const dayJobs: any[] = [];
+      for (const job of jobs) {
+        const scheduled = !holiday && this.jobScheduleService.isJobScheduledForDate(job, cursor);
+        const worked = !!workedIds?.has(job.id);
+        if (!scheduled && !worked) continue;
+        const shifts = scheduled ? this.jobScheduleService.getShiftsForDate(job, cursor) : [];
+        const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
+        const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
+        dayJobs.push({
+          jobName: job.jobName,
+          workCenterName: (job.workCenters || []).map((wc) => wc.name).join(', '),
+          startTime: startTimes[0] || null,
+          endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
+          worked,
+        });
+      }
+      const working = !holiday && dayJobs.length > 0;
+      days.push({ date: dateStr, holiday, holidayName: holidays.get(dateStr) || null, absence: null, working, jobs: dayJobs });
+      cursor.setDate(cursor.getDate() + 1);
+    }
     return { message: 'OK', data: days, isSuccess: true, statusCode: 200 };
   }
 
@@ -2766,16 +3337,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
       return { allowed: true };
     }
 
-    // GPS method: only require that a shift exists for today — no time-of-day restriction
+    // GPS method: only require that a shift exists for today — no time-of-day
+    // restriction. Reuse the canonical weekday/season matching (startWeekday/
+    // endWeekday are string enums, so they must not be compared numerically).
     if (signingMethod === 'gps') {
-      const todayWeekday = now.getDay(); // 0=Sunday
-      const hasShiftToday = activeSchedule.shifts.some(shift => {
-        const start = Number(shift.startWeekday ?? 0);
-        const end = Number(shift.endWeekday ?? 6);
-        return start <= end
-          ? todayWeekday >= start && todayWeekday <= end
-          : todayWeekday >= start || todayWeekday <= end;
-      });
+      const hasShiftToday = this.jobScheduleService.getShiftsForDate(job, now).length > 0;
       if (hasShiftToday) return { allowed: true };
       return { allowed: false, reason: 'No shift is scheduled for today' };
     }
@@ -2800,12 +3366,76 @@ async getAllJobsByWorkerFromToken(userId: number) {
     return { allowed: false, reason: 'Current time is outside the allowed check-in window for any shift today' };
   }
 
-  async recordScan(recordScanDto: RecordScanDto, userId: number): Promise<{ status: string; scanData: ScanLog; workSession?: any }> {
+  /** Match an observed IP against a work-center allow value: exact IP, CIDR (e.g. 88.14.32.0/24), or comma-separated list of either. IPv4. */
+  private ipMatches(allowed: string | null | undefined, actual: string | null | undefined): boolean {
+    if (!allowed || !actual) return false;
+    const a = actual.replace(/^::ffff:/, '').trim();
+    for (const raw of allowed.split(',').map((s) => s.trim()).filter(Boolean)) {
+      const e = raw.replace(/^::ffff:/, '');
+      if (e.includes('/')) {
+        if (this.ipInCidr(a, e)) return true;
+      } else if (e === a) {
+        return true;
+      }
+    }
+    return false;
+  }
+  private ipInCidr(ip: string, cidr: string): boolean {
+    const [range, bitsStr] = cidr.split('/');
+    const bits = parseInt(bitsStr, 10);
+    if (isNaN(bits) || bits < 0 || bits > 32) return false;
+    const toInt = (s: string) => {
+      const parts = s.split('.');
+      if (parts.length !== 4) return NaN;
+      return (parts.reduce((acc, o) => (acc << 8) + (parseInt(o, 10) & 255), 0) >>> 0);
+    };
+    const ipInt = toInt(ip);
+    const rangeInt = toInt(range);
+    if (isNaN(ipInt) || isNaN(rangeInt)) return false;
+    const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+    return (ipInt & mask) === (rangeInt & mask);
+  }
+
+  async recordScan(recordScanDto: RecordScanDto, userId: number, serverIp?: string | null): Promise<{ status: string; scanData: ScanLog; workSession?: any }> {
+    // IP check-in uses the server-observed IP only — client-supplied ipAddress is untrusted/spoofable.
+    if (serverIp) {
+      recordScanDto.ipAddress = serverIp.replace(/^::ffff:/, '');
+    }
     // Resolve publicId → numeric ID at entry point
     const resolvedJobId = await this.resolvePublicId(recordScanDto.jobId);
     let resolvedWorkCenterId: number | undefined;
     if (recordScanDto.workCenterId) {
       resolvedWorkCenterId = await this.resolveWorkCenterPublicId(recordScanDto.workCenterId);
+    }
+
+    // Identity selfie: upload to Cloudinary BEFORE the DB transaction. Never blocks check-in.
+    let selfieUrl: string | null = null;
+    if (recordScanDto.selfie && recordScanDto.scanType === 'check-in') {
+      try {
+        const m = recordScanDto.selfie.match(/^data:image\/\w+;base64,(.+)$/);
+        const buf = Buffer.from(m ? m[1] : recordScanDto.selfie, 'base64');
+        if (buf.length > 0 && buf.length < 6 * 1024 * 1024) {
+          const up = await this.cloudinaryService.uploadImage(buf, 'controljobs/checkin-selfies');
+          selfieUrl = up.secureUrl;
+        }
+      } catch (e) {
+        console.error('Selfie upload failed (check-in continues):', (e as any)?.message);
+      }
+    }
+
+    // Device biometric (WebAuthn): true only if this user server-verified a passkey moments ago.
+    const webauthnVerified =
+      recordScanDto.scanType === 'check-in' ? this.webauthnService.consumeRecentVerification(userId) : false;
+
+    // Identity enforcement — on verifyIdentity jobs the selfie is OPTIONAL (may be skipped),
+    // but device biometric is REQUIRED when the worker has enrolled a device.
+    // Disable entirely with IDENTITY_ENFORCE=false.
+    if (recordScanDto.scanType === 'check-in' && process.env.IDENTITY_ENFORCE !== 'false') {
+      const idJob = await this.jobRepo.findOne({ where: { id: resolvedJobId }, relations: ['signingMethods'] });
+      const requiresIdentity = (idJob?.signingMethods || []).some((sm: any) => sm.verifyIdentity === true);
+      if (requiresIdentity && !webauthnVerified && (await this.webauthnService.hasCredential(userId))) {
+        throw new Error('Se requiere verificación biométrica del dispositivo para fichar.');
+      }
     }
 
     return await this.dataSource.transaction(async (txManager) => {
@@ -2823,25 +3453,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         if (workerUser?.worker?.id) {
           workerId = workerUser.worker.id;
         } else {
-          const employerUser = await txManager.findOne(EmployerUser, {
-            where: { user: { id: userId } },
-            relations: ['employer'],
-          });
-
-          if (employerUser?.employer?.id) {
-            const job = await txManager.findOne(Job, {
-              where: { id: resolvedJobId },
-              relations: ['workers'],
-            });
-
-            if (!job) throw new Error('Job not found');
-            if (job.workers.length === 0) throw new Error('No workers assigned');
-
-            workerId = job.workers[0].id;
-            console.log('Using first worker for testing:', workerId);
-          } else {
-            throw new Error('User is neither a worker nor an employer');
-          }
+          throw new Error('Only assigned workers can check in');
         }
 
         if (!workerId) throw new Error('Worker not found');
@@ -2857,22 +3469,26 @@ async getAllJobsByWorkerFromToken(userId: number) {
         const isWorkerAssigned = job.workers.some(w => w.id === workerId);
         if (!isWorkerAssigned) throw new Error('Worker is not assigned to this job');
 
-        // Schedule validations only needed at check-in
-        // Resolve timezone once here so it's available for the scan log record too
+        // The client-reported timezone is kept only as metadata on the scan log.
+        // Business schedule/shift-window checks are anchored to Europe/Madrid,
+        // NOT the worker's device tz or the server clock.
         const userTimezone = recordScanDto.userTimezone ||
           Intl.DateTimeFormat().resolvedOptions().timeZone ||
           'UTC';
 
         if (recordScanDto.scanType === 'check-in') {
-          // Use worker's LOCAL time so shift windows match their clock
-          const nowUtc = new Date();
-          const localNow = new Date(nowUtc.toLocaleString('en-US', { timeZone: userTimezone }));
+          // Build a Date whose local fields represent the Madrid wall-clock, so
+          // the existing schedule readers evaluate the check against the business
+          // timezone (DST-correct via Luxon) consistently with how job start/end
+          // dates are compared.
+          const m = madridNow();
+          const madridLocal = new Date(m.year, m.month - 1, m.day, m.hour, m.minute, m.second);
 
-          const isScheduledToday = this.jobScheduleService.isJobScheduledForDate(job, localNow);
+          const isScheduledToday = this.jobScheduleService.isJobScheduledForDate(job, madridLocal);
           if (!isScheduledToday) {
             throw new Error('This job is not scheduled for today. Check-in rejected.');
           }
-          const timeCheck = this.isWithinShiftWindow(job, localNow, recordScanDto.signingMethod);
+          const timeCheck = this.isWithinShiftWindow(job, madridLocal, recordScanDto.signingMethod);
           if (!timeCheck.allowed) {
             throw new Error(timeCheck.reason || 'Check-in time is outside the allowed shift window.');
           }
@@ -2957,7 +3573,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
             throw new Error('IP check-in is not available — no work center has IP check-in activated');
           }
 
-          const matchingWc = ipActiveWcs.find(wc => wc.allowedIp === recordScanDto.ipAddress);
+          const matchingWc = ipActiveWcs.find(wc => this.ipMatches(wc.allowedIp, recordScanDto.ipAddress));
 
           if (!matchingWc) {
             throw new Error(`Your IP address (${recordScanDto.ipAddress}) does not match any work center's allowed IP`);
@@ -2986,7 +3602,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
             if (!resolvedWc.isIpActive) {
               throw new Error('IP check-in is not activated for this work center');
             }
-            if (resolvedWc.allowedIp && resolvedWc.allowedIp !== recordScanDto.ipAddress) {
+            if (resolvedWc.allowedIp && !this.ipMatches(resolvedWc.allowedIp, recordScanDto.ipAddress)) {
               throw new Error(`Your IP address does not match the allowed IP for "${resolvedWc.name}"`);
             }
           }
@@ -3042,6 +3658,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
           latitude: recordScanDto.latitude,
           longitude: recordScanDto.longitude,
           qrToken: recordScanDto.qrToken,
+          selfieUrl: selfieUrl,
+          webauthnVerified: webauthnVerified,
+          locationUnavailable: !!recordScanDto.locationUnavailable,
         });
 
         const savedScanLog = await txManager.save(ScanLog, scanLog);
@@ -3511,9 +4130,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * Transaction-aware task status save
    */
   private async saveTaskStatusesOnCheckoutTx(txManager: any, jobId: number, workerId: number) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+    // Madrid civil day (matches the non-tx twin saveAllTaskStatusesOnCheckout);
+    // a raw server-local `new Date()` would bucket an overnight checkout done
+    // just after Madrid midnight onto the previous day.
+    const today = madridTodayKey();
+
     const job = await txManager.findOne(Job, {
       where: { id: jobId },
       relations: ['tasks'],
@@ -4226,7 +4847,7 @@ async toggleTaskCompletion(taskId: number, workerId: number, jobId: number) {
    * Save all tasks' statuses for the job for today when a worker checks out
    */
   private async saveAllTaskStatusesOnCheckout(jobId: number, workerId: number) {
-    const todayString = new Date().toISOString().split('T')[0];
+    const todayString = madridTodayKey();
     const job = await this.jobRepo.findOne({
       where: { id: jobId },
   relations: ['tasks', 'tasks.workCenter', 'tasks.taskHistories', 'workers'],
@@ -4381,7 +5002,7 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         };
       }
 
-      const todayString = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      const todayString = madridTodayKey(); // YYYY-MM-DD, business tz
 
       // Get worker name if available
       const workerUser = await this.workerUserRepo.findOne({
@@ -4997,6 +5618,9 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         .leftJoinAndSelect('job.employer', 'employer')
         .leftJoinAndSelect('workSession.worker', 'worker')
         .leftJoinAndSelect('worker.user', 'workerUser')
+        .leftJoinAndSelect('workSession.workCenter', 'workCenter')
+        .leftJoinAndSelect('job.seasonalSchedules', 'ss')
+        .leftJoinAndSelect('ss.shifts', 'shifts')
         .where('employer.id = :employerId', { employerId });
 
       // Filter by specific job if provided
@@ -5017,6 +5641,11 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
       query.orderBy('workSession.checkInTime', 'DESC');
 
       const workSessions = await query.getMany();
+
+      const _wids = Array.from(new Set(workSessions.map((s: any) => s.worker?.id).filter(Boolean)));
+      const _wus = _wids.length ? await this.workerUserRepo.find({ where: _wids.map((id: any) => ({ workerId: id })), relations: ['user'] }) : [];
+      const _nameBy = new Map<number, string>();
+      _wus.forEach((wu: any) => { if (wu.user?.name) _nameBy.set(wu.workerId, wu.user.name); });
 
       // Format the data for the frontend
       const formattedRecords = workSessions.map(session => {
@@ -5046,6 +5675,18 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           alerts.push('Descanso largo');
         }
 
+        const _dayDate = new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`);
+        const _shifts = session.job ? this.jobScheduleService.getShiftsForDate(session.job, _dayDate) : [];
+        const _starts = _shifts.map((s: any) => s.baseStartTime).filter(Boolean).sort();
+        const _shiftStart = _starts[0] ? _starts[0].slice(0, 5) : null;
+        const _p = this.calcPunctuality(_shiftStart, this.madridMinutes(session.checkInTime));
+        const puntualidad = _p?.status === 'late' ? `+${_p.minutes}m tarde` : _p?.status === 'early' ? 'Adelantado' : _p?.status === 'onTime' ? 'A tiempo' : '—';
+        const _schedMin = session.job ? (this.jobScheduleService.getScheduledMinutesForDate(session.job, _dayDate) || 0) : 0;
+        const _otMin = Math.max(0, (session.totalWorkMinutes || 0) - _schedMin);
+        const extra = _schedMin > 0 ? (_otMin > 0 ? `${Math.floor(_otMin / 60)}h ${_otMin % 60}m` : '0h') : '—';
+        const centro = (session as any).workCenter?.name || '—';
+        const metodo = session.checkInMethod || '—';
+
         return {
           id: session.publicId || session.id.toString(),
           workSessionId: session.id,
@@ -5055,12 +5696,16 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           fecha,
           titular: employerName || 'N/A',
           job: session.job.jobName || 'N/A',
-          trabajador: session.worker.user?.name || session.worker.code || 'N/A',
+          trabajador: _nameBy.get(session.worker?.id) || session.worker.user?.name || session.worker.code || 'N/A',
           workerCode: session.worker.code,
           workerPublicId: session.worker.publicId,
+          centro,
           entrada,
           salida,
           total,
+          extra,
+          metodo,
+          puntualidad,
           totalWorkMinutes: session.totalWorkMinutes,
           totalBreakMinutes: session.totalBreakMinutes,
           alerts: alerts.length > 0 ? alerts.join(', ') : 'None',
@@ -5123,8 +5768,11 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         .leftJoinAndSelect('workSession.job', 'job')
         .leftJoinAndSelect('job.client', 'client')
         .leftJoinAndSelect('job.employer', 'employer')
+        .leftJoinAndSelect('job.seasonalSchedules', 'ss')
+        .leftJoinAndSelect('ss.shifts', 'shifts')
         .leftJoinAndSelect('workSession.worker', 'worker')
         .leftJoinAndSelect('worker.user', 'workerUser')
+        .leftJoinAndSelect('workSession.workCenter', 'workCenter')
         .where('worker.id = :workerId', { workerId });
 
       if (jobId) {
@@ -5163,6 +5811,38 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         if (session.isActive && !session.checkOutTime) alerts.push('Sesión activa');
         if (session.totalBreakMinutes > 60) alerts.push('Descanso largo');
 
+        // Punctuality: compare the actual check-in against the scheduled shift
+        // start for that day (both in Madrid wall-clock). Thresholds: 15 min
+        // early = "anticipado", up to 5 min late = "a tiempo", beyond = "tarde".
+        let punctuality: 'early' | 'onTime' | 'late' | null = null;
+        let lateMinutes: number | null = null;
+        let shiftStart: string | null = null;
+        if (session.job) {
+          const dayDate = new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`);
+          const shifts = this.jobScheduleService.getShiftsForDate(session.job, dayDate);
+          const starts = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
+          shiftStart = starts[0] ? starts[0].slice(0, 5) : null;
+          if (shiftStart) {
+            const [sh, sm] = shiftStart.split(':').map(Number);
+            const diff = this.madridMinutes(session.checkInTime) - (sh * 60 + sm);
+            if (diff > 5) {
+              punctuality = 'late';
+              lateMinutes = diff;
+            } else if (diff <= -15) {
+              punctuality = 'early';
+            } else {
+              punctuality = 'onTime';
+            }
+          }
+        }
+
+        const _schedMin = session.job ? (this.jobScheduleService.getScheduledMinutesForDate(session.job, new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`)) || 0) : 0;
+        const _otMin = Math.max(0, (session.totalWorkMinutes || 0) - _schedMin);
+        const extra = _schedMin > 0 ? (_otMin > 0 ? `${Math.floor(_otMin / 60)}h ${_otMin % 60}m` : '0h') : '—';
+        const puntualidad = punctuality === 'late' ? `+${lateMinutes}m tarde` : punctuality === 'early' ? 'Adelantado' : punctuality === 'onTime' ? 'A tiempo' : '—';
+        const centro = (session as any).workCenter?.name || '—';
+        const metodo = session.checkInMethod || '—';
+
         return {
           id: session.publicId || session.id.toString(),
           workSessionId: session.id,
@@ -5173,12 +5853,19 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           titular: session.job?.employer?.name || 'N/A',
           job: session.job?.jobName || 'N/A',
           client: session.job?.client?.name || 'N/A',
+          centro,
           entrada,
           salida,
           total,
+          extra,
+          metodo,
+          puntualidad,
           totalWorkMinutes: session.totalWorkMinutes,
           totalBreakMinutes: session.totalBreakMinutes,
           alerts: alerts.length > 0 ? alerts.join(', ') : 'None',
+          punctuality,
+          lateMinutes,
+          shiftStart,
           isActive: session.isActive,
           isOnBreak: session.isOnBreak,
           source: session.source,

@@ -145,7 +145,6 @@ export class PartnersService {
       // ✅ Auto-generate password
       const rawPassword = randomBytes(6).toString('base64').slice(0, 10); // Generates a 10-char password
       const hashedPassword = await bcrypt.hash(rawPassword, 10);
-      console.log(`Generated password for partner: ${rawPassword}`);
 
       // Create user
       const user = this.userRepository.create({

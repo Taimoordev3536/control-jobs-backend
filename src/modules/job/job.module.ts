@@ -15,11 +15,14 @@ import { Client } from '../clients/entities/client.entity';
 import { WorkCenter } from '../work-centers/entities/work-center.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { Survey } from '../survey/entities/survey.entity';
+import { CloudinaryModule } from '../cloudinary/cloudinary.module';
+import { WebauthnModule } from '../webauthn/webauthn.module';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { EmployerWorker } from '../employers/entities/employer-worker.entity';
 import { EmployerHoliday } from '../employers/entities/employer-holiday.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
+import { ManualAttendanceRequest } from '../manual-attendance/entities/manual-attendance-request.entity';
 import { AlertsModule } from '../realtime/alerts.module';
 import { QrCodeModule } from '../qr-code/qr-code.module';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -47,9 +50,12 @@ import { JobScheduleService } from './services/job-schedule.service';
       EmployerHoliday,
       WorkerUser,
       ClientUser,
+      ManualAttendanceRequest,
     ]),
     AlertsModule,
     QrCodeModule,
+    CloudinaryModule,
+    WebauthnModule,
   ],
   providers: [JobService, JobScheduleService],
   controllers: [JobController],

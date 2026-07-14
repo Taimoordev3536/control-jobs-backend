@@ -53,6 +53,6 @@ export class MessageAttachment {
   @Column({ type: 'smallint', default: 0 })
   position: number;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

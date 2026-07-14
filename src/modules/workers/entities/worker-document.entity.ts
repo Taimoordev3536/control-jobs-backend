@@ -44,9 +44,13 @@ export class WorkerDocument {
   @Column({ type: 'varchar', length: 255, nullable: true })
   description: string | null;
 
+  // Which "Documentos" tab this file belongs to: 'justificante' | 'otros'.
+  @Column({ type: 'varchar', length: 20, default: 'otros' })
+  category: string;
+
   @Column({ name: 'uploaded_by_user_id', nullable: true })
   uploadedByUserId: number | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

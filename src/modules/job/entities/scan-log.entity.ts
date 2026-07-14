@@ -50,6 +50,15 @@ export class ScanLog {
   @Column({ type: 'text', nullable: true, name: 'qr_token' })
   qrToken?: string;
 
+  @Column({ type: 'text', nullable: true, name: 'selfie_url' })
+  selfieUrl?: string | null; // identity-verification selfie (when job.verifyIdentity is on)
+
+  @Column({ type: 'boolean', name: 'webauthn_verified', default: false })
+  webauthnVerified: boolean; // device biometric (WebAuthn) verified this check-in
+
+  @Column({ type: 'boolean', name: 'location_unavailable', default: false })
+  locationUnavailable: boolean; // worker checked in without location (blocked/denied) — needs review
+
   @Column({ type: 'varchar', length: 20, default: 'SCAN' })
   source: string; // 'SCAN' (normal real-time) or 'MANUAL' (from approved manual request)
 

@@ -470,7 +470,7 @@ export class WorkerInvitationService {
     return `${base.replace(/\/$/, '')}/accept-invite?token=${token}`;
   }
 
-  @Cron(CronExpression.EVERY_DAY_AT_2AM, { name: 'expire-worker-invitations' })
+  @Cron(CronExpression.EVERY_DAY_AT_2AM, { name: 'expire-worker-invitations', timeZone: 'Europe/Madrid' })
   async expireStale() {
     const result = await this.invitationRepo
       .createQueryBuilder()

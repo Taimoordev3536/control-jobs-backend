@@ -115,6 +115,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private async resolveDisplayName(payload: ChatTokenPayload): Promise<string | null> {
     if (payload.name) return payload.name;
+    const fromToken = [payload.firstName, payload.lastName].filter(Boolean).join(' ').trim();
+    if (fromToken) return fromToken;
+
     const user = await this.userRepo.findOne({
       where: { id: payload.id },
       select: { id: true, name: true, firstName: true, lastName: true },

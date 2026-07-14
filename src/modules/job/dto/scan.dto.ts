@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, IsIn } from 'class-validator';
+import { IsNumber, IsOptional, IsString, IsIn, IsBoolean } from 'class-validator';
 
 export class RecordScanDto {
   @IsString()
@@ -44,6 +44,16 @@ export class RecordScanDto {
   @IsOptional()
   @IsString()
   workCenterId?: string;
+
+  // Identity-verification selfie as a base64 data URL (data:image/jpeg;base64,...)
+  @IsOptional()
+  @IsString()
+  selfie?: string;
+
+  // Worker chose to continue check-in without location (browser blocked/denied it).
+  @IsOptional()
+  @IsBoolean()
+  locationUnavailable?: boolean;
 }
 
 

@@ -97,7 +97,7 @@ export class Task {
   @Column({ type: 'boolean', default: false })
   isCompleted: boolean;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   completedAt: Date;
 
   @Column({ type: 'int', nullable: true })

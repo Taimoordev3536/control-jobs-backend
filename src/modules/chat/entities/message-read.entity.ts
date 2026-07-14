@@ -32,6 +32,6 @@ export class MessageRead {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @CreateDateColumn({ name: 'read_at' })
+  @CreateDateColumn({ name: 'read_at', type: 'timestamptz' })
   readAt: Date;
 }

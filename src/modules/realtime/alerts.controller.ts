@@ -17,6 +17,12 @@ export class AlertsController {
     return { data: items, isSuccess: true };
   }
 
+  @Get('announcements')
+  async announcements(@Req() req: any) {
+    const data = await this.alertsService.listAnnouncementsForUser(req.user?.id);
+    return { data, isSuccess: true };
+  }
+
   @Get('unread-count')
   async unreadCount(@Req() req: any) {
     const user = req.user;

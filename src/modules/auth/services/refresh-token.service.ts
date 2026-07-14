@@ -61,25 +61,14 @@ export class RefreshTokenService {
 
     if (existing.revokedAt) {
       const ageSeconds = (Date.now() - existing.revokedAt.getTime()) / 1000;
+      // Within grace, a replayed rotated token is a racing concurrent refresh:
+      // hand each caller a fresh token instead of flagging theft.
       if (
         existing.replacedByTokenHash &&
         ageSeconds <= ROTATION_GRACE_SECONDS
       ) {
-        const replacement = await this.repo.findOne({
-          where: { tokenHash: existing.replacedByTokenHash },
-        });
-        if (replacement && !replacement.revokedAt) {
-          // We can't return the raw replacement (we never persisted it), so
-          // issue a fresh one keyed off the same user and chain the replaced
-          // record forward. This still rotates, but doesn't punish the
-          // racing caller.
-          const next = await this.issue(existing.userId, deviceInfo, ipAddress);
-          replacement.revokedAt = new Date();
-          replacement.replacedByTokenHash = next.record.tokenHash;
-          replacement.lastUsedAt = new Date();
-          await this.repo.save(replacement);
-          return { userId: existing.userId, next };
-        }
+        const next = await this.issue(existing.userId, deviceInfo, ipAddress);
+        return { userId: existing.userId, next };
       }
       await this.revokeAllForUser(existing.userId);
       this.logger.warn(

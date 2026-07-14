@@ -13,6 +13,7 @@ import { User } from '../users/entities/user.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { EmployerClient } from '../employers/entities/employer-client.entity';
 import { Role } from '../users/entities/role.entity';
+import { madridTodayKey } from '../../common/helpers/business-time';
 import * as bcrypt from 'bcryptjs';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { randomBytes } from 'crypto';
@@ -285,7 +286,7 @@ export class ClientsService {
   }
 
   private async nextInvoiceNumber(employerId: number, prefix: string): Promise<string> {
-    const year = new Date().getFullYear();
+    const year = Number(madridTodayKey().slice(0, 4));
     const count = await this.clientInvoiceRepo
       .createQueryBuilder('i')
       .where('i.employer_id = :employerId', { employerId })
@@ -336,7 +337,7 @@ export class ClientsService {
       clientId,
       employerId,
       invoiceNumber: body.invoiceNumber?.trim() || (await this.nextInvoiceNumber(employerId, 'F')),
-      issueDate: body.issueDate || new Date().toISOString().slice(0, 10),
+      issueDate: body.issueDate || madridTodayKey(),
       dueDate: body.dueDate || null,
       periodStart: body.periodStart,
       periodEnd: body.periodEnd,
@@ -422,6 +423,36 @@ export class ClientsService {
       vatAmount: Number(inv.vatAmount),
       total: Number(inv.total),
       showVat: true,
+      serviceDetail: {
+        periodStart: inv.periodStart,
+        periodEnd: inv.periodEnd,
+        rows: [
+          ...(inv.fixedAmount != null
+            ? [
+                {
+                  concept: inv.fixedLabel,
+                  detail: 'Importe fijo del periodo',
+                  quantity: '1',
+                  unitPrice: Number(inv.fixedAmount),
+                  amount: Number(inv.fixedAmount),
+                },
+              ]
+            : []),
+          {
+            concept: inv.hoursLabel,
+            detail: `${Number(inv.hoursQty)} h × ${Number(inv.hourRate).toFixed(2).replace('.', ',')} €/h`,
+            quantity: `${Number(inv.hoursQty)} h`,
+            unitPrice: Number(inv.hourRate),
+            amount: Number(inv.hoursAmount),
+          },
+        ],
+        subtotal: Number(inv.subtotal),
+        vatPct: Number(inv.vatPct),
+        vatAmount: Number(inv.vatAmount),
+        total: Number(inv.total),
+        showVat: true,
+        notes: inv.notes,
+      },
     });
     return { buffer, fileName: `${inv.invoiceNumber}.pdf` };
   }
@@ -586,7 +617,6 @@ export class ClientsService {
       // ✅ Auto-generate password
       const rawPassword = randomBytes(6).toString('base64').slice(0, 10); // Generates a 10-char password
       const hashedPassword = await bcrypt.hash(rawPassword, 10);
-      console.log(`Generated password for Client: ${rawPassword}`);
       const user = manager.create(User, {
         name: dto.name,
         email: dto.email,

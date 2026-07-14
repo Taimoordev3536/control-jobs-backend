@@ -13,6 +13,27 @@ export interface DocLine {
   amount: number;
 }
 
+export interface ServiceDetailRow {
+  concept: string;
+  detail?: string | null;
+  quantity: string;
+  unitPrice: number;
+  amount: number;
+}
+
+export interface ServiceDetail {
+  title?: string;
+  periodStart: string;
+  periodEnd: string;
+  rows: ServiceDetailRow[];
+  subtotal?: number;
+  vatPct?: number;
+  vatAmount?: number;
+  total: number;
+  showVat: boolean;
+  notes?: string | null;
+}
+
 export interface LineDocParams {
   docType: string;
   number: string;
@@ -28,6 +49,7 @@ export interface LineDocParams {
   vatAmount?: number;
   total: number;
   showVat: boolean;
+  serviceDetail?: ServiceDetail;
 }
 
 const fmtEur = (n: number | string) => {
@@ -155,6 +177,76 @@ export function renderLineDocPdf(params: LineDocParams): Promise<Buffer> {
   doc.fontSize(11).font('Helvetica-Bold').fillColor('white');
   doc.text('Total', boxX + padX, y + 7, { width: labelW });
   doc.text(fmtEur(params.total), boxX + boxW / 2, y + 7, { width: valW, align: 'right' });
+
+  if (params.serviceDetail) {
+    const d = params.serviceDetail;
+    doc.addPage();
+    let dy = MARGIN;
+
+    doc.fontSize(18).fillColor(PURPLE).font('Helvetica-Bold');
+    doc.text(d.title || 'Detalle de los servicios', MARGIN, dy, { width: CONTENT_WIDTH });
+    dy = doc.y + 6;
+
+    doc.fontSize(9).fillColor(TEXT_MUTED).font('Helvetica');
+    doc.text(`Factura Nº ${params.number}`, MARGIN, dy, { width: CONTENT_WIDTH });
+    dy = doc.y + 2;
+    doc.text(`Periodo: ${fmtDateEs(d.periodStart)} - ${fmtDateEs(d.periodEnd)}`, MARGIN, dy, { width: CONTENT_WIDTH });
+    dy = doc.y + 18;
+
+    doc.rect(MARGIN, dy, CONTENT_WIDTH, 22).fill(PURPLE);
+    doc.fontSize(10).fillColor('white').font('Helvetica-Bold');
+    doc.text('Concepto', colDescX, dy + 7);
+    doc.text('Cant.', colQtyX, dy + 7, { width: colQtyW, align: 'right' });
+    doc.text('Precio', colPriceX, dy + 7, { width: colPriceW, align: 'right' });
+    doc.text('Importe', colAmountX, dy + 7, { width: colAmountW, align: 'right' });
+    dy += 22;
+
+    for (const r of d.rows) {
+      const conceptW = colQtyX - colDescX - 8;
+      doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica-Bold');
+      doc.text(r.concept, colDescX, dy + 7, { width: conceptW });
+      let conceptBottom = doc.y;
+      if (r.detail) {
+        doc.fontSize(8).fillColor(TEXT_MUTED).font('Helvetica');
+        doc.text(r.detail, colDescX, doc.y + 1, { width: conceptW });
+        conceptBottom = doc.y;
+      }
+      doc.fontSize(10).fillColor(TEXT_DARK).font('Helvetica');
+      doc.text(r.quantity, colQtyX, dy + 7, { width: colQtyW, align: 'right' });
+      doc.text(fmtEur(r.unitPrice), colPriceX, dy + 7, { width: colPriceW, align: 'right' });
+      doc.text(fmtEur(r.amount), colAmountX, dy + 7, { width: colAmountW, align: 'right' });
+      dy = Math.max(dy + 22, conceptBottom + 8);
+      doc.moveTo(MARGIN, dy).lineTo(RIGHT_EDGE, dy).lineWidth(0.5).strokeColor(BORDER).stroke();
+    }
+
+    dy += 16;
+    if (d.showVat) {
+      const pct = (n?: number) => {
+        const v = Number(n) || 0;
+        return Number.isInteger(v) ? String(v) : v.toFixed(2);
+      };
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(TEXT_DARK);
+      doc.text('Base imponible', boxX + padX, dy, { width: labelW });
+      doc.font('Helvetica').text(fmtEur(d.subtotal || 0), boxX + boxW / 2, dy, { width: valW, align: 'right' });
+      dy += 18;
+      doc.font('Helvetica-Bold').text(`I.V.A. ${pct(d.vatPct)}%`, boxX + padX, dy, { width: labelW });
+      doc.font('Helvetica').text(fmtEur(d.vatAmount || 0), boxX + boxW / 2, dy, { width: valW, align: 'right' });
+      dy += 22;
+    }
+    doc.rect(boxX, dy, boxW, 24).fill(PURPLE);
+    doc.fontSize(11).font('Helvetica-Bold').fillColor('white');
+    doc.text('Total', boxX + padX, dy + 7, { width: labelW });
+    doc.text(fmtEur(d.total), boxX + boxW / 2, dy + 7, { width: valW, align: 'right' });
+    dy += 40;
+
+    if (d.notes) {
+      doc.fontSize(9).font('Helvetica-Bold').fillColor(TEXT_DARK);
+      doc.text('Notas', MARGIN, dy, { width: CONTENT_WIDTH });
+      dy = doc.y + 2;
+      doc.fontSize(9).font('Helvetica').fillColor(TEXT_MUTED);
+      doc.text(d.notes, MARGIN, dy, { width: CONTENT_WIDTH });
+    }
+  }
 
   doc.end();
   return done;

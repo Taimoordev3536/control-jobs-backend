@@ -10,6 +10,7 @@ import { Employer } from '../../employers/entities/employer.entity';
 import { AdminUser } from '../../users/entities/admin-user.entity';
 import { resolveCompanyIdentity } from '../helpers/company-identity';
 import { BillingScope } from './billing-access.service';
+import { madridTodayKey } from '../../../common/helpers/business-time';
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100;
 
@@ -48,7 +49,7 @@ export class AutofacturaService {
           ibanMasked: clean ? `${clean.slice(0, 4)} **** **** **** ${clean.slice(-4)}` : null,
           retention: this.num(p.retention),
         };
-        nextNumber = await this.nextNumber(p, new Date().toISOString().slice(0, 10));
+        nextNumber = await this.nextNumber(p, madridTodayKey());
       }
     }
     return { company, partner, nextNumber };
@@ -181,7 +182,7 @@ export class AutofacturaService {
     const retentionPct = this.num(partner.retention);
     const vatPct = dto.vatPct != null ? this.num(dto.vatPct) : 21;
     const { retentionAmount, vatAmount, total } = this.computeTotals(subtotal, retentionPct, vatPct);
-    const issueDate = dto.issueDate || new Date().toISOString().slice(0, 10);
+    const issueDate = dto.issueDate || madridTodayKey();
 
     return this.dataSource.transaction(async (m) => {
       const af = m.create(Autofactura, {
@@ -263,7 +264,7 @@ export class AutofacturaService {
     const retentionPct = this.num(partner.retention);
     const vatPct = 21;
     const { retentionAmount, vatAmount, total } = this.computeTotals(subtotal, retentionPct, vatPct);
-    const issueDate = new Date().toISOString().slice(0, 10);
+    const issueDate = madridTodayKey();
     const [ey, em] = periodEnd.split('-').map(Number);
     const payMonth = em === 12 ? 1 : em + 1;
     const payYear = em === 12 ? ey + 1 : ey;

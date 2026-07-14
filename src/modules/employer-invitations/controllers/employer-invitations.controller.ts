@@ -85,7 +85,6 @@ export class EmployerInvitationsController {
     @Req() req: any,
     @Param('employerPublicId') employerPublicId: string,
   ) {
-    console.log('[resendEmployerVerification] HIT — employerPublicId:', employerPublicId, 'user:', req.user?.id, 'role:', req.user?.role?.name);
     const data = await this.service.resendEmployerEmailVerification(
       req.user,
       employerPublicId,

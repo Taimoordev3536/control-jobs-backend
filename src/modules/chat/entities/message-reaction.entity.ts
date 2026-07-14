@@ -35,6 +35,6 @@ export class MessageReaction {
   @Column({ type: 'varchar', length: 16 })
   emoji: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

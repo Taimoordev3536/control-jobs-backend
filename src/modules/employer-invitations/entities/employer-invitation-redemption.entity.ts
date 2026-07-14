@@ -41,6 +41,6 @@ export class EmployerInvitationRedemption {
   @Column({ name: 'redeemed_email', length: 255 })
   redeemedEmail: string;
 
-  @CreateDateColumn({ name: 'redeemed_at' })
+  @CreateDateColumn({ name: 'redeemed_at', type: 'timestamptz' })
   redeemedAt: Date;
 }

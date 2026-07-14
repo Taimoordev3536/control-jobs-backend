@@ -99,6 +99,16 @@ user: User;
   @Column({ name: 'salary_hour_rate', type: 'numeric', precision: 12, scale: 2, nullable: true })
   salaryHourRate: string | null;
 
+  // Bank account the worker is paid into (self-service "Cuenta bancaria para cobros").
+  @Column({ name: 'bank_iban', length: 40, nullable: true })
+  bankIban: string | null;
+
+  @Column({ name: 'bank_swift', length: 20, nullable: true })
+  bankSwift: string | null;
+
+  @Column({ name: 'bank_holder', length: 150, nullable: true })
+  bankHolder: string | null;
+
   // Relations
   @OneToMany(() => ScanLog, scanLog => scanLog.worker)
   scanLogs: ScanLog[];

@@ -17,6 +17,6 @@ export class CloudConnection {
   @Column({ name: 'folder_id', type: 'text', nullable: true })
   folderId: string | null;
 
-  @CreateDateColumn({ name: 'connected_at' })
+  @CreateDateColumn({ name: 'connected_at', type: 'timestamptz' })
   connectedAt: Date;
 }

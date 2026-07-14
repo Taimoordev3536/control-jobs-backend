@@ -123,4 +123,16 @@ export class CreateClientDto {
   @IsBoolean()
   @IsOptional()
   active?: boolean;
+
+  @IsString()
+  @IsOptional()
+  bankIban?: string;
+
+  @IsString()
+  @IsOptional()
+  bankSwift?: string;
+
+  @IsString()
+  @IsOptional()
+  bankHolder?: string;
 }

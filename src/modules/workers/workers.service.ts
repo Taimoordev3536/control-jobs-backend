@@ -13,6 +13,7 @@ import { Role } from '../users/entities/role.entity';
 import { Employer } from '../../modules/employers/entities/employer.entity';
 import { EmployerWorker } from '../../modules/employers/entities/employer-worker.entity';
 import { EmployerUser } from '../../modules/employers/entities/employer-user.entity';
+import { madridTodayKey } from '../../common/helpers/business-time';
 import { Client } from '../clients/entities/client.entity';
 import { Job } from '../job/entities/job.entity';
 import { WorkerDocument } from './entities/worker-document.entity';
@@ -71,6 +72,7 @@ export class WorkersService {
       mimeType: f.mimeType,
       sizeBytes: f.sizeBytes != null ? Number(f.sizeBytes) : null,
       description: f.description,
+      category: f.category || 'otros',
       createdAt: f.createdAt,
     };
   }
@@ -88,7 +90,9 @@ export class WorkersService {
     file: Express.Multer.File,
     description: string | undefined,
     userId: number | undefined,
+    category?: string,
   ) {
+    const cat = category === 'justificante' ? 'justificante' : 'otros';
     if (!file) throw new BadRequestException('No file uploaded');
     if (!this.attachmentMimeTypes.includes(file.mimetype)) {
       throw new BadRequestException('Unsupported file type (PDF, image or Office document only)');
@@ -113,6 +117,7 @@ export class WorkersService {
       mimeType: file.mimetype,
       sizeBytes: file.size,
       description: description || null,
+      category: cat,
       uploadedByUserId: userId || null,
     });
     const saved = await this.workerDocumentRepo.save(rec);
@@ -235,7 +240,7 @@ export class WorkersService {
   }
 
   private async nextReceiptNumber(employerId: number): Promise<string> {
-    const year = new Date().getFullYear();
+    const year = Number(madridTodayKey().slice(0, 4));
     const count = await this.salaryReceiptRepo
       .createQueryBuilder('r')
       .where('r.employer_id = :employerId', { employerId })
@@ -277,7 +282,7 @@ export class WorkersService {
       workerId,
       employerId,
       receiptNumber: body.receiptNumber?.trim() || (await this.nextReceiptNumber(employerId)),
-      issueDate: body.issueDate || new Date().toISOString().slice(0, 10),
+      issueDate: body.issueDate || madridTodayKey(),
       periodStart: body.periodStart,
       periodEnd: body.periodEnd,
       fixedLabel: 'Gastos fijos',
@@ -682,7 +687,6 @@ export class WorkersService {
       // Auto-generate password (or set default)
       const rawPassword = 'Worker' + Math.random().toString(36).slice(-8);
       const hashedPassword = await bcrypt.hash(rawPassword, 10);
-      console.log(`Generated password for worker: ${rawPassword}`);
       const user = manager.create(User, {
         name: dto.name,
         email: dto.email,

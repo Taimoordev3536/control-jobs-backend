@@ -42,6 +42,6 @@ export class ImpersonationLog {
   @Column({ name: 'ip_address', length: 45, nullable: true })
   ipAddress: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

@@ -77,7 +77,7 @@ export class Survey {
   @Column({ type: 'time', nullable: true })
   sendTime: string | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   // (questions previously stored as JSON here were removed - questions are not stored on the survey row)

@@ -24,7 +24,7 @@ export class TaskHistory {
   @Column({ default: false })
   isCompleted: boolean;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamptz', nullable: true })
   completedAt: Date;
 
   @Column({ nullable: true })

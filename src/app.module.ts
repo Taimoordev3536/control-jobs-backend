@@ -9,14 +9,19 @@ import { UsersModule } from './modules/users/users.module';
 import {ClientsModule } from './modules/clients/clients.module';
 import { WorkersModule } from './modules/workers/workers.module';
 import { JobModule } from './modules/job/job.module';
+import { WebauthnModule } from './modules/webauthn/webauthn.module';
+import { ConsentModule } from './modules/consent/consent.module';
+import { SurveyModule } from './modules/survey/survey.module';
 import { QrCodeModule } from './modules/qr-code/qr-code.module';
 import { WorkCentersModule } from './modules/work-centers/work-centers.module';
 import { config } from 'dotenv';
 import { AlertsModule } from './modules/realtime/alerts.module';
 import { ManualAttendanceModule } from './modules/manual-attendance/manual-attendance.module';
 import { AbsencesModule } from './modules/absences/absences.module';
+import { ClientRequestsModule } from './modules/client-requests/client-requests.module';
 import { SubUsersModule } from './modules/sub-users/sub-users.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { EmployerInvitationsModule } from './modules/employer-invitations/employer-invitations.module';
 import { WorkerInvitationsModule } from './modules/worker-invitations/worker-invitations.module';
 import { ClientInvitationsModule } from './modules/client-invitations/client-invitations.module';
@@ -53,12 +58,20 @@ config();
                configService.get<string>('DATABASE_HOST')?.includes('amazonaws')
             ? { rejectUnauthorized: false }
             : false,
+          extra: {
+            max: +configService.get<number>('DATABASE_POOL_MAX') || 10,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000,
+          },
         };
       },
       inject: [ConfigService],
     }),
     CommonModule,
     AuthModule,
+    WebauthnModule,
+    ConsentModule,
+    SurveyModule,
     PartnersModule,
     UsersModule,
     EmployersModule,
@@ -70,8 +83,10 @@ config();
     AlertsModule,
     ManualAttendanceModule,
     AbsencesModule,
+    ClientRequestsModule,
     SubUsersModule,
     BillingModule,
+    DashboardModule,
     EmployerInvitationsModule,
     WorkerInvitationsModule,
     ClientInvitationsModule,

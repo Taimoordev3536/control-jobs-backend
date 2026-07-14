@@ -45,6 +45,6 @@ import { PaymentMethodsModule } from '../payment-methods/payment-methods.module'
   ],
   controllers: [EmployersController],
   providers: [EmployersService, PendingEmployersService],
-  exports: [EmployersService],
+  exports: [EmployersService, PendingEmployersService],
 })
 export class EmployersModule { }

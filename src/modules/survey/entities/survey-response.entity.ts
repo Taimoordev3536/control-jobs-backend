@@ -25,7 +25,18 @@ export class SurveyResponse {
   @ManyToOne(() => Client, { nullable: true })
   client: Client;
 
-  @CreateDateColumn()
+  // Period bucket this response covers: 'YYYY-MM-DD' (daily), 'YYYY-Www' (weekly), 'YYYY-MM' (monthly).
+  @Column({ name: 'period_key', type: 'varchar', length: 20, nullable: true })
+  periodKey: string | null;
+
+  // Single-question survey: the 0–10 rating and an optional reason (required when rating ≤ threshold).
+  @Column({ type: 'int', nullable: true })
+  rating: number | null;
+
+  @Column({ type: 'text', nullable: true })
+  comment: string | null;
+
+  @CreateDateColumn({ type: 'timestamptz' })
   submittedAt: Date;
 
   @OneToMany(() => SurveyAnswer, answer => answer.response)

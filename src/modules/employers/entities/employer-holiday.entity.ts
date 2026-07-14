@@ -18,6 +18,6 @@ export class EmployerHoliday {
   @Column({ length: 120, nullable: true })
   name: string | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

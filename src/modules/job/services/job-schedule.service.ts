@@ -42,10 +42,24 @@ export class JobScheduleService {
    */
   private isDateInJobRange(job: Job, targetDate: Date): boolean {
     const target = this.getDateWithoutTime(targetDate);
-    const start = this.getDateWithoutTime(new Date(job.startDate));
-    const end = this.getDateWithoutTime(new Date(job.endDate));
+    const start = this.getDateWithoutTime(this.parseCivilDate(job.startDate));
+    const end = this.getDateWithoutTime(this.parseCivilDate(job.endDate));
 
     return target >= start && target <= end;
+  }
+
+  /**
+   * Parse a date-only value (a `date` column, usually a 'YYYY-MM-DD' string)
+   * into a local Date anchored at noon. The noon anchor makes reading the
+   * local calendar fields yield the intended civil day on ANY server timezone,
+   * including negative-offset hosts where `new Date('YYYY-MM-DD')` (UTC
+   * midnight) would otherwise roll back to the previous day.
+   */
+  private parseCivilDate(value: string | Date): Date {
+    if (value instanceof Date) {
+      return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 12);
+    }
+    return new Date(`${String(value).slice(0, 10)}T12:00:00`);
   }
 
   /**

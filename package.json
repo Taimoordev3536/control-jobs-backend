@@ -44,6 +44,8 @@
     "@nestjs/schedule": "^6.0.1",
     "@nestjs/typeorm": "^10.0.2",
     "@nestjs/websockets": "^10.4.20",
+    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.2",
     "@types/luxon": "^3.7.1",
     "@types/qrcode": "^1.5.5",
     "aws-sdk": "^2.1692.0",

@@ -14,6 +14,6 @@ export class Device {
     @Column({ name: 'device_type', nullable: true })
     deviceType: string;
 
-    @Column({ name: 'last_used', type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+    @Column({ name: 'last_used', type: 'timestamptz', default: () => 'CURRENT_TIMESTAMP' })
     lastUsed: Date;
 } 

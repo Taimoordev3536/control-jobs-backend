@@ -41,21 +41,21 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
-  @Column({ name: 'email_verified_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'email_verified_at', type: 'timestamptz', nullable: true })
   emailVerifiedAt: Date | null;
 
   @Column({ name: 'email_verification_token_hash', type: 'varchar', length: 64, nullable: true })
   emailVerificationTokenHash: string | null;
 
-  @Column({ name: 'email_verification_expires_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'email_verification_expires_at', type: 'timestamptz', nullable: true })
   emailVerificationExpiresAt: Date | null;
 
-  @Column({ name: 'email_verification_sent_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'email_verification_sent_at', type: 'timestamptz', nullable: true })
   emailVerificationSentAt: Date | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 }

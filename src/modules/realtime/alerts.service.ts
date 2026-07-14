@@ -16,7 +16,8 @@ export type AlertType =
   | 'ANNOUNCEMENT'
   | 'SUPPORT_REQUEST'
   | 'SUPPORT_REPLY'
-  | 'SUGGESTION';
+  | 'SUGGESTION'
+  | 'SURVEY_ALERT';
 export interface AlertPayload {
   type: AlertType;
   jobId: number;
@@ -123,6 +124,23 @@ export class AlertsService {
       createdAt: saved.createdAt?.toISOString() ?? new Date().toISOString(),
       meta: args.meta ?? null,
     });
+  }
+
+  async listAnnouncementsForUser(userId: number) {
+    const rows = await this.notifRepo.find({
+      where: { recipientId: userId, type: 'ANNOUNCEMENT' },
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+    return rows.map((n) => ({
+      id: n.publicId,
+      subject: n.meta?.subject || null,
+      body: n.message,
+      severity: n.meta?.severity || 'INFO',
+      senderRole: n.meta?.senderRole || null,
+      createdAt: n.createdAt,
+      isRead: n.isRead,
+    }));
   }
 
   async getRecentForRecipient(role: string, userId: number, days: number) {

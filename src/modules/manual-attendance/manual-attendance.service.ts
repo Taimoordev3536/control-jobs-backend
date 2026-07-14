@@ -2,6 +2,8 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, Between, MoreThanOrEqual, LessThanOrEqual, In } from 'typeorm';
 import { isUUID } from 'class-validator';
+import { DateTime } from 'luxon';
+import { BUSINESS_TZ, madridNow } from '../../common/helpers/business-time';
 import { ManualAttendanceRequest } from './entities/manual-attendance-request.entity';
 import { ManualAttendancePermission } from './entities/manual-attendance-permission.entity';
 import { ManualAttendanceRequestType } from './enums/request-type.enum';
@@ -310,12 +312,12 @@ export class ManualAttendanceService {
       }
     }
 
-    // Validate retroactive date limit
-    const requestedDate = new Date(dto.requestedDate);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const maxPastDate = new Date(today);
-    maxPastDate.setDate(maxPastDate.getDate() - permissions.maxRetroactiveDays);
+    // Validate retroactive date limit — evaluated on Madrid civil dates so the
+    // allowed window and "future date" boundary track the business day, not the
+    // server's UTC clock (which flips ~1-2h before Madrid midnight).
+    const todayMadrid = madridNow().startOf('day');
+    const requestedDate = DateTime.fromISO(dto.requestedDate, { zone: BUSINESS_TZ }).startOf('day');
+    const maxPastDate = todayMadrid.minus({ days: permissions.maxRetroactiveDays });
 
     if (requestedDate < maxPastDate) {
       throw new BadRequestException(
@@ -323,13 +325,13 @@ export class ManualAttendanceService {
       );
     }
 
-    if (requestedDate > today) {
+    if (requestedDate > todayMadrid) {
       throw new BadRequestException('Cannot request attendance for a future date');
     }
 
-    // Check monthly rate limit for this worker
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    // Check monthly rate limit for this worker (Madrid calendar month).
+    const startOfMonth = todayMadrid.startOf('month').toJSDate();
+    const endOfMonth = todayMadrid.endOf('month').toJSDate();
     const monthlyCount = await this.requestRepo.count({
       where: {
         workerId,
@@ -347,7 +349,7 @@ export class ManualAttendanceService {
       where: {
         jobId,
         workerId,
-        requestedDate: requestedDate,
+        requestedDate: new Date(dto.requestedDate),
         status: ManualAttendanceRequestStatus.PENDING,
       },
     });

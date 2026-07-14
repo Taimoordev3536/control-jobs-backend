@@ -105,6 +105,18 @@ async getWorkerCalendar(@Req() req, @Query('start') start: string, @Query('end')
 }
 
 @UseGuards(JwtAuthGuard)
+@Get('worker/day')
+async getWorkerJobsForDate(@Req() req, @Query('date') date?: string) {
+  return this.jobService.getWorkerJobsForDate(req.user.id, date);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('worker/pending')
+async getWorkerPendingCheckins(@Req() req, @Query('days') days?: string) {
+  return this.jobService.getWorkerPendingCheckins(req.user.id, days ? Number(days) : 30);
+}
+
+@UseGuards(JwtAuthGuard)
 @Get('planner/nearby')
 async getPlannerNearby(
   @Req() req,
@@ -144,6 +156,30 @@ async getAllJobsForWorkerFromToken(@Req() req) {
 async getAllJobsForClientFromToken(@Req() req) {
   const userId = req.user?.id;
   return this.jobService.getAllJobsByClientFromToken(userId);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('client/day')
+async getClientJobsForDate(@Req() req, @Query('date') date?: string) {
+  return this.jobService.getClientJobsForDate(req.user.id, date);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('client/work-session-records')
+async getClientWorkSessionRecords(@Req() req, @Query('startDate') startDate?: string, @Query('endDate') endDate?: string, @Query('jobId') jobId?: string) {
+  return this.jobService.getClientWorkSessionRecords(req.user.id, startDate, endDate, jobId);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('record/:recordId')
+async getRecordDetail(@Param('recordId') recordId: string) {
+  return this.jobService.getRecordDetail(recordId);
+}
+
+@UseGuards(JwtAuthGuard)
+@Get('client/my-calendar')
+async getClientMyCalendar(@Req() req, @Query('start') start: string, @Query('end') end: string) {
+  return this.jobService.getClientMyCalendar(req.user.id, start, end);
 }
 
 // List all jobs for a specific client (used by the Clients detail page's
@@ -190,7 +226,9 @@ async getClientCalendar(
   @Post('scan')
   async recordScan(@Body() recordScanDto: RecordScanDto, @Req() req): Promise<{ status: string; scanData: any }> {
     const userId = req.user?.id;
-    return await this.jobService.recordScan(recordScanDto, userId);
+    // With 'trust proxy' enabled, req.ip is the real client IP (behind Render/etc.)
+    const serverIp = req.ip || req.socket?.remoteAddress || null;
+    return await this.jobService.recordScan(recordScanDto, userId, serverIp);
   }
 
   // @UseGuards(JwtAuthGuard)
@@ -378,8 +416,8 @@ async getClientCalendar(
   @UseGuards(JwtAuthGuard)
   @Post(':jobId/tasks/:taskId/toggle')
   async toggleTaskCompletion(
-    @Param('jobId', ParseUUIDPipe) jobId: string,
-    @Param('taskId', ParseUUIDPipe) taskId: string,
+    @Param('jobId') jobId: string,
+    @Param('taskId') taskId: string,
     @Req() req
   ) {
     const numericJobId = await this.jobService.resolvePublicId(jobId);

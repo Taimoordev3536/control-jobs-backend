@@ -68,6 +68,6 @@ export class SalaryReceipt {
   @Column({ name: 'uploaded_by_user_id', nullable: true })
   uploadedByUserId: number | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

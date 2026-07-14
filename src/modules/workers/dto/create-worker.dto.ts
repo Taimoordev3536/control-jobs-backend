@@ -109,4 +109,16 @@ export class CreateWorkerDto {
   @IsEmail()
   @IsOptional()
   accessEmail?: string;
+
+  @IsString()
+  @IsOptional()
+  bankIban?: string;
+
+  @IsString()
+  @IsOptional()
+  bankSwift?: string;
+
+  @IsString()
+  @IsOptional()
+  bankHolder?: string;
 }

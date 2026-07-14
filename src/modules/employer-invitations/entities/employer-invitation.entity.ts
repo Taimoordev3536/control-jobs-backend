@@ -69,7 +69,7 @@ export class EmployerInvitation {
   @Column({ length: 20, default: 'PENDING' })
   status: InvitationStatus;
 
-  @Column({ name: 'accepted_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'accepted_at', type: 'timestamptz', nullable: true })
   acceptedAt: Date | null;
 
   @ManyToOne(() => Employer, { onDelete: 'SET NULL', nullable: true })
@@ -79,13 +79,13 @@ export class EmployerInvitation {
   @Column({ name: 'accepted_employer_id', nullable: true })
   acceptedEmployerId: number | null;
 
-  @Column({ name: 'expires_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt: Date | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
   @OneToMany(

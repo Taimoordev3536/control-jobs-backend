@@ -257,14 +257,14 @@ export class Employer {
   @Column({ name: 'per_worker_rate', type: 'decimal', precision: 8, scale: 2, default: 0 })
   perWorkerRate: number;
 
-  @Column({ name: 'trial_ends_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'trial_ends_at', type: 'timestamptz', nullable: true })
   trialEndsAt: Date | null;
 
   // Captured by POST /employers/me/payment-method when an employer who's in
   // AWAITING_PAYMENT_METHOD state actually picks a payment method. The
   // monthly billing cron prorates from this date — days between trial-end
   // and this date are intentionally NOT billed (per spec §6).
-  @Column({ name: 'payment_method_added_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'payment_method_added_at', type: 'timestamptz', nullable: true })
   paymentMethodAddedAt: Date | null;
 
   @Column({ name: 'billing_status', length: 40, default: 'ACTIVE' })
@@ -299,9 +299,9 @@ export class Employer {
   @OneToMany(() => EmployerUser, (employerUser) => employerUser.employer)
   employerUsers: EmployerUser[];
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 }

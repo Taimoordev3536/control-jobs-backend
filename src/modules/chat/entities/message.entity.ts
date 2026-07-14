@@ -47,10 +47,10 @@ export class Message {
   @Column({ type: 'text', nullable: true })
   body: string | null;
 
-  @Column({ name: 'edited_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'edited_at', type: 'timestamptz', nullable: true })
   editedAt: Date | null;
 
-  @Column({ name: 'deleted_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
   deletedAt: Date | null;
 
   @Column({ name: 'replied_to_message_id', type: 'bigint', nullable: true })
@@ -60,10 +60,10 @@ export class Message {
   @JoinColumn({ name: 'replied_to_message_id' })
   repliedToMessage: Message | null;
 
-  @Column({ name: 'pinned_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'pinned_at', type: 'timestamptz', nullable: true })
   pinnedAt: Date | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
   @OneToMany(() => MessageRead, (r) => r.message)

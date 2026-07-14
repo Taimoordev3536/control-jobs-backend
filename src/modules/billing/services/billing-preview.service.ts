@@ -8,6 +8,7 @@ import { AdminConfig } from '../../admin/entities/admin-config.entity';
 import { RatePlan } from '../entities/rate-plan.entity';
 import { PricingService, PricingBreakdown } from './pricing.service';
 import { RatePlanService } from './rate-plan.service';
+import { madridNow, madridDateKey } from '../../../common/helpers/business-time';
 
 export interface BillingPreviewResult {
   employerId: number;
@@ -61,9 +62,11 @@ export class BillingPreviewService {
     const employer = await this.employerRepo.findOne({ where: { id: employerId } });
     if (!employer) throw new NotFoundException(`Employer ${employerId} not found`);
 
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth(); // 0-based
+    // Anchor "current month" to Madrid so the preview never disagrees with the
+    // month the monthly-invoice cron (also Madrid-anchored) will bill.
+    const now = madridNow();
+    const year = now.year;
+    const month = now.month - 1; // 0-based
     const periodStart = new Date(year, month, 1);
     const periodEnd = new Date(year, month + 1, 0); // last day of this month
     const daysInMonth = periodEnd.getDate();
@@ -100,16 +103,20 @@ export class BillingPreviewService {
     // legacy data, then `createdAt` for brand-new employers.
     let proratedDays = daysInMonth;
     let isProrated = false;
-    const effectiveStartCandidate = employer.paymentMethodAddedAt
-      ? new Date(employer.paymentMethodAddedAt)
-      : employer.trialEndsAt
-        ? new Date(employer.trialEndsAt)
-        : new Date(employer.createdAt);
+    // Billing-effective start as a Madrid civil date (matches the cron), so the
+    // prorated day count isn't shifted by the server's UTC clock near midnight.
+    const effectiveStartKey = madridDateKey(
+      employer.paymentMethodAddedAt
+        ? new Date(employer.paymentMethodAddedAt)
+        : employer.trialEndsAt
+          ? new Date(employer.trialEndsAt)
+          : new Date(employer.createdAt),
+    );
     if (
-      effectiveStartCandidate > periodStart &&
-      effectiveStartCandidate <= periodEnd
+      effectiveStartKey > toIsoDate(periodStart) &&
+      effectiveStartKey <= toIsoDate(periodEnd)
     ) {
-      const startDay = effectiveStartCandidate.getDate();
+      const startDay = Number(effectiveStartKey.slice(8, 10));
       proratedDays = daysInMonth - startDay + 1;
       isProrated = proratedDays !== daysInMonth;
     }

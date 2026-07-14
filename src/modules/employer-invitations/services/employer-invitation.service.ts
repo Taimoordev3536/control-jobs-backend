@@ -647,7 +647,7 @@ export class EmployerInvitationService {
   // ============================================================
   // Daily cron — expire stale PENDING rows so the history list is honest
   // ============================================================
-  @Cron(CronExpression.EVERY_DAY_AT_2AM, { name: 'expire-employer-invitations' })
+  @Cron(CronExpression.EVERY_DAY_AT_2AM, { name: 'expire-employer-invitations', timeZone: 'Europe/Madrid' })
   async expireStale() {
     const result = await this.invitationRepo
       .createQueryBuilder()

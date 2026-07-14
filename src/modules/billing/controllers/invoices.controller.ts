@@ -20,6 +20,7 @@ import { InvoiceService } from '../services/invoice.service';
 import { InvoicePdfService } from '../services/invoice-pdf.service';
 import { BillingAccessService } from '../services/billing-access.service';
 import { InvoiceStatus } from '../entities/invoice.entity';
+import { madridTodayKey } from '../../../common/helpers/business-time';
 
 @Controller('invoices')
 @UseGuards(JwtAuthGuard)
@@ -349,8 +350,7 @@ export class InvoicesController {
 
 function assertChargeDateNotPast(chargeDate?: string): void {
   if (!chargeDate) return;
-  const today = new Date();
-  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todayIso = madridTodayKey();
   if (chargeDate < todayIso) {
     throw new BadRequestException('The charge date cannot be earlier than today');
   }

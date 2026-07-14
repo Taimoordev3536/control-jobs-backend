@@ -49,15 +49,15 @@ export class RatePlan {
   @Column({ name: 'pending_per_worker', type: 'decimal', precision: 8, scale: 2, nullable: true })
   pendingPerWorker: number | null;
 
-  @Column({ name: 'pending_effective_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'pending_effective_at', type: 'timestamptz', nullable: true })
   pendingEffectiveAt: Date | null;
 
-  @Column({ name: 'pending_notified_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'pending_notified_at', type: 'timestamptz', nullable: true })
   pendingNotifiedAt: Date | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 }
