@@ -45,7 +45,8 @@ export class WebauthnService {
   }
 
   async hasCredential(userId: number): Promise<boolean> {
-    return (await this.credRepo.count({ where: { userId } })) > 0;
+    // Only credentials registered for THIS domain (rpID) count — passkeys are domain-bound.
+    return (await this.credRepo.count({ where: { userId, rpId: this.rpID } })) > 0;
   }
 
   /** Set by a successful auth; the check-in scan consumes it to prove biometric verification. */
@@ -60,7 +61,7 @@ export class WebauthnService {
   }
 
   async getRegistrationOptions(userId: number, userName: string) {
-    const existing = await this.credRepo.find({ where: { userId } });
+    const existing = await this.credRepo.find({ where: { userId, rpId: this.rpID } });
     const options = await generateRegistrationOptions({
       rpName: this.rpName,
       rpID: this.rpID,
@@ -94,6 +95,7 @@ export class WebauthnService {
       await this.credRepo.save(
         this.credRepo.create({
           userId,
+          rpId: this.rpID,
           credentialId: credential.id,
           publicKey: Buffer.from(credential.publicKey).toString('base64'),
           counter: String(credential.counter ?? 0),
@@ -109,7 +111,7 @@ export class WebauthnService {
   }
 
   async getAuthOptions(userId: number) {
-    const creds = await this.credRepo.find({ where: { userId } });
+    const creds = await this.credRepo.find({ where: { userId, rpId: this.rpID } });
     if (creds.length === 0) return { error: 'No registered device' } as any;
     const options = await generateAuthenticationOptions({
       rpID: this.rpID,
@@ -127,7 +129,7 @@ export class WebauthnService {
     const expectedChallenge = this.takeChallenge(userId);
     if (!expectedChallenge) return { verified: false, error: 'Challenge expired — retry' };
 
-    const cred = await this.credRepo.findOne({ where: { userId, credentialId: response?.id } });
+    const cred = await this.credRepo.findOne({ where: { userId, credentialId: response?.id, rpId: this.rpID } });
     if (!cred) return { verified: false, error: 'Unknown device credential' };
 
     try {

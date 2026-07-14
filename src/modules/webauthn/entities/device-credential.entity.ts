@@ -12,6 +12,11 @@ export class DeviceCredential {
   @Column({ name: 'user_id', type: 'integer' })
   userId: number;
 
+  /** Relying-Party ID (domain) this credential was registered for. Passkeys are domain-bound,
+   * so a localhost credential is not valid on the live domain — filter by the current rpID. */
+  @Column({ name: 'rp_id', type: 'varchar', length: 255, nullable: true })
+  rpId: string | null;
+
   /** base64url credential ID returned by the authenticator */
   @Column({ name: 'credential_id', type: 'varchar', length: 500, unique: true })
   credentialId: string;
