@@ -64,8 +64,7 @@ export class EmployersController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async getMe(@Request() req) {
-    const employerId = await this.employersService.findEmployerIdByUserId(req.user.id);
-    return this.employersService.findOne(employerId);
+    return this.employersService.getMe(req.user.id);
   }
 
   // Employer: Update own data (must be before :id to avoid conflict)

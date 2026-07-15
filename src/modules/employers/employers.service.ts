@@ -70,6 +70,46 @@ export class EmployersService {
     return link.employer.id;
   }
 
+  // "Me"-scoped variant of findOne: the old path did 4 sequential queries
+  // (employerUser+employer, then employer again, employerUser+user again,
+  // then partner) — each paying the remote-DB round trip. One joined query
+  // returns the identical payload.
+  async getMe(userId: number): Promise<BaseResponse<any>> {
+    const link = await this.employerUserRepository
+      .createQueryBuilder('eu')
+      .innerJoinAndSelect('eu.employer', 'employer')
+      .leftJoinAndSelect('eu.user', 'user')
+      .leftJoinAndMapOne(
+        'employer.__partner',
+        Partner,
+        'partner',
+        'partner.id = employer."partnerId"',
+      )
+      .where('user.id = :userId', { userId })
+      .getOne();
+
+    if (!link?.employer) {
+      throw new NotFoundException('No employer is linked to the current user');
+    }
+
+    const employer = link.employer as any;
+    const partner: Partner | undefined = employer.__partner;
+    delete employer.__partner;
+
+    return {
+      message: 'Employer retrieved successfully',
+      data: {
+        ...employer,
+        email: link.user?.email || null,
+        partnerId: partner?.publicId || employer.partnerId,
+        trialDaysRemaining: computeTrialDaysRemaining(employer.trialEndsAt),
+      },
+      isSuccess: true,
+      statusCode: 200,
+      developerError: '',
+    };
+  }
+
   async getMyTariffs(userId: number) {
     const id = await this.findEmployerIdByUserId(userId);
     const e = await this.employerRepository.findOne({ where: { id } });
