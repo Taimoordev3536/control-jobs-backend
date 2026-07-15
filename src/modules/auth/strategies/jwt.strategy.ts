@@ -13,8 +13,24 @@ import { PartnerUser } from '../../partners/entities/partner-user.entity';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { ClientUser } from '../../clients/entities/client-user.entity';
 
+interface CachedAuth {
+  user: User;
+  subUser: SubUserContext;
+  expiresAt: number;
+}
+
+// The user + role + sub-user context lookups ran on EVERY request (5
+// queries, each paying the remote-DB round trip). The result changes
+// rarely, so cache it per user for a short TTL: deactivation / role /
+// permission changes still take effect within a minute, but steady-state
+// requests hit the DB zero times for auth.
+const AUTH_CACHE_TTL_MS = 60_000;
+const AUTH_CACHE_MAX_ENTRIES = 5_000;
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
+  private readonly authCache = new Map<number, CachedAuth>();
+
   constructor(
     private configService: ConfigService,
     private usersService: UsersService,
@@ -37,34 +53,50 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       ignoreExpiration: false,
       secretOrKey: secret || 'your-secret-key',
     });
-    console.log('JwtStrategy initialized with secret:', secret ? '***' : 'default');
   }
 
   async validate(payload: any) {
-    const user = await this.usersService.findById(payload.id, ['role']);
+    let cached = this.authCache.get(payload.id);
+    if (!cached || cached.expiresAt <= Date.now()) {
+      const user = await this.usersService.findById(payload.id, ['role']);
 
-    if (!user) {
-      throw new UnauthorizedException('User not found');
+      if (!user) {
+        throw new UnauthorizedException('User not found');
+      }
+
+      if ((user as any).isActive === false) {
+        this.authCache.delete(payload.id);
+        throw new UnauthorizedException('Account is deactivated');
+      }
+
+      if (!user.role) {
+        throw new UnauthorizedException('User has no role assigned');
+      }
+
+      const subUser = await this.loadSubUserContext(user.id);
+      cached = { user, subUser, expiresAt: Date.now() + AUTH_CACHE_TTL_MS };
+      this.authCache.set(payload.id, cached);
+
+      if (this.authCache.size > AUTH_CACHE_MAX_ENTRIES) {
+        const now = Date.now();
+        for (const [key, entry] of this.authCache) {
+          if (entry.expiresAt <= now) this.authCache.delete(key);
+        }
+      }
     }
 
-    if ((user as any).isActive === false) {
-      throw new UnauthorizedException('Account is deactivated');
-    }
-
-    if (!user.role) {
-      throw new UnauthorizedException('User has no role assigned');
-    }
-
+    // Fresh instances per request so downstream mutations of req.user
+    // can't leak into the cache.
     const role = new Role();
-    Object.assign(role, user.role);
+    Object.assign(role, cached.user.role);
 
     const userWithRole = new User();
     Object.assign(userWithRole, {
-      ...user,
+      ...cached.user,
       role,
     });
 
-    const subUserContext = await this.loadSubUserContext(user.id);
+    const subUserContext = cached.subUser;
 
     const impersonationContext = {
       isImpersonating: payload.isImpersonating || false,
