@@ -45,45 +45,37 @@ export class AlertsService {
 
   async createAndEmitAlert(payload: AlertPayload) {
     const createdAt = payload.createdAt ?? new Date().toISOString();
-    // Log for diagnostics
-    // eslint-disable-next-line no-console
-    console.log('[ALERTS] Emitting', payload.type, 'job', payload.jobId, 'to employer', payload.employerUserId, 'and client', payload.clientUserId);
 
-    // Persist for employer
+    const meta = {
+      jobId: payload.jobId,
+      jobPublicId: payload.jobPublicId,
+      workerId: payload.workerId,
+      workerPublicId: payload.workerPublicId,
+      employerUserId: payload.employerUserId,
+      clientUserId: payload.clientUserId,
+      ...payload.meta,
+    };
+
+    // The two notification rows are independent — persist them in parallel
+    // (this runs on every check-in/out event, the hottest write path).
     const notifEmployer = this.notifRepo.create({
       role: 'EMPLOYER',
       recipientId: payload.employerUserId,
       type: payload.type,
       message: payload.message,
-      meta: {
-        jobId: payload.jobId,
-        jobPublicId: payload.jobPublicId,
-        workerId: payload.workerId,
-        workerPublicId: payload.workerPublicId,
-        employerUserId: payload.employerUserId,
-        clientUserId: payload.clientUserId,
-        ...payload.meta,
-      },
+      meta,
     });
-    const savedEmployer = await this.notifRepo.save(notifEmployer);
-
-    // Persist for client
     const notifClient = this.notifRepo.create({
       role: 'CLIENT',
       recipientId: payload.clientUserId,
       type: payload.type,
       message: payload.message,
-      meta: {
-        jobId: payload.jobId,
-        jobPublicId: payload.jobPublicId,
-        workerId: payload.workerId,
-        workerPublicId: payload.workerPublicId,
-        employerUserId: payload.employerUserId,
-        clientUserId: payload.clientUserId,
-        ...payload.meta,
-      },
+      meta,
     });
-    const savedClient = await this.notifRepo.save(notifClient);
+    const [savedEmployer, savedClient] = await Promise.all([
+      this.notifRepo.save(notifEmployer),
+      this.notifRepo.save(notifClient),
+    ]);
 
     // Each recipient gets their OWN row's publicId so client-side dismiss
     // hits the right notification (the same alert is two DB rows, one per
