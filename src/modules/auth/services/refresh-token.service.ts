@@ -61,21 +61,30 @@ export class RefreshTokenService {
     if (!existing) throw new UnauthorizedException('Invalid refresh token');
 
     if (existing.revokedAt) {
-      const ageSeconds = (Date.now() - existing.revokedAt.getTime()) / 1000;
-      // Within grace, a replayed rotated token is a racing concurrent refresh:
-      // hand each caller a fresh token instead of flagging theft.
-      if (
-        existing.replacedByTokenHash &&
-        ageSeconds <= ROTATION_GRACE_SECONDS
-      ) {
-        const next = await this.issue(existing.userId, deviceInfo, ipAddress);
-        return { userId: existing.userId, next };
+      // Only a *rotated* token is evidence of theft: it was swapped for a
+      // replacement, so a later replay means someone else still holds the
+      // old one. A token without a replacement was killed by logout or a
+      // previous revoke-all — replaying it is simply a dead session.
+      if (existing.replacedByTokenHash) {
+        const ageSeconds = (Date.now() - existing.revokedAt.getTime()) / 1000;
+        // Within grace, a replayed rotated token is a racing concurrent
+        // refresh: hand each caller a fresh token instead of flagging theft.
+        if (ageSeconds <= ROTATION_GRACE_SECONDS) {
+          const next = await this.issue(existing.userId, deviceInfo, ipAddress);
+          return { userId: existing.userId, next };
+        }
+        await this.revokeAllForUser(existing.userId);
+        this.logger.warn(
+          `Refresh token reuse detected for user ${existing.userId}; all sessions revoked`,
+        );
+        throw new UnauthorizedException('Refresh token reuse detected');
       }
-      await this.revokeAllForUser(existing.userId);
-      this.logger.warn(
-        `Refresh token reuse detected for user ${existing.userId}; all sessions revoked`,
-      );
-      throw new UnauthorizedException('Refresh token reuse detected');
+
+      // Previously this path also called revokeAllForUser, which fed back on
+      // itself: one revoke-all left every sibling token revoked-without-a-
+      // replacement, so each still-open tab's refresh re-triggered another
+      // revoke-all and logged a false theft warning, forever.
+      throw new UnauthorizedException('Refresh token revoked');
     }
 
     if (existing.expiresAt.getTime() <= Date.now()) {
