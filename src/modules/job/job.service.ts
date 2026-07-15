@@ -1665,10 +1665,8 @@ async getTasksTabDataForUser(userId: number) {
   // DEBUG: log normalized payload to help debug missing client/employer name
   try {
     // truncate large arrays for logs in case of big payload
-    console.log('getTasksTabDataForUser -> normalized count:', normalized.length);
     if (normalized.length > 0) {
       const sample = normalized.slice(0, 5).map(x => ({ id: x.id, client: x.client?.name || null, employer: x.employer?.name || null, clientName: x.clientName || null }));
-      console.log('getTasksTabDataForUser sample:', JSON.stringify(sample));
     }
   } catch (e) {
     // ignore logging errors
@@ -1907,7 +1905,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
     const jobIdToSession = new Map<number, any>();
     workSessions.forEach(session => {
       if (session.job?.id) {
-        console.log(`✅ Mapping work session to job ${session.job.id}`);
         jobIdToSession.set(session.job.id, session);
       } else {
         console.warn('⚠️ Work session found but no job relation:', session);
@@ -2035,10 +2032,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
         // Include active work session if exists
         workSession: jobIdToSession.has(job.id) ? (() => {
           const session = jobIdToSession.get(job.id);
-          console.log(`✅ Including workSession for job ${job.id}:`, {
-            checkInTime: session.checkInTime,
-            isActive: session.isActive
-          });
           return {
             checkInTime: session.checkInTime,
             checkOutTime: session.checkOutTime,
@@ -3440,8 +3433,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
     return await this.dataSource.transaction(async (txManager) => {
       try {
-        console.log('=== Starting recordScan (transaction) ===');
-        console.log('User ID:', userId);
 
         // Find worker ID
         let workerId: number | null = null;
@@ -3558,7 +3549,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
           // Select nearest GPS-active WC within range
           validatedWorkCenterId = validWcs[0].id;
-          console.log(`GPS auto-selected WC: ${validWcs[0].name} (${Math.round(validWcs[0].distance)}m away)`);
         } else if (recordScanDto.signingMethod === 'ip' && !resolvedWorkCenterId && !recordScanDto.qrToken) {
           // ── Standalone IP: auto-select matching IP-active WC ──────────
           if (!recordScanDto.ipAddress) {
@@ -3580,7 +3570,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
 
           validatedWorkCenterId = matchingWc.id;
-          console.log(`IP auto-selected WC: ${matchingWc.name} (IP: ${recordScanDto.ipAddress})`);
         }
 
         // WorkCenter membership check
@@ -3664,7 +3653,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
         });
 
         const savedScanLog = await txManager.save(ScanLog, scanLog);
-        console.log('✅ Scan log saved:', savedScanLog.id);
 
         // Handle work session
         let workSession = null;
@@ -3725,7 +3713,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
             break;
         }
 
-        console.log('✅ Transaction completed');
         return {
           status: 'Scan recorded successfully',
           scanData: savedScanLog,
@@ -3782,7 +3769,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     const savedWorkSession = await this.workSessionRepo.save(workSession);
-    console.log(`✅ Created active work session ${savedWorkSession.id} for job ${jobId}, worker ${workerId}`);
 
     // Update job status to IN_PROGRESS when worker checks in
     const job = await this.jobRepo.findOne({
@@ -3894,7 +3880,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
     activeSession.isActive = false;
 
     const updatedSession = await this.workSessionRepo.save(activeSession);
-    console.log(`✅ Closed work session ${activeSession.id} for job ${jobId}, worker ${workerId}`);
 
     // Update job status based on check-out and task completion
     const job = await this.jobRepo.findOne({
@@ -3919,7 +3904,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
       // If this is the last worker checking out and there are incomplete tasks,
       // we can optionally auto-complete them (business logic decision)
       if (allWorkersCheckedOut && job.tasks?.length > 0 && !allTasksCompleted) {
-        console.log(`⚠️ Job ${jobId}: Worker checked out but ${job.tasks.filter(t => !t.isCompleted).length} tasks remain incomplete`);
         // Note: We're not auto-completing tasks here to maintain data integrity
         // Tasks should be explicitly marked as complete by workers
       }
@@ -3930,7 +3914,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
       if (allWorkersCheckedOut) {
         job.status = JobStatus.COMPLETED;
         await this.jobRepo.save(job);
-        console.log(`✅ Job ${jobId} marked as COMPLETED - all workers checked out`);
       }
     }
 
@@ -4013,7 +3996,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     const saved = await txManager.save(WorkSession, workSession);
-    console.log(`✅ Created work session ${saved.id}`);
 
     const job = await txManager.findOne(Job, { where: { id: jobId } });
     if (job && job.status !== JobStatus.IN_PROGRESS) {
@@ -4103,7 +4085,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
     activeSession.isActive = false;
 
     const updated = await txManager.save(WorkSession, activeSession);
-    console.log(`✅ Closed work session ${activeSession.id}`);
 
     const job = await txManager.findOne(Job, {
       where: { id: jobId },
@@ -4118,7 +4099,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
       if (activeWorkSessions.length === 0) {
         job.status = JobStatus.COMPLETED;
         await txManager.save(Job, job);
-        console.log(`✅ Job ${jobId} marked as COMPLETED`);
       }
     }
 
@@ -4320,7 +4300,6 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
     }
     
     const taskHistories = await taskHistoryQuery.getMany();
-    console.log('Task histories found:', taskHistories);
 
     // Group scan logs by date
     const groupedByDate = scanLogs.reduce((acc, log) => {
@@ -5369,11 +5348,6 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
       const todayTasks = tasks.filter(task => this.isTaskScheduledForToday(task, todayDate));
 
       // Get task completion status for today for this worker
-      console.log('🔍 Querying TaskHistories for:', {
-        taskIds: todayTasks.map(t => t.id),
-        workerId,
-        date: todayISODate,
-      });
 
       const taskHistories = await this.taskHistoryRepo.find({
         where: {
@@ -5384,11 +5358,6 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         relations: ['task'],
       });
 
-      console.log('📊 Found TaskHistories:', taskHistories.length, taskHistories.map(th => ({
-        taskId: th.task.id,
-        isCompleted: th.isCompleted,
-        date: th.date,
-      })));
 
       const taskHistoryMap = new Map<number, boolean>();
       taskHistories.forEach(th => {
@@ -5460,30 +5429,17 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     const todayDayOfMonth = today.day;
     const todayMonth = today.month;
 
-    console.log('🔍 isTaskScheduledForToday:', {
-      taskId: task.id,
-      taskName: task.name,
-      periodicity: task.periodicity,
-      todayDayOfWeek,
-      todayDayOfMonth,
-      todayMonth,
-      weeklyDays: task.weeklyDays,
-      monthlyDays: task.monthlyDays,
-      monthlyWeekdays: task.monthlyWeekdays,
-    });
 
     // Check start/end date boundaries
     if (task.startDate) {
       const start = DateTime.fromJSDate(new Date(task.startDate));
       if (today < start.startOf('day')) {
-        console.log('❌ Task not started yet');
         return false;
       }
     }
     if (task.endDate) {
       const end = DateTime.fromJSDate(new Date(task.endDate));
       if (today > end.startOf('day')) {
-        console.log('❌ Task already ended');
         return false;
       }
     }
@@ -5493,14 +5449,11 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         if (task.onceDate) {
           const onceDate = DateTime.fromJSDate(new Date(task.onceDate));
           const matches = onceDate.hasSame(today, 'day');
-          console.log('✅ Once task:', matches);
           return matches;
         }
-        console.log('❌ Once task without onceDate');
         return false;
 
       case 'daily':
-        console.log('✅ Daily task');
         return true; // Daily tasks are always scheduled
 
       case 'weekly':
@@ -5509,12 +5462,10 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           ? task.weeklyDays.map(d => Number(d))
           : [];
         
-        console.log('📅 Weekly check:', { weeklyDays, todayDayOfWeek, includes: weeklyDays.includes(todayDayOfWeek) });
         
         if (weeklyDays.length > 0) {
           return weeklyDays.includes(todayDayOfWeek);
         }
-        console.log('❌ Weekly task with no days configured');
         return false;
 
       case 'monthly':
@@ -5526,28 +5477,19 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           ? task.monthlyWeekdays.map(d => Number(d))
           : [];
 
-        console.log('📅 Monthly check:', { 
-          monthlyDays, 
-          monthlyWeekdays, 
-          todayDayOfMonth, 
-          todayDayOfWeek 
-        });
 
         // Check monthly days (1-31)
         if (monthlyDays.length > 0) {
           if (monthlyDays.includes(todayDayOfMonth)) {
-            console.log('✅ Monthly day match');
             return true;
           }
         }
         // Check monthly weekdays
         if (monthlyWeekdays.length > 0) {
           if (monthlyWeekdays.includes(todayDayOfWeek)) {
-            console.log('✅ Monthly weekday match');
             return true;
           }
         }
-        console.log('❌ No monthly match');
         return false;
 
       case 'yearly':
@@ -5559,25 +5501,20 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           ? task.yearlyDays.map(d => Number(d))
           : [];
 
-        console.log('📅 Yearly check:', { yearlyMonths, yearlyDays, todayMonth, todayDayOfMonth });
 
         // Check if today matches any yearly configuration
         if (yearlyMonths.length > 0) {
           if (!yearlyMonths.includes(todayMonth)) {
-            console.log('❌ Not in yearly months');
             return false;
           }
         }
         if (yearlyDays.length > 0) {
           const matches = yearlyDays.includes(todayDayOfMonth);
-          console.log(matches ? '✅ Yearly day match' : '❌ No yearly day match');
           return matches;
         }
-        console.log('❌ No yearly configuration');
         return false;
 
       default:
-        console.log('❌ Unknown periodicity:', task.periodicity);
         return false;
     }
   }

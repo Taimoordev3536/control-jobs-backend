@@ -1,6 +1,7 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { IsNull, LessThan, Repository } from 'typeorm';
 import { randomBytes, createHash } from 'crypto';
 import { RefreshToken } from '../entities/refresh-token.entity';
 
@@ -104,6 +105,17 @@ export class RefreshTokenService {
       { userId, revokedAt: IsNull() },
       { revokedAt: new Date() },
     );
+  }
+
+  // Rotated/expired rows were never deleted and accumulate forever
+  // (~20 rows per user). Expired tokens can no longer be used for
+  // anything, including reuse detection, so purge them daily.
+  @Cron('0 4 * * *')
+  async purgeExpired(): Promise<void> {
+    const res = await this.repo.delete({ expiresAt: LessThan(new Date()) });
+    if (res.affected) {
+      this.logger.log(`Purged ${res.affected} expired refresh tokens`);
+    }
   }
 
   private hash(raw: string): string {
