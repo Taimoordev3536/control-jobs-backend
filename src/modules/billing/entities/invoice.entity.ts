@@ -30,6 +30,8 @@ export type InvoiceType = 'NORMAL' | 'RECTIFICATIVA';
   unique: true,
   where: 'is_manual = false',
 })
+@Index('idx_invoices_status_due', ['status', 'dueDate'])
+@Index('idx_invoices_employer_status', ['employerId', 'status'])
 export class Invoice {
   @PrimaryGeneratedColumn()
   id: number;

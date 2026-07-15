@@ -5,10 +5,13 @@ import {
   ManyToOne,
   JoinColumn,
   CreateDateColumn,
+  Index,
 } from 'typeorm';
 import { Worker } from '../../workers/entities/worker.entity';
 
 @Entity('cjobs_absence_requests')
+@Index('idx_absence_requests_employer_status', ['employerId', 'status'])
+@Index('idx_absence_requests_worker', ['workerId'])
 export class AbsenceRequest {
   @PrimaryGeneratedColumn()
   id: number;
