@@ -61,8 +61,11 @@ config();
             : false,
           extra: {
             max: +configService.get<number>('DATABASE_POOL_MAX') || 10,
-            idleTimeoutMillis: 30000,
+            // Remote DB: establishing a connection costs ~2.5s, so keep idle
+            // connections warm for 10 min instead of dropping them after 30s.
+            idleTimeoutMillis: 600000,
             connectionTimeoutMillis: 10000,
+            keepAlive: true,
           },
         };
       },
