@@ -26,31 +26,39 @@ export class QrRefreshService {
 
     try {
       const now = new Date();
-      
-      // Find all dynamic QR codes that are active
+
+      // Only selected QRs get refreshed, so filter in SQL instead of in memory
       const dynamicQrCodes = await this.qrCodeRepo.find({
-        where: { 
+        select: ['id'],
+        where: {
           type: QrCodeType.DYNAMIC,
           isActive: true,
+          isSelected: true,
         },
       });
 
-      let refreshedCount = 0;
+      if (dynamicQrCodes.length === 0) return;
 
-      for (const qrCode of dynamicQrCodes) {
-        // Check if this dynamic QR should be refreshed
-        const shouldRefresh = await this.shouldRefreshDynamicQr(qrCode);
+      // One batched UPDATE instead of a save() per row: each row still gets
+      // its own unique token, but the DB round trip happens once.
+      const expiresAt = QrTokenGenerator.calculateDynamicExpiry();
+      const values: string[] = [];
+      const params: any[] = [now, expiresAt];
+      dynamicQrCodes.forEach((qr, i) => {
+        params.push(qr.id, QrTokenGenerator.generateDynamicToken());
+        values.push(`($${params.length - 1}::uuid, $${params.length})`);
+      });
 
-        if (shouldRefresh) {
-          // Generate new token
-          qrCode.token = QrTokenGenerator.generateDynamicToken();
-          qrCode.expiresAt = QrTokenGenerator.calculateDynamicExpiry();
-          qrCode.lastRefreshedAt = now;
-
-          await this.qrCodeRepo.save(qrCode);
-          refreshedCount++;
-        }
-      }
+      await this.qrCodeRepo.query(
+        `UPDATE qr_codes AS q
+            SET token = v.token,
+                "expiresAt" = $2,
+                "lastRefreshedAt" = $1,
+                "updatedAt" = CURRENT_TIMESTAMP
+           FROM (VALUES ${values.join(', ')}) AS v(id, token)
+          WHERE q.id = v.id`,
+        params,
+      );
     } catch (error) {
       // AggregateError wraps multiple underlying errors (e.g. DB connection pool failures)
       // Expand inner errors for visibility
@@ -69,15 +77,6 @@ export class QrRefreshService {
     } finally {
       this.isRefreshing = false;
     }
-  }
-
-  /**
-   * Determine if a dynamic QR should be refreshed
-   * Refresh only if it's selected (no fallback logic)
-   */
-  private async shouldRefreshDynamicQr(dynamicQr: QrCode): Promise<boolean> {
-    // Only refresh if dynamic is selected
-    return dynamicQr.isSelected === true;
   }
 
   /**
