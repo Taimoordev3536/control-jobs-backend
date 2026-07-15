@@ -11,7 +11,7 @@ import { madridNow, madridTodayKey } from '../../common/helpers/business-time';
 
 // Mock WorkCenter data (used for every client)
 const MOCK_WORK_CENTER = { id: 1, name: 'WorkCenter 1' };
-import { Repository, DataSource, IsNull, In, Between } from 'typeorm';
+import { Repository, DataSource, IsNull, In, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { Job } from './entities/job.entity';
 import { Shift, Weekday, ScheduleType } from './entities/shift.entity';
 import { SigningMethod, SigningMethodType, SigningMethodDetail } from './entities/signing-method.entity';
@@ -1408,14 +1408,27 @@ async getControlForDate(userId: number, dateStr?: string) {
   const isHoliday = holidays.has(selDateStr);
   const holidayName = holidays.get(selDateStr) || null;
 
+  // Date range lives in SQL: this used to load every job the employer had
+  // ever created and discard the out-of-range ones in JS, which grew without
+  // bound as the account aged. startDate/endDate are NOT NULL `date` columns,
+  // so comparing them to the civil date string is exact — and free of the
+  // timezone hazard isDateInJobRange has to work around.
+  // Status is deliberately NOT filtered: isJobScheduledForDate ignores it, so
+  // excluding cancelled/finished jobs here would change what the screen shows.
   const jobs = await this.jobRepo.find({
-    where: { employer: { id: employerUser.employer.id } },
+    where: {
+      employer: { id: employerUser.employer.id },
+      startDate: LessThanOrEqual(selDateStr as any),
+      endDate: MoreThanOrEqual(selDateStr as any),
+    },
     relations: [
       'employer', 'client', 'workCenters', 'workers', 'alerts',
       'seasonalSchedules', 'seasonalSchedules.shifts',
     ],
   });
 
+  // Still needed for the seasonal/fixed schedule check; the date-range half of
+  // this predicate is now redundant but harmless.
   const scheduled = jobs.filter((j) => this.jobScheduleService.isJobScheduledForDate(j, day));
 
   const workerIds = [...new Set(scheduled.flatMap((j) => j.workers.map((w) => w.id)))];
