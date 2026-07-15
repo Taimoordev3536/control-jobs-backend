@@ -1698,7 +1698,9 @@ async getAllJobsByEmployerFromToken(userId: number) {
       where: { employer: { id: employerId } },
       // include signingMethods so we can return them
   relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts', 'signingMethods'],
-      order: { id: 'ASC' },
+      // seasonalSchedules order must be deterministic: the card logic takes
+      // normalSchedules[0], and join-produced order varies per query.
+      order: { id: 'ASC', seasonalSchedules: { id: 'ASC' } },
     });
 
     const workerIds = jobs.flatMap(job => job.workers.map(w => w.id));
@@ -1885,7 +1887,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     const jobs = await this.jobRepo.find({
       where: { workers: { id: workerId } },
       relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts', 'signingMethods'],
-      order: { id: 'ASC' },
+      order: { id: 'ASC', seasonalSchedules: { id: 'ASC' } },
     });
 
     // Fetch active work sessions for this worker across all jobs
@@ -2965,7 +2967,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       const jobs = await this.jobRepo.find({
         where: { client: { id: clientId } },
         relations: ['client', 'workCenters', 'tasks', 'tasks.workCenter', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts', 'signingMethods'],
-        order: { id: 'ASC' },
+        order: { id: 'ASC', seasonalSchedules: { id: 'ASC' } },
       });
 
       const workerIds = jobs.flatMap(job => job.workers.map(w => w.id));
