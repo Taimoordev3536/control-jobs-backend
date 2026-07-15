@@ -1,9 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Index } from 'typeorm';
 import { Job } from './job.entity';
 import { Worker } from '../../workers/entities/worker.entity';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 
 @Entity('work_sessions')
+@Index('idx_work_sessions_worker_checkin', ['workerId', 'checkInTime'])
+@Index('idx_work_sessions_job_active', ['jobId', 'isActive'])
 export class WorkSession {
   @PrimaryGeneratedColumn()
   id: number;

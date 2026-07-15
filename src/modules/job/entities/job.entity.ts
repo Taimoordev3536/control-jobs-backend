@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, ManyToMany, JoinTable, OneToMany, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, ManyToMany, JoinTable, OneToMany, JoinColumn, Index } from 'typeorm';
 import { Employer } from '../../employers/entities/employer.entity';
 import { Client } from '../../clients/entities/client.entity';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
@@ -18,6 +18,8 @@ import { SeasonalSchedule } from './seasonal-schedule.entity';
 import { TaskHistory } from './task-history.entity';
 
 @Entity('job')
+@Index('idx_job_employer_status', ['employer', 'status'])
+@Index('idx_job_client', ['client'])
 export class Job {
   @PrimaryGeneratedColumn()
   id: number;

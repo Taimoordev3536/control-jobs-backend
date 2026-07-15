@@ -10,6 +10,7 @@ export type AnnouncementSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
 export type AnnouncementStatus = 'SENT' | 'SCHEDULED' | 'CANCELLED' | 'FAILED';
 
 @Entity('cjobs_announcements')
+@Index('idx_announcements_status_scheduled', ['status', 'scheduledAt'])
 export class Announcement {
   @PrimaryGeneratedColumn()
   id: number;

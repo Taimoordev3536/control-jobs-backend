@@ -1,9 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, Index } from 'typeorm';
 import { Job } from './job.entity';
 import { Worker } from '../../workers/entities/worker.entity';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 
 @Entity('scan_logs')
+@Index('idx_scan_logs_job_time', ['jobId', 'scanTime'])
+@Index('idx_scan_logs_worker_time', ['workerId', 'scanTime'])
 export class ScanLog {
   @PrimaryGeneratedColumn()
   id: number;

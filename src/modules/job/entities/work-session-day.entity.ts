@@ -1,7 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 import { WorkSession } from './work-session.entity';
 
 @Entity('work_session_day')
+@Index('idx_work_session_day_worker_date', ['workerId', 'date'])
+@Index('idx_work_session_day_job_date', ['jobId', 'date'])
 export class WorkSessionDay {
   @PrimaryGeneratedColumn()
   id: number;
