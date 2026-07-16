@@ -2645,6 +2645,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         lateMinutes,
         checkInTime: session.checkInTime,
         checkOutTime: session.checkOutTime,
+        isActive: session.isActive,
       };
     });
     return { message: 'Success', data: records, isSuccess: true, statusCode: 200 };
@@ -5348,8 +5349,10 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
    */
   async getTodayTasksByWorkCenter(jobId: number, workerId: number) {
     try {
-      const today = DateTime.now().startOf('day');
-      const todayDate = today.toJSDate();
+      // "Today" is the business day in Madrid, not the server's UTC day —
+      // otherwise around midnight the wrong weekday is used and a task shows
+      // (or hides) on the wrong day.
+      const today = DateTime.now().setZone(JobService.BUSINESS_TZ).startOf('day');
       const todayISODate = today.toISODate();
 
       // Fetch all tasks for the job with work center relation
@@ -5360,7 +5363,7 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
       });
 
       // Filter tasks scheduled for today
-      const todayTasks = tasks.filter(task => this.isTaskScheduledForToday(task, todayDate));
+      const todayTasks = tasks.filter(task => this.isTaskScheduledForToday(task, today));
 
       // Get task completion status for today for this worker
 
@@ -5438,46 +5441,47 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
   /**
    * Helper: Check if a task is scheduled for today
    */
-  private isTaskScheduledForToday(task: any, todayDate: Date): boolean {
-    const today = DateTime.fromJSDate(todayDate);
+  private isTaskScheduledForToday(task: any, today: DateTime): boolean {
     const todayDayOfWeek = today.weekday % 7; // Convert to 0=Sunday format
     const todayDayOfMonth = today.day;
     const todayMonth = today.month;
+    const todayISO = today.toISODate();
 
+    // startDate/endDate/onceDate are date-only columns; compare them as Madrid
+    // calendar dates ("YYYY-MM-DD" strings sort chronologically) so no tz shift
+    // can move a boundary across midnight.
+    const dateOnly = (v: any): string | null => {
+      if (!v) return null;
+      if (typeof v === 'string') return v.slice(0, 10);
+      return DateTime.fromJSDate(new Date(v)).setZone(JobService.BUSINESS_TZ).toISODate();
+    };
 
     // Check start/end date boundaries
-    if (task.startDate) {
-      const start = DateTime.fromJSDate(new Date(task.startDate));
-      if (today < start.startOf('day')) {
-        return false;
-      }
+    const startISO = dateOnly(task.startDate);
+    if (startISO && todayISO && todayISO < startISO) {
+      return false;
     }
-    if (task.endDate) {
-      const end = DateTime.fromJSDate(new Date(task.endDate));
-      if (today > end.startOf('day')) {
-        return false;
-      }
+    const endISO = dateOnly(task.endDate);
+    if (endISO && todayISO && todayISO > endISO) {
+      return false;
     }
 
     switch (task.periodicity) {
-      case 'once':
-        if (task.onceDate) {
-          const onceDate = DateTime.fromJSDate(new Date(task.onceDate));
-          const matches = onceDate.hasSame(today, 'day');
-          return matches;
-        }
-        return false;
+      case 'once': {
+        const onceISO = dateOnly(task.onceDate);
+        return !!onceISO && onceISO === todayISO;
+      }
 
       case 'daily':
         return true; // Daily tasks are always scheduled
 
       case 'weekly':
         // Ensure weeklyDays is an array of numbers
-        const weeklyDays = Array.isArray(task.weeklyDays) 
+        const weeklyDays = Array.isArray(task.weeklyDays)
           ? task.weeklyDays.map(d => Number(d))
           : [];
-        
-        
+
+
         if (weeklyDays.length > 0) {
           return weeklyDays.includes(todayDayOfWeek);
         }
@@ -5658,6 +5662,8 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           extra,
           metodo,
           puntualidad,
+          punctuality: _p?.status ?? null,
+          lateMinutes: _p?.status === 'late' ? _p.minutes : null,
           totalWorkMinutes: session.totalWorkMinutes,
           totalBreakMinutes: session.totalBreakMinutes,
           alerts: alerts.length > 0 ? alerts.join(', ') : 'None',

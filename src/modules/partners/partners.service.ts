@@ -356,15 +356,17 @@ export class PartnersService {
           partner.defaultPaymentMethodId,
       });
 
-      // If email is being updated, update the associated user
-      if (updatePartnerDto.email) {
+      // Keep the linked default user's account in sync with the partner's
+      // email/name (the header/profile reads user.name).
+      if (updatePartnerDto.email || updatePartnerDto.name) {
         const defaultPartnerUser = partner.partnerUsers.find(
           (pu) => pu.isDefault,
         );
         if (defaultPartnerUser) {
-          await this.userRepository.update(defaultPartnerUser.userId, {
-            email: updatePartnerDto.email,
-          });
+          const userUpdate: Partial<User> = {};
+          if (updatePartnerDto.email) userUpdate.email = updatePartnerDto.email;
+          if (updatePartnerDto.name) userUpdate.name = updatePartnerDto.name;
+          await this.userRepository.update(defaultPartnerUser.userId, userUpdate);
         }
       }
 

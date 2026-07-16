@@ -732,8 +732,14 @@ export class EmployersService {
             ...resolvedData,
           });
 
-          // If user data is provided, update the linked user
-          if (userData) {
+          // Keep the linked user's display name in sync with the employer
+          // name (the header/profile reads user.name), and apply any account
+          // changes (email / names / password) when provided. Sync the name
+          // even when no `user` payload is sent — otherwise a name-only edit
+          // leaves user.name stale until an unrelated email change.
+          const nameChanged =
+            employerData.name !== undefined && employerData.name !== employer.name;
+          if (userData || nameChanged) {
             const employerUser = await manager.findOne(EmployerUser, {
               where: { employer: { id } },
               relations: ['user'],
@@ -741,7 +747,7 @@ export class EmployersService {
 
             if (employerUser) {
               const user = employerUser.user;
-              if (userData.email && userData.email !== user.email) {
+              if (userData?.email && userData.email !== user.email) {
                 const existingUser = await manager.findOne(User, {
                   where: { email: userData.email },
                 });
@@ -750,13 +756,13 @@ export class EmployersService {
                 }
               }
 
-              const updatedUser = await manager.save(User, {
+              await manager.save(User, {
                 ...user,
-                email: userData.email || user.email,
-                firstName: userData.firstName || user.firstName,
-                lastName: userData.lastName || user.lastName,
+                email: userData?.email || user.email,
+                firstName: userData?.firstName || user.firstName,
+                lastName: userData?.lastName || user.lastName,
                 name: employerData.name || user.name,
-                ...(userData.password
+                ...(userData?.password
                   ? { password: await bcrypt.hash(userData.password, 10) }
                   : {}),
               });

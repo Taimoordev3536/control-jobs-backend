@@ -516,15 +516,28 @@ export class ClientsService {
     // Strip id, userId, and email to prevent overwriting primary key / saving non-entity fields
     const { id: _id, userId: _userId, email: _email, ...safeDto } = dto as any;
     Object.assign(client, safeDto);
-    return this.clientRepo.save(client);
+    const saved = await this.clientRepo.save(client);
+
+    // Keep the linked default user's display name in sync with the client
+    // name (the header/profile reads user.name).
+    if (dto.name !== undefined) {
+      const link = await this.clientUserRepo.findOne({
+        where: { clientId: id, isDefault: true },
+        relations: ['user'],
+      });
+      if (link?.user && link.user.name !== dto.name) {
+        link.user.name = dto.name;
+        await this.userRepo.save(link.user);
+      }
+    }
+
+    return saved;
   }
 
   async updateByPublicId(publicId: string, dto: UpdateClientDto) {
     const client = await this.clientRepo.findOne({ where: { publicId } });
     if (!client) throw new NotFoundException('Client not found');
-    const { id: _id, userId: _userId, email: _email, ...safeDto } = dto as any;
-    Object.assign(client, safeDto);
-    return this.clientRepo.save(client);
+    return this.update(client.id, dto);
   }
 
   async remove(id: number) {
