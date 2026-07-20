@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   Inject,
   forwardRef,
 } from '@nestjs/common';
@@ -21,10 +22,14 @@ import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { UpdateEmployerDto } from './dto/update-employer.dto';
 import { Role } from '../users/entities/role.entity';
 import { Partner } from '../partners/entities/partner.entity';
+import { PartnerUser } from '../partners/entities/partner-user.entity';
+import { UserRole } from '../auth/enums/user-role.enum';
 import { isUUID } from 'class-validator';
 import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
+import { revokeUserSessions } from '../../common/helpers/account-status';
 import { RatePlanService } from '../billing/services/rate-plan.service';
+import { Invoice } from '../billing/entities/invoice.entity';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { PaymentMethodsService } from '../payment-methods/payment-methods.service';
 
@@ -542,6 +547,30 @@ export class EmployersService {
     }
   }
 
+  // Total invoiced to each employer, as one grouped query rather than per-row.
+  // CANCELLED is excluded; REFUNDED/RECTIFICATIVA stay in because the refund is
+  // itself booked as a negative invoice, so the sum already nets out.
+  private async sumBilledByEmployer(
+    employerIds: number[],
+  ): Promise<Map<number, number>> {
+    const totals = new Map<number, number>();
+    if (!employerIds.length) return totals;
+
+    const rows = await this.employerRepository.manager
+      .createQueryBuilder(Invoice, 'inv')
+      .select('inv.employerId', 'employerId')
+      .addSelect('COALESCE(SUM(inv.total), 0)', 'total')
+      .where('inv.employerId IN (:...employerIds)', { employerIds })
+      .andWhere('inv.status <> :cancelled', { cancelled: 'CANCELLED' })
+      .groupBy('inv.employerId')
+      .getRawMany();
+
+    for (const r of rows) {
+      totals.set(Number(r.employerId), Number(r.total));
+    }
+    return totals;
+  }
+
   /**
    * Get all employers
    * @returns List of all employers
@@ -557,6 +586,8 @@ export class EmployersService {
         relations: ['type', 'subType', 'paymentMethod', 'partner'], // Added 'partner'
       });
 
+      const billed = await this.sumBilledByEmployer(employers.map((e) => e.id));
+
       // Map to include names
       const mapped = employers.map((e) => ({
         id: e.id,
@@ -567,7 +598,11 @@ export class EmployersService {
         createdAt: e.createdAt,
         paymentMethod: e.paymentMethod?.name || null,
         partnerName: e.partner?.name || null, // Added partner name
+        // numeric columns come back from pg as strings
+        discount: Number(e.discount ?? 0),
+        billing: formatEuros(billed.get(e.id) ?? 0),
         trialDaysRemaining: computeTrialDaysRemaining(e.trialEndsAt),
+        active: e.active,
         // ...add any other fields you want to expose
       }));
 
@@ -791,58 +826,92 @@ export class EmployersService {
     }
   }
 
-  /**
-   * Delete an employer
-   * @param id - Employer ID
-   * @returns Success message
-   */
-  async remove(id: number): Promise<BaseResponse<null>> {
-    try {
-      return await this.employerRepository.manager.transaction(
-        async (manager) => {
-          const employer = await manager.findOne(Employer, {
-            where: { id },
-            relations: ['employerUsers', 'employerUsers.user'],
-          });
-
-          if (!employer) {
-            throw new NotFoundException(`Employer with ID ${id} not found`);
-          }
-
-          // Delete the employer (this will cascade delete employerUsers due to onDelete: 'CASCADE')
-          await manager.remove(Employer, employer);
-
-          // Delete associated users if they are not linked to other employers
-          for (const employerUser of employer.employerUsers) {
-            const user = employerUser.user;
-            const otherEmployerUsers = await manager.find(EmployerUser, {
-              where: { user: { id: user.id } },
-            });
-
-            // If user is not linked to any other employers, delete the user
-            if (otherEmployerUsers.length === 0) {
-              await manager.remove(User, user);
-            }
-          }
-
-          return {
-            message: 'Employer deleted successfully',
-            data: null,
-            isSuccess: true,
-            statusCode: 200,
-            developerError: '',
-          };
-        },
-      );
-    } catch (error) {
-      if (error instanceof NotFoundException) {
-        throw error;
+  // A partner's scope comes from their token, never from ?partnerId: the query
+  // param is caller-supplied, so trusting it let a partner drop the param to see
+  // every employer, or point it at another partner's.
+  async findAllScoped(
+    requester: any,
+    partnerIdFromQuery?: string,
+  ): Promise<BaseResponse<any[]>> {
+    if (requester?.role?.value === UserRole.Partner) {
+      const link = await this.employerRepository.manager.findOne(PartnerUser, {
+        where: { userId: requester.id },
+      });
+      if (!link) {
+        throw new ForbiddenException('No partner is linked to the current user');
       }
-      throw new BadRequestException(
-        'Failed to delete employer: ' + error.message,
+      return this.findAll(link.partnerId);
+    }
+
+    // Admin: every employer, optionally filtered to one partner. The query value
+    // is a publicId (UUID) coming from the partner detail route, so resolve it to
+    // the numeric FK before filtering.
+    if (partnerIdFromQuery) {
+      const partnerId = await this.resolvePartnerIdFromPublicId(String(partnerIdFromQuery));
+      return this.findAll(partnerId);
+    }
+    return this.findAll();
+  }
+
+  // Admin manages every employer; a partner only the ones referred by their own
+  // partner account. Role alone is not enough — @Roles(1, 2) would otherwise let
+  // any partner deactivate any company whose publicId they knew.
+  async assertCanManageEmployer(requester: any, employerId: number) {
+    const roleValue = requester?.role?.value;
+
+    if (roleValue === UserRole.Admin) return;
+
+    if (roleValue !== UserRole.Partner) {
+      throw new ForbiddenException('Your role cannot manage employers');
+    }
+
+    const link = await this.employerRepository.manager.findOne(PartnerUser, {
+      where: { userId: requester.id },
+    });
+    if (!link) {
+      throw new ForbiddenException('No partner is linked to the current user');
+    }
+
+    const employer = await this.employerRepository.findOne({
+      where: { id: employerId },
+    });
+    if (!employer || employer.partnerId !== link.partnerId) {
+      throw new ForbiddenException(
+        'This employer does not belong to your partner account',
       );
     }
   }
+
+  async setActive(id: number, active: boolean): Promise<BaseResponse<null>> {
+    return this.employerRepository.manager.transaction(async (manager) => {
+      const employer = await manager.findOne(Employer, {
+        where: { id },
+        relations: ['employerUsers', 'employerUsers.user'],
+      });
+      if (!employer) {
+        throw new NotFoundException(`Employer with ID ${id} not found`);
+      }
+
+      employer.active = active;
+      await manager.save(employer);
+
+      if (!active) {
+        await revokeUserSessions(
+          manager,
+          employer.employerUsers.map((eu) => eu.user.id).filter(Boolean),
+        );
+      }
+
+      return {
+        message: active ? 'Employer activated' : 'Employer deactivated',
+        data: null,
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    });
+  }
+
 }
 
 function parseTrialDays(value: unknown): number {
@@ -856,6 +925,14 @@ function addDays(date: Date, days: number): Date {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
+}
+
+// Matches the "0 €" placeholder the list pages fall back to.
+function formatEuros(amount: number): string {
+  return new Intl.NumberFormat('es-ES', {
+    style: 'currency',
+    currency: 'EUR',
+  }).format(amount);
 }
 
 function computeTrialDaysRemaining(trialEndsAt: Date | null | undefined): number {

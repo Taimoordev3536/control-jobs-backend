@@ -56,10 +56,19 @@ export class PartnersController {
    * Get all partners
    * @returns List of all partners
    */
+  // Admin only: carries NIF, IBAN, BIC and retention. Partner-facing pickers
+  // use /partners/options instead.
   @Get()
-  @Roles(1, 2) // Admin role
+  @Roles(1)
   async findAll(): Promise<BaseResponse<Partner[]>> {
     return this.partnersService.findAll();
+  }
+
+  // Declared before the :id catch-alls so ParseUUIDPipe doesn't reject 'options'.
+  @Get('options')
+  @Roles(1, 2)
+  async findOptions(@Request() req): Promise<BaseResponse<any[]>> {
+    return this.partnersService.findOptions(req.user);
   }
 
   // Partner self-service: declared before the :id catch-alls so ParseUUIDPipe
@@ -135,11 +144,18 @@ export class PartnersController {
     return this.partnersService.update(numericId, updatePartnerDto);
   }
 
-  @Delete(':id')
+  @Patch(':id/deactivate')
   @Roles(1)
-  async remove(@Param('id', ParseUUIDPipe) id: string) {
+  async deactivate(@Param('id', ParseUUIDPipe) id: string) {
     const numericId = await this.partnersService.resolvePublicId(id);
-    return this.partnersService.remove(numericId);
+    return this.partnersService.setActive(numericId, false);
+  }
+
+  @Patch(':id/activate')
+  @Roles(1)
+  async activate(@Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.partnersService.resolvePublicId(id);
+    return this.partnersService.setActive(numericId, true);
   }
 
   @Get('tiers')

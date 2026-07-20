@@ -275,6 +275,11 @@ export class Employer {
     | 'SUSPENDED'
     | 'CANCELLED';
 
+  // Account lifecycle, independent of billingStatus: false = deactivated by an
+  // admin, hidden from lists and blocked from logging in.
+  @Column({ default: true })
+  active: boolean;
+
   @Column({ name: 'def_billing_fixed_amount', type: 'numeric', precision: 12, scale: 2, nullable: true })
   defBillingFixedAmount: string | null;
 

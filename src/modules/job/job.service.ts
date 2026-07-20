@@ -1,5 +1,13 @@
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { DateTime } from 'luxon';
 import { createHash } from 'crypto';
@@ -3443,7 +3451,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       const idJob = await this.jobRepo.findOne({ where: { id: resolvedJobId }, relations: ['signingMethods'] });
       const requiresIdentity = (idJob?.signingMethods || []).some((sm: any) => sm.verifyIdentity === true);
       if (requiresIdentity && !webauthnVerified && (await this.webauthnService.hasCredential(userId))) {
-        throw new Error('Se requiere verificación biométrica del dispositivo para fichar.');
+        throw new ForbiddenException('Se requiere verificación biométrica del dispositivo para fichar.');
       }
     }
 
@@ -3460,10 +3468,10 @@ async getAllJobsByWorkerFromToken(userId: number) {
         if (workerUser?.worker?.id) {
           workerId = workerUser.worker.id;
         } else {
-          throw new Error('Only assigned workers can check in');
+          throw new ForbiddenException('Only assigned workers can check in');
         }
 
-        if (!workerId) throw new Error('Worker not found');
+        if (!workerId) throw new NotFoundException('Worker not found');
 
         // Verify job and worker assignment
         const job = await txManager.findOne(Job, {
@@ -3471,10 +3479,10 @@ async getAllJobsByWorkerFromToken(userId: number) {
           relations: ['workers', 'employer', 'client', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
         });
 
-        if (!job) throw new Error('Job not found');
+        if (!job) throw new NotFoundException('Job not found');
         
         const isWorkerAssigned = job.workers.some(w => w.id === workerId);
-        if (!isWorkerAssigned) throw new Error('Worker is not assigned to this job');
+        if (!isWorkerAssigned) throw new ForbiddenException('Worker is not assigned to this job');
 
         // The client-reported timezone is kept only as metadata on the scan log.
         // Business schedule/shift-window checks are anchored to Europe/Madrid,
@@ -3493,45 +3501,53 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
           const isScheduledToday = this.jobScheduleService.isJobScheduledForDate(job, madridLocal);
           if (!isScheduledToday) {
-            throw new Error('This job is not scheduled for today. Check-in rejected.');
+            throw new BadRequestException('This job is not scheduled for today. Check-in rejected.');
           }
           const timeCheck = this.isWithinShiftWindow(job, madridLocal, recordScanDto.signingMethod);
           if (!timeCheck.allowed) {
-            throw new Error(timeCheck.reason || 'Check-in time is outside the allowed shift window.');
+            throw new BadRequestException(timeCheck.reason || 'Check-in time is outside the allowed shift window.');
           }
         }
         
         // Determine validated work center ID
         let validatedWorkCenterId: number | undefined;
 
-        if (resolvedWorkCenterId) {
-          // Manual selection provided by the worker (GPS fallback flow)
-          validatedWorkCenterId = resolvedWorkCenterId;
-        } else if (recordScanDto.signingMethod === 'qrcode' && recordScanDto.qrToken) {
+        if (recordScanDto.signingMethod === 'qrcode') {
+          // The token is validated even when the worker already picked a work
+          // center: accepting workCenterId on its own would let any assigned
+          // worker check in from anywhere with a forged or expired QR.
+          if (!recordScanDto.qrToken) {
+            throw new BadRequestException('A QR code is required for QR check-in.');
+          }
+
           // ── Merged QR: REQUIRE explicit workCenterId ──────────────────
           // Merged tokens contain multiple work centers. The frontend must
           // use GPS or manual selector to pick ONE before calling recordScan.
           // We NEVER auto-pick from a merged token — that bypasses GPS.
-          if (QrMerger.isMergedToken(recordScanDto.qrToken)) {
-            throw new Error(
+          if (QrMerger.isMergedToken(recordScanDto.qrToken) && !resolvedWorkCenterId) {
+            throw new BadRequestException(
               'Merged QR code detected but no work center selected. ' +
               'Please select a work center before checking in.'
             );
           }
 
-          // ── Static/single QR: work center is embedded in the token ────
           const validationResult = await this.qrValidationService.validateQrToken(
             recordScanDto.qrToken,
-            resolvedJobId
+            resolvedJobId,
+            false,
+            resolvedWorkCenterId,
           );
           if (!validationResult.valid) {
-            throw new Error(validationResult.message || 'Invalid or expired QR code');
+            throw new BadRequestException(validationResult.message || 'Invalid or expired QR code');
           }
-          validatedWorkCenterId = validationResult.workCenterId;
+          validatedWorkCenterId = resolvedWorkCenterId ?? validationResult.workCenterId;
+        } else if (resolvedWorkCenterId) {
+          // Manual selection provided by the worker (non-QR flows)
+          validatedWorkCenterId = resolvedWorkCenterId;
         } else if (recordScanDto.signingMethod === 'gps' && !resolvedWorkCenterId && !recordScanDto.qrToken) {
           // ── Standalone GPS: auto-select nearest GPS-active WC ──────────
           if (recordScanDto.latitude == null || recordScanDto.longitude == null) {
-            throw new Error('GPS coordinates are required for GPS check-in');
+            throw new BadRequestException('GPS coordinates are required for GPS check-in');
           }
 
           // Filter only WCs where GPS is explicitly activated
@@ -3540,7 +3556,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
           );
 
           if (gpsActiveWcs.length === 0) {
-            throw new Error('GPS check-in is not available — no work center has GPS activated');
+            throw new BadRequestException('GPS check-in is not available — no work center has GPS activated');
           }
 
           // Calculate distance to each GPS-active WC and filter by radius
@@ -3560,7 +3576,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
             .sort((a, b) => a.distance - b.distance);
 
           if (validWcs.length === 0) {
-            throw new Error('You are not in range of any work center');
+            throw new BadRequestException('You are not in range of any work center');
           }
 
           // Select nearest GPS-active WC within range
@@ -3568,7 +3584,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         } else if (recordScanDto.signingMethod === 'ip' && !resolvedWorkCenterId && !recordScanDto.qrToken) {
           // ── Standalone IP: auto-select matching IP-active WC ──────────
           if (!recordScanDto.ipAddress) {
-            throw new Error('IP address is required for IP check-in');
+            throw new BadRequestException('IP address is required for IP check-in');
           }
 
           const ipActiveWcs = (job.workCenters || []).filter(
@@ -3576,13 +3592,13 @@ async getAllJobsByWorkerFromToken(userId: number) {
           );
 
           if (ipActiveWcs.length === 0) {
-            throw new Error('IP check-in is not available — no work center has IP check-in activated');
+            throw new BadRequestException('IP check-in is not available — no work center has IP check-in activated');
           }
 
           const matchingWc = ipActiveWcs.find(wc => this.ipMatches(wc.allowedIp, recordScanDto.ipAddress));
 
           if (!matchingWc) {
-            throw new Error(`Your IP address (${recordScanDto.ipAddress}) does not match any work center's allowed IP`);
+            throw new BadRequestException(`Your IP address (${recordScanDto.ipAddress}) does not match any work center's allowed IP`);
           }
 
           validatedWorkCenterId = matchingWc.id;
@@ -3592,7 +3608,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         if (validatedWorkCenterId && job.workCenters?.length) {
           const jobWcIds = job.workCenters.map(wc => wc.id);
           if (!jobWcIds.includes(validatedWorkCenterId)) {
-            throw new Error('Selected work center does not belong to this job.');
+            throw new BadRequestException('Selected work center does not belong to this job.');
           }
         }
 
@@ -3605,10 +3621,10 @@ async getAllJobsByWorkerFromToken(userId: number) {
           const resolvedWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
           if (resolvedWc) {
             if (!resolvedWc.isIpActive) {
-              throw new Error('IP check-in is not activated for this work center');
+              throw new BadRequestException('IP check-in is not activated for this work center');
             }
             if (resolvedWc.allowedIp && !this.ipMatches(resolvedWc.allowedIp, recordScanDto.ipAddress)) {
-              throw new Error(`Your IP address does not match the allowed IP for "${resolvedWc.name}"`);
+              throw new BadRequestException(`Your IP address does not match the allowed IP for "${resolvedWc.name}"`);
             }
           }
         }
@@ -3628,7 +3644,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
           // Validate GPS activation for GPS method
           if (recordScanDto.signingMethod === 'gps' && resolvedWc) {
             if (!resolvedWc.isGpsActive) {
-              throw new Error('GPS check-in is not activated for this work center');
+              throw new BadRequestException('GPS check-in is not activated for this work center');
             }
           }
 
@@ -3641,7 +3657,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
             );
             const allowedRadius = resolvedWc.gpsRadius ?? 100;
             if (distanceMeters > allowedRadius) {
-              throw new Error(
+              throw new BadRequestException(
                 `You are ${Math.round(distanceMeters)}m away from "${resolvedWc.name}". ` +
                 `Check-in is only allowed within ${allowedRadius}m of the work center.`
               );
@@ -3736,7 +3752,12 @@ async getAllJobsByWorkerFromToken(userId: number) {
         };
       } catch (error) {
         console.error('❌ Transaction failed:', error.message);
-        throw new Error(`Failed to record scan: ${error.message}`);
+        // Rejections we raised deliberately (outside shift window, wrong work
+        // center, too far away…) are meant for the worker. Re-wrapping them in a
+        // plain Error made the exception filter answer 500 'unexpectedError',
+        // which hid every real check-in failure behind the same message.
+        if (error instanceof HttpException) throw error;
+        throw new InternalServerErrorException(`Failed to record scan: ${error.message}`);
       }
     });
   }
@@ -3755,7 +3776,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     if (activeSession) {
-      throw new Error('Worker already has an active session for this job');
+      throw new ConflictException('Worker already has an active session for this job');
     }
 
     // Get user timezone from the most recent scan log
@@ -3812,11 +3833,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     if (!activeSession) {
-      throw new Error('No active session found for this worker and job');
+      throw new BadRequestException('No active session found for this worker and job');
     }
 
     if (activeSession.isOnBreak) {
-      throw new Error('Worker is already on break');
+      throw new BadRequestException('Worker is already on break');
     }
 
     // Update session to indicate break start
@@ -3839,11 +3860,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     if (!activeSession) {
-      throw new Error('No active session found for this worker and job');
+      throw new BadRequestException('No active session found for this worker and job');
     }
 
     if (!activeSession.isOnBreak || !activeSession.currentBreakStart) {
-      throw new Error('Worker is not currently on break');
+      throw new BadRequestException('Worker is not currently on break');
     }
 
     // Calculate break duration and add to total using Luxon
@@ -3871,7 +3892,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     if (!activeSession) {
-      throw new Error('No active session found for this worker and job');
+      throw new BadRequestException('No active session found for this worker and job');
     }
 
     // If worker is on break, end the break first
@@ -3996,7 +4017,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     if (activeSession) {
-      throw new Error('Worker already has an active session for this job');
+      throw new ConflictException('Worker already has an active session for this job');
     }
 
     const utcNow = DateTime.utc().toJSDate();
@@ -4011,7 +4032,20 @@ async getAllJobsByWorkerFromToken(userId: number) {
       totalBreakMinutes: 0,
     });
 
-    const saved = await txManager.save(WorkSession, workSession);
+    let saved;
+    try {
+      saved = await txManager.save(WorkSession, workSession);
+    } catch (err: any) {
+      // 23505 = unique violation. Two indexes can fire here:
+      // ux_worker_active_session (one active session per worker, any job) and
+      // uq_work_sessions_open_per_job_worker (one open session per job+worker).
+      // Either means a concurrent check-in won the race between the lookup above
+      // and this insert — a conflict, not an unexpected server error.
+      if (err?.code === '23505') {
+        throw new ConflictException('Worker already has an active session');
+      }
+      throw err;
+    }
 
     const job = await txManager.findOne(Job, { where: { id: jobId } });
     if (job && job.status !== JobStatus.IN_PROGRESS) {
@@ -4031,11 +4065,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     if (!activeSession) {
-      throw new Error('No active session found');
+      throw new BadRequestException('No active session found');
     }
 
     if (activeSession.isOnBreak) {
-      throw new Error('Worker is already on break');
+      throw new BadRequestException('Worker is already on break');
     }
 
     activeSession.isOnBreak = true;
@@ -4052,11 +4086,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     if (!activeSession) {
-      throw new Error('No active session found');
+      throw new BadRequestException('No active session found');
     }
 
     if (!activeSession.isOnBreak || !activeSession.currentBreakStart) {
-      throw new Error('Worker is not currently on break');
+      throw new BadRequestException('Worker is not currently on break');
     }
 
     const utcNow = DateTime.utc();
@@ -4078,7 +4112,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     });
 
     if (!activeSession) {
-      throw new Error('No active session found for this worker and job');
+      throw new BadRequestException('No active session found for this worker and job');
     }
 
     if (activeSession.isOnBreak && activeSession.currentBreakStart) {

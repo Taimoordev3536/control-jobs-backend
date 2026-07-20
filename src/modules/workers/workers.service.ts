@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -14,6 +19,7 @@ import { Employer } from '../../modules/employers/entities/employer.entity';
 import { EmployerWorker } from '../../modules/employers/entities/employer-worker.entity';
 import { EmployerUser } from '../../modules/employers/entities/employer-user.entity';
 import { madridTodayKey } from '../../common/helpers/business-time';
+import { revokeUserSessions } from '../../common/helpers/account-status';
 import { Client } from '../clients/entities/client.entity';
 import { Job } from '../job/entities/job.entity';
 import { WorkerDocument } from './entities/worker-document.entity';
@@ -551,8 +557,11 @@ export class WorkersService {
     const worker = await this.workerRepo.findOne({ where: { id } });
     if (!worker) throw new NotFoundException('Worker not found');
 
-    // Extract user-level fields before assigning to worker entity
-    const { email, accessEmail, name, ...workerFields } = dto as any;
+    // Extract user-level fields before assigning to worker entity. `active` is
+    // owned by setActive(), which also syncs the login and revokes tokens — a
+    // plain update writing it would deactivate the worker on paper only.
+    const { email, accessEmail, name, active: _active, ...workerFields } =
+      dto as any;
     Object.assign(worker, workerFields);
     await this.workerRepo.save(worker);
 
@@ -576,8 +585,11 @@ export class WorkersService {
     const worker = await this.workerRepo.findOne({ where: { publicId } });
     if (!worker) throw new NotFoundException('Worker not found');
 
-    // Extract user-level fields before assigning to worker entity
-    const { email, accessEmail, name, ...workerFields } = dto as any;
+    // Extract user-level fields before assigning to worker entity. `active` is
+    // owned by setActive(), which also syncs the login and revokes tokens — a
+    // plain update writing it would deactivate the worker on paper only.
+    const { email, accessEmail, name, active: _active, ...workerFields } =
+      dto as any;
     Object.assign(worker, workerFields);
     await this.workerRepo.save(worker);
 
@@ -597,57 +609,55 @@ export class WorkersService {
     return this.findByPublicId(publicId);
   }
 
-  async remove(id: number) {
-    // Find linked users before deleting the links
-    const workerUserLinks = await this.workerUserRepo.find({
-      where: { workerId: id },
+  async setActive(id: number, active: boolean) {
+    return this.dataSource.transaction(async (manager) => {
+      const worker = await manager.findOne(Worker, { where: { id } });
+      if (!worker) throw new NotFoundException('Worker not found');
+
+      worker.active = active;
+      await manager.save(worker);
+
+      if (!active) {
+        const links = await manager.find(WorkerUser, { where: { workerId: id } });
+        await revokeUserSessions(
+          manager,
+          links.map((l) => l.userId),
+        );
+      }
+
+      return worker;
     });
-    const linkedUserIds = workerUserLinks.map((wu) => wu.userId);
+  }
 
-    // Remove all worker-user links
-    await this.workerUserRepo.delete({ workerId: id });
-    // Remove all employer-worker links
-    await this.employerWorkerRepo.delete({ worker: { id } });
-    // Remove the worker itself
-    const worker = await this.workerRepo.findOne({ where: { id } });
-    if (!worker) throw new NotFoundException('Worker not found');
-    await this.workerRepo.remove(worker);
-
-    // Delete orphaned users (not linked to any other entity)
-    for (const userId of linkedUserIds) {
-      await this.deleteOrphanedUser(userId);
+  // An employer may only touch workers linked to their own company. Role alone
+  // is not enough: without this, any employer could deactivate any worker whose
+  // publicId they knew.
+  private async assertEmployerOwnsWorker(requesterUserId: number, workerId: number) {
+    const link = await this.employerUserRepo.findOne({
+      where: { user: { id: requesterUserId } },
+      relations: ['employer'],
+    });
+    if (!link?.employer) {
+      throw new ForbiddenException('No employer is linked to the current user');
     }
 
-    return worker;
+    const owns = await this.employerWorkerRepo.findOne({
+      where: { employer: { id: link.employer.id }, worker: { id: workerId } },
+    });
+    if (!owns) {
+      throw new ForbiddenException('This worker does not belong to your company');
+    }
   }
 
-  async removeByPublicId(publicId: string) {
+  async setActiveByPublicId(
+    publicId: string,
+    active: boolean,
+    requesterUserId: number,
+  ) {
     const worker = await this.workerRepo.findOne({ where: { publicId } });
     if (!worker) throw new NotFoundException('Worker not found');
-    return this.remove(worker.id);
-  }
-
-  /**
-   * Delete a user if they are not linked to any worker, client, or employer
-   */
-  private async deleteOrphanedUser(userId: number) {
-    // Check if user is still linked to any worker
-    const workerLink = await this.workerUserRepo.findOne({ where: { userId } });
-    if (workerLink) return;
-
-    // Check if user is linked to any client
-    const clientLink = await this.dataSource
-      .query(`SELECT 1 FROM "clients_users" WHERE "userId" = $1 LIMIT 1`, [userId]);
-    if (clientLink && clientLink.length > 0) return;
-
-    // Check if user is linked to any employer
-    const employerLink = await this.dataSource
-      .getRepository(EmployerUser)
-      .findOne({ where: { user: { id: userId } } });
-    if (employerLink) return;
-
-    // User is orphaned — safe to delete
-    await this.userRepo.delete(userId);
+    await this.assertEmployerOwnsWorker(requesterUserId, worker.id);
+    return this.setActive(worker.id, active);
   }
 
   async assignUser(dto: AssignWorkerUserDto) {

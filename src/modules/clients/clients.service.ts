@@ -14,6 +14,7 @@ import { Employer } from '../employers/entities/employer.entity';
 import { EmployerClient } from '../employers/entities/employer-client.entity';
 import { Role } from '../users/entities/role.entity';
 import { madridTodayKey } from '../../common/helpers/business-time';
+import { revokeUserSessions } from '../../common/helpers/account-status';
 import * as bcrypt from 'bcryptjs';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { randomBytes } from 'crypto';
@@ -513,8 +514,16 @@ export class ClientsService {
 
   async update(id: number, dto: UpdateClientDto) {
     const client = await this.findOneEntity(id);
-    // Strip id, userId, and email to prevent overwriting primary key / saving non-entity fields
-    const { id: _id, userId: _userId, email: _email, ...safeDto } = dto as any;
+    // Strip id, userId, and email to prevent overwriting primary key / saving
+    // non-entity fields. `active` is owned by setActive(), which also syncs the
+    // login and revokes tokens.
+    const {
+      id: _id,
+      userId: _userId,
+      email: _email,
+      active: _active,
+      ...safeDto
+    } = dto as any;
     Object.assign(client, safeDto);
     const saved = await this.clientRepo.save(client);
 
@@ -540,57 +549,55 @@ export class ClientsService {
     return this.update(client.id, dto);
   }
 
-  async remove(id: number) {
-    // Find linked users before deleting the links
-    const clientUserLinks = await this.clientUserRepo.find({
-      where: { clientId: id },
+  async setActive(id: number, active: boolean) {
+    return this.dataSource.transaction(async (manager) => {
+      const client = await manager.findOne(Client, { where: { id } });
+      if (!client) throw new NotFoundException(`Client with ID ${id} not found`);
+
+      client.active = active;
+      await manager.save(client);
+
+      if (!active) {
+        const links = await manager.find(ClientUser, { where: { clientId: id } });
+        await revokeUserSessions(
+          manager,
+          links.map((l) => l.userId),
+        );
+      }
+
+      return client;
     });
-    const linkedUserIds = clientUserLinks.map((cu) => cu.userId);
+  }
 
-    // Remove all client-user links
-    await this.clientUserRepo.delete({ clientId: id });
-    // Remove all employer-client links
-    await this.employerClientRepo.delete({ client: { id } });
-    // Work centers cascade delete is handled by database constraints
-    // Remove the client itself
-    const client = await this.findOneEntity(id);
-    await this.clientRepo.remove(client);
-
-    // Delete orphaned users (not linked to any other entity)
-    for (const userId of linkedUserIds) {
-      await this.deleteOrphanedUser(userId);
+  // An employer may only touch clients linked to their own company. Role alone
+  // is not enough: without this, any employer could deactivate any client whose
+  // publicId they knew.
+  private async assertEmployerOwnsClient(requesterUserId: number, clientId: number) {
+    const link = await this.employerUserRepo.findOne({
+      where: { user: { id: requesterUserId } },
+      relations: ['employer'],
+    });
+    if (!link?.employer) {
+      throw new ForbiddenException('No employer is linked to the current user');
     }
 
-    return client;
+    const owns = await this.employerClientRepo.findOne({
+      where: { employer: { id: link.employer.id }, client: { id: clientId } },
+    });
+    if (!owns) {
+      throw new ForbiddenException('This client does not belong to your company');
+    }
   }
 
-  async removeByPublicId(publicId: string) {
+  async setActiveByPublicId(
+    publicId: string,
+    active: boolean,
+    requesterUserId: number,
+  ) {
     const client = await this.clientRepo.findOne({ where: { publicId } });
     if (!client) throw new NotFoundException('Client not found');
-    return this.remove(client.id);
-  }
-
-  /**
-   * Delete a user if they are not linked to any client, employer, or worker
-   */
-  private async deleteOrphanedUser(userId: number) {
-    // Check if user is still linked to any client
-    const clientLink = await this.clientUserRepo.findOne({ where: { userId } });
-    if (clientLink) return;
-
-    // Check if user is linked to any employer
-    const employerLink = await this.dataSource
-      .getRepository(EmployerUser)
-      .findOne({ where: { user: { id: userId } } });
-    if (employerLink) return;
-
-    // Check if user is linked to any worker (WorkerUser)
-    const workerLink = await this.dataSource
-      .query(`SELECT 1 FROM "workers_users" WHERE "userId" = $1 LIMIT 1`, [userId]);
-    if (workerLink && workerLink.length > 0) return;
-
-    // User is orphaned — safe to delete
-    await this.userRepo.delete(userId);
+    await this.assertEmployerOwnsClient(requesterUserId, client.id);
+    return this.setActive(client.id, active);
   }
 
   async assignUser(dto: AssignClientUserDto) {

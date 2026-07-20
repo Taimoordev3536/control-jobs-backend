@@ -5,6 +5,7 @@ import {
   Param,
   Body,
   Put,
+  Patch,
   Delete,
   ParseIntPipe,
   ParseUUIDPipe,
@@ -318,10 +319,17 @@ export class WorkersController {
     return this.workersService.updateByPublicId(id, dto);
   }
 
-  @Delete(':id')
+  @Patch(':id/deactivate')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer)
-  async removeByEmployer(@Param('id', ParseUUIDPipe) id: string) {
-    return this.workersService.removeByPublicId(id);
+  async deactivate(@Req() req, @Param('id', ParseUUIDPipe) id: string) {
+    return this.workersService.setActiveByPublicId(id, false, req.user.id);
+  }
+
+  @Patch(':id/activate')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async activate(@Req() req, @Param('id', ParseUUIDPipe) id: string) {
+    return this.workersService.setActiveByPublicId(id, true, req.user.id);
   }
 }

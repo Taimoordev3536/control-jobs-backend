@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Post, Body, Param, UseGuards, Req, Res, ParseUUIDPipe, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Put, Post, Body, Param, UseGuards, Req, Res, ParseUUIDPipe, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { Response } from 'express';
@@ -14,6 +14,9 @@ import { UpdateWorkCenterIpDto } from '../dto/update-work-center-ip.dto';
 import { GpsSelectionDto } from '../dto/gps-selection.dto';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 import { Job } from '../../job/entities/job.entity';
+import { EmployerUser } from '../../employers/entities/employer-user.entity';
+import { EmployerClient } from '../../employers/entities/employer-client.entity';
+import { UserRole } from '../../auth/enums/user-role.enum';
 
 @Controller('work-centers')
 @UseGuards(JwtAuthGuard)
@@ -33,10 +36,43 @@ export class QrCodeController {
    * REMOVED — handled by WorkCentersController which uses ParseUUIDPipe
    */
 
-  private async resolveWorkCenterId(publicId: string): Promise<number> {
+  /**
+   * Resolve the work center AND assert the caller may manage it.
+   *
+   * Every handler here mutates or discloses a check-in credential, so none of
+   * them may run on a work center the caller does not own. Mirrors
+   * WorkCentersService.verifyAccess: an employer owns a work center directly
+   * (employer_id) or through an active client association.
+   */
+  private async resolveOwnedWorkCenterId(publicId: string, req: any): Promise<number> {
     const wc = await this.workCenterRepo.findOne({ where: { publicId } });
     if (!wc) throw new NotFoundException(`Work center not found`);
-    return wc.id;
+
+    // Admin supports every account and has no employerUsers row of its own.
+    if (req?.user?.role?.value === UserRole.Admin) return wc.id;
+
+    const link = await this.workCenterRepo.manager.findOne(EmployerUser, {
+      where: { user: { id: req?.user?.id } },
+      relations: ['employer'],
+    });
+    if (!link?.employer?.id) {
+      throw new ForbiddenException('Access denied to this work center');
+    }
+
+    if (wc.employerId === link.employer.id) return wc.id;
+
+    if (wc.clientId) {
+      const association = await this.workCenterRepo.manager.findOne(EmployerClient, {
+        where: {
+          employer: { id: link.employer.id },
+          client: { id: wc.clientId },
+          isActive: true,
+        },
+      });
+      if (association) return wc.id;
+    }
+
+    throw new ForbiddenException('Access denied to this work center');
   }
 
   /**
@@ -49,17 +85,11 @@ export class QrCodeController {
     @Body() dto: UpdateWorkCenterQrDto,
     @Req() req,
   ) {
-    const workCenterId = await this.resolveWorkCenterId(publicId);
-    const userId = req.user?.id;
-    
-    // Get employer ID from user
-    // TODO: Extract this to a helper or use existing employer resolution
-    const employerId = await this.getEmployerIdFromUser(userId);
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
 
     const result = await this.qrCodeService.updateWorkCenterQr(
       workCenterId,
       dto,
-      employerId,
     );
 
     return {
@@ -82,8 +112,9 @@ export class QrCodeController {
   async getWorkCenterQrPdf(
     @Param('id', ParseUUIDPipe) publicId: string,
     @Res() res: Response,
+    @Req() req?,
   ) {
-    const workCenterId = await this.resolveWorkCenterId(publicId);
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
     const pdf = await this.qrPdfService.generatePdfForWorkCenter(workCenterId);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
@@ -99,8 +130,8 @@ export class QrCodeController {
    * GET /work-centers/:id/qr-codes
    */
   @Get(':id/qr-codes')
-  async getWorkCenterQrCodes(@Param('id', ParseUUIDPipe) publicId: string) {
-    const workCenterId = await this.resolveWorkCenterId(publicId);
+  async getWorkCenterQrCodes(@Param('id', ParseUUIDPipe) publicId: string, @Req() req?) {
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
     const result = await this.qrCodeService.getWorkCenterQrCodes(workCenterId);
 
     return {
@@ -118,8 +149,9 @@ export class QrCodeController {
   async sendStaticQrEmail(
     @Param('id', ParseUUIDPipe) publicId: string,
     @Body() dto: SendStaticQrEmailDto,
+    @Req() req?,
   ) {
-    const workCenterId = await this.resolveWorkCenterId(publicId);
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
     const result = await this.qrEmailService.sendStaticQrEmail(
       workCenterId,
       dto.clientEmail,
@@ -138,8 +170,8 @@ export class QrCodeController {
    * POST /work-centers/:id/regenerate-static-qr
    */
   @Post(':id/regenerate-static-qr')
-  async regenerateStaticQr(@Param('id', ParseUUIDPipe) publicId: string) {
-    const workCenterId = await this.resolveWorkCenterId(publicId);
+  async regenerateStaticQr(@Param('id', ParseUUIDPipe) publicId: string, @Req() req?) {
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
     const result = await this.qrCodeService.regenerateStaticQr(workCenterId);
 
     return {
@@ -157,8 +189,9 @@ export class QrCodeController {
   async updateWorkCenterGps(
     @Param('id', ParseUUIDPipe) publicId: string,
     @Body() dto: UpdateWorkCenterGpsDto,
+    @Req() req?,
   ) {
-    const workCenterId = await this.resolveWorkCenterId(publicId);
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
     const workCenter = await this.workCenterRepo.findOne({ where: { id: workCenterId } });
     if (!workCenter) throw new NotFoundException(`Work center ${workCenterId} not found`);
 
@@ -211,8 +244,9 @@ export class QrCodeController {
   async updateWorkCenterIp(
     @Param('id', ParseUUIDPipe) publicId: string,
     @Body() dto: UpdateWorkCenterIpDto,
+    @Req() req?,
   ) {
-    const workCenterId = await this.resolveWorkCenterId(publicId);
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
     const workCenter = await this.workCenterRepo.findOne({ where: { id: workCenterId } });
     if (!workCenter) throw new NotFoundException(`Work center ${workCenterId} not found`);
 
@@ -270,8 +304,8 @@ export class QrCodeController {
    * GET /work-centers/:id/preview-qr-email
    */
   @Get(':id/preview-qr-email')
-  async previewQrEmail(@Param('id', ParseUUIDPipe) publicId: string) {
-    const workCenterId = await this.resolveWorkCenterId(publicId);
+  async previewQrEmail(@Param('id', ParseUUIDPipe) publicId: string, @Req() req?) {
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
     const htmlContent = await this.qrEmailService.previewEmail(workCenterId, true);
 
     return {
@@ -281,13 +315,4 @@ export class QrCodeController {
     };
   }
 
-  /**
-   * Helper: Get employer ID from user
-   * TODO: Move to shared service or use existing implementation
-   */
-  private async getEmployerIdFromUser(userId: number): Promise<number> {
-    // For now, return a placeholder
-    // In production, query EmployerUser table
-    return 1; // TODO: Implement proper employer resolution
-  }
 }

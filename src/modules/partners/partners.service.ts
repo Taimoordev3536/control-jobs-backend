@@ -10,10 +10,12 @@ import { CreatePartnerDto } from './dto/create-partner.dto';
 import { UpdatePartnerDto } from './dto/update-partner.dto';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { PartnerUser } from './entities/partner-user.entity';
+import { UserRole } from '../auth/enums/user-role.enum';
 import { User } from '../users/entities/user.entity';
 import { PartnerTier } from './entities/partner-type.entity';
 import { EmailService } from '../../common/services/email.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { revokeUserSessions } from '../../common/helpers/account-status';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 
@@ -387,45 +389,72 @@ export class PartnersService {
     }
   }
 
-  /**
-   * Delete a partner
-   * @param id - Partner ID
-   * @returns Success message
-   */
-  async remove(id: number): Promise<BaseResponse<null>> {
-    try {
+  // Everything a partner picker needs, and nothing a partner shouldn't see:
+  // the full partner list carries NIF, IBAN, BIC and retention, so it stays
+  // admin-only. A partner can only ever pick themselves, so that is all they
+  // get back.
+  async findOptions(requester: any): Promise<BaseResponse<any[]>> {
+    const toOption = (p: Partner) => ({
+      id: p.publicId,
+      name: p.name,
+      commission: Number(p.commission ?? 0),
+      isSystem: p.taxId === 'SYSTEM',
+    });
+
+    if (requester?.role?.value === UserRole.Partner) {
+      const partnerId = await this.findPartnerIdByUserId(requester.id);
       const partner = await this.partnerRepository.findOne({
+        where: { id: partnerId },
+      });
+      return {
+        message: 'Partner options retrieved successfully',
+        data: partner ? [toOption(partner)] : [],
+        isSuccess: true,
+        statusCode: 200,
+        developerError: '',
+      };
+    }
+
+    const partners = await this.partnerRepository.find({
+      order: { name: 'ASC' },
+    });
+    return {
+      message: 'Partner options retrieved successfully',
+      data: partners.map(toOption),
+      isSuccess: true,
+      statusCode: 200,
+      developerError: '',
+    };
+  }
+
+  async setActive(id: number, active: boolean): Promise<BaseResponse<null>> {
+    return this.partnerRepository.manager.transaction(async (manager) => {
+      const partner = await manager.findOne(Partner, {
         where: { id },
         relations: ['partnerUsers'],
       });
-
       if (!partner) {
         throw new NotFoundException(`Partner with ID ${id} not found`);
       }
 
-      // Delete associated users
-      for (const partnerUser of partner.partnerUsers) {
-        await this.userRepository.delete(partnerUser.userId);
+      partner.active = active;
+      await manager.save(partner);
+
+      if (!active) {
+        await revokeUserSessions(
+          manager,
+          partner.partnerUsers.map((pu) => pu.userId),
+        );
       }
 
-      // Delete partner
-      await this.partnerRepository.remove(partner);
-
       return {
-        message: 'Partner deleted successfully',
+        message: active ? 'Partner activated' : 'Partner deactivated',
         data: null,
         isSuccess: true,
         statusCode: 200,
         developerError: '',
       };
-    } catch (error) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      throw new BadRequestException(
-        'Failed to delete partner: ' + error.message,
-      );
-    }
+    });
   }
 
   /**

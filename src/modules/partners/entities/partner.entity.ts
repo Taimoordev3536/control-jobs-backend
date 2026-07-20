@@ -127,6 +127,9 @@ export class Partner {
   @Column({ name: 'access_account_status', default: 'postpone' })
   accessAccountStatus: 'postpone' | 'request'; // ✅ New field from UI
 
+  @Column({ default: true })
+  active: boolean;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

@@ -1,4 +1,5 @@
 import { IsNumber, IsOptional, IsString, IsIn, IsBoolean } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class RecordScanDto {
   @IsString()
@@ -41,7 +42,10 @@ export class RecordScanDto {
   @IsString()
   qrToken?: string;
 
+  // Callers send either the UUID publicId or the numeric id; resolveWorkCenterPublicId
+  // accepts both, so normalize to string rather than reject a number outright.
   @IsOptional()
+  @Transform(({ value }) => (value === null || value === undefined ? value : String(value)))
   @IsString()
   workCenterId?: string;
 

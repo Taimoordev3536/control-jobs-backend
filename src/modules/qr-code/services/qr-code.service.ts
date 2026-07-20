@@ -12,6 +12,7 @@ import { QrMerger } from '../helpers/qr-merger';
 import { UpdateWorkCenterQrDto, WorkCenterQrResponseDto } from '../dto/update-work-center-qr.dto';
 import { MergedQrResponse, MergedQrData } from '../interfaces/qr-interfaces';
 import { JobScheduleService } from '../../job/services/job-schedule.service';
+import { madridCivilToday } from '../../../common/helpers/business-time';
 
 @Injectable()
 export class QrCodeService {
@@ -35,7 +36,6 @@ export class QrCodeService {
   async updateWorkCenterQr(
     workCenterId: number,
     dto: UpdateWorkCenterQrDto,
-    employerId: number,
   ): Promise<WorkCenterQrResponseDto> {
     // Verify work center exists
     const workCenter = await this.workCenterRepo.findOne({
@@ -46,8 +46,9 @@ export class QrCodeService {
       throw new NotFoundException(`Work center with ID ${workCenterId} not found`);
     }
 
-    // Note: Permission is handled by CASL at the controller level
-    // Employers can manage work centers they own directly OR through their clients
+    // Ownership is asserted by the caller (QrCodeController.resolveOwnedWorkCenterId).
+    // The previous `employerId` parameter was accepted here but never used, and the
+    // controller passed a hardcoded 1 — nothing was actually enforced.
 
     const { selectedType, active } = dto;
 
@@ -408,7 +409,9 @@ export class QrCodeService {
    * 4. Generate merged QR code
    */
   async getMergedDynamicQrForClient(publicId: string): Promise<MergedQrResponse> {
-    const today = new Date();
+    // Madrid civil day, not the server's UTC clock: between 00:00 and 02:00
+    // Madrid the UTC date is still yesterday, which hid today's night-shift jobs.
+    const today = madridCivilToday();
 
     // Resolve publicId to numeric client id
     const client = await this.clientRepo.findOne({ where: { publicId } });

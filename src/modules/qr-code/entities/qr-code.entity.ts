@@ -36,6 +36,15 @@ export class QrCode {
   @Column({ type: 'timestamptz', nullable: true })
   expiresAt: Date | null;
 
+  // The token this row held before the last rotation. Rotation replaces `token`
+  // in place, so without this a code scanned seconds before the cron fired
+  // validated as "not found" while the worker was still picking a work center.
+  @Column({ length: 44, nullable: true })
+  previousToken: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  previousExpiresAt: Date | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   lastRefreshedAt: Date | null;
 

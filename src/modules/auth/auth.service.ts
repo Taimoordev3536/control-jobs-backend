@@ -30,6 +30,7 @@ import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { EmailCheckerService } from '../../common/services/email-checker.service';
 import { PartnerUser } from '../partners/entities/partner-user.entity';
 import { RefreshTokenService } from './services/refresh-token.service';
+import { roleAllowsLogin } from '../../common/helpers/account-status';
 
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 
@@ -135,6 +136,16 @@ export class AuthService {
         throw new UnauthorizedException('Invalid credentials');
       }
 
+      // Gate 1: the invite / sub-user feature's own flag.
+      if (user.isActive === false) {
+        throw new UnauthorizedException('Account is deactivated');
+      }
+
+      // Gate 2: every role behind this login has been deactivated.
+      if (!(await roleAllowsLogin(this.rolesRepository.manager, user.id))) {
+        throw new UnauthorizedException('Account is deactivated');
+      }
+
       if (user.roleId !== 1 && !(user as any).emailVerifiedAt) {
         throw new ForbiddenException(`EMAIL_NOT_VERIFIED:${user.email}`);
       }
@@ -226,6 +237,14 @@ export class AuthService {
     const user = await this.usersService.findById(userId, ['role']);
     if (!user) throw new UnauthorizedException('User not found');
 
+    if (
+      user.isActive === false ||
+      !(await roleAllowsLogin(this.rolesRepository.manager, user.id))
+    ) {
+      await this.refreshTokenService.revoke(next.raw);
+      throw new UnauthorizedException('Account is deactivated');
+    }
+
     let employerInfo: any = null;
     if (user.roleId === 3) {
       const eu = await this.employerUserRepository.findOne({
@@ -274,6 +293,14 @@ export class AuthService {
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
+      return null;
+    }
+
+    if (user.isActive === false) {
+      return null;
+    }
+
+    if (!(await roleAllowsLogin(this.rolesRepository.manager, user.id))) {
       return null;
     }
 

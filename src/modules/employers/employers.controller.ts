@@ -46,8 +46,13 @@ export class EmployersController {
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(1, 2)
-  async findAll(@Query('partnerId') partnerId?: number): Promise<BaseResponse<Employer[]>> {
-    return this.employersService.findAll(partnerId);
+  async findAll(
+    @Request() req,
+    // Kept as a string: callers pass the partner publicId (UUID), and a Number
+    // metatype would let ValidationPipe coerce it to NaN and silently drop the filter.
+    @Query('partnerId') partnerId?: string,
+  ): Promise<BaseResponse<Employer[]>> {
+    return this.employersService.findAllScoped(req.user, partnerId);
   }
 
   // Admin/Partner: Pending employer pipeline — invitations not yet redeemed
@@ -125,13 +130,22 @@ export class EmployersController {
     return this.employersService.update(numericId, updateEmployerDto);
   }
 
-  // Admin/Partner: Delete employer
-  @Delete(':id')
+  @Patch(':id/deactivate')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(1, 2)
-  async remove(@Param('id', ParseUUIDPipe) id: string) {
+  async deactivate(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
     const numericId = await this.employersService.resolvePublicId(id);
-    return this.employersService.remove(numericId);
+    await this.employersService.assertCanManageEmployer(req.user, numericId);
+    return this.employersService.setActive(numericId, false);
+  }
+
+  @Patch(':id/activate')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(1, 2)
+  async activate(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+    const numericId = await this.employersService.resolvePublicId(id);
+    await this.employersService.assertCanManageEmployer(req.user, numericId);
+    return this.employersService.setActive(numericId, true);
   }
 
   // Employer self-service: upload/remove own company logo. The avatar

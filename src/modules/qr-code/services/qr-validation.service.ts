@@ -7,6 +7,7 @@ import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 import { QrMerger } from '../helpers/qr-merger';
 import { QrValidationResult } from '../interfaces/qr-interfaces';
 import { JobScheduleService } from '../../job/services/job-schedule.service';
+import { madridCivilToday } from '../../../common/helpers/business-time';
 
 export interface GpsSelectionResult {
   selectionType: 'auto' | 'manual';
@@ -42,14 +43,31 @@ export class QrValidationService {
     scannedToken: string,
     jobId: number,
     enforceTodaySchedule: boolean = false,
+    requiredWorkCenterId?: number,
   ): Promise<QrValidationResult> {
     // Check if it's a merged token
     if (QrMerger.isMergedToken(scannedToken)) {
-      return await this.validateMergedToken(scannedToken, jobId, enforceTodaySchedule);
+      return await this.validateMergedToken(
+        scannedToken,
+        jobId,
+        enforceTodaySchedule,
+        requiredWorkCenterId,
+      );
     }
 
     // Single token validation
-    return await this.validateSingleToken(scannedToken, jobId, enforceTodaySchedule);
+    const result = await this.validateSingleToken(scannedToken, jobId, enforceTodaySchedule);
+    if (
+      result.valid &&
+      requiredWorkCenterId !== undefined &&
+      result.workCenterId !== requiredWorkCenterId
+    ) {
+      return {
+        valid: false,
+        message: 'The scanned QR code does not belong to the selected work center.',
+      };
+    }
+    return result;
   }
 
   /**
@@ -59,6 +77,7 @@ export class QrValidationService {
     mergedToken: string,
     jobId: number,
     enforceTodaySchedule: boolean = false,
+    requiredWorkCenterId?: number,
   ): Promise<QrValidationResult> {
     const mergedData = QrMerger.parseMergedToken(mergedToken);
 
@@ -76,11 +95,18 @@ export class QrValidationService {
     // We instead check whether any token in this merged QR belongs to a work center
     // of the worker's actual job (via validateSingleToken).
 
-    // Validate each work center's tokens against the worker's job
+    // Validate each work center's tokens against the worker's job. When the
+    // worker picked a work center (GPS/manual selector), only a token belonging
+    // to THAT work center counts — otherwise the selection would let any token
+    // in the merged QR stand in for any other.
     for (const wc of mergedData.workCenters) {
       for (const token of wc.tokens) {
         const result = await this.validateSingleToken(token, jobId, enforceTodaySchedule);
         if (result.valid) {
+          const resolvedWcId = result.workCenterId ?? wc.id;
+          if (requiredWorkCenterId !== undefined && resolvedWcId !== requiredWorkCenterId) {
+            continue;
+          }
           return {
             valid: true,
             workCenterId: result.workCenterId ?? wc.id,
@@ -94,7 +120,10 @@ export class QrValidationService {
 
     return {
       valid: false,
-      message: 'No valid tokens found in merged QR code for this job',
+      message:
+        requiredWorkCenterId !== undefined
+          ? 'The scanned QR code does not belong to the selected work center, or it has expired. Please rescan.'
+          : 'No valid tokens found in merged QR code for this job',
     };
   }
 
@@ -121,7 +150,8 @@ export class QrValidationService {
 
     // SCHEDULE ENFORCEMENT: Check if job is scheduled for today
     if (enforceTodaySchedule) {
-      const today = new Date();
+      // Madrid civil day — the schedule readers compare local civil fields.
+      const today = madridCivilToday();
       const isScheduledToday = this.jobScheduleService.isJobScheduledForDate(job, today);
 
       if (!isScheduledToday) {
@@ -150,7 +180,18 @@ export class QrValidationService {
 
     // Check each QR code
     for (const qrCode of qrCodes) {
-      if (qrCode.token === token) {
+      // A dynamic code rotates every 30s while the worker is still completing
+      // GPS/work-center selection, so the token they scanned may already be the
+      // previous one. Accept it until its own grace expiry passes.
+      const isCurrent = qrCode.token === token;
+      const isWithinGrace =
+        !isCurrent &&
+        !!qrCode.previousToken &&
+        qrCode.previousToken === token &&
+        !!qrCode.previousExpiresAt &&
+        qrCode.previousExpiresAt > now;
+
+      if (isCurrent || isWithinGrace) {
         // Only validate if this QR is selected (not just active)
         if (!qrCode.isSelected) {
           continue;
@@ -170,7 +211,7 @@ export class QrValidationService {
         // Check if it's a dynamic QR
         if (qrCode.type === QrCodeType.DYNAMIC) {
           // Check expiry
-          if (qrCode.expiresAt && qrCode.expiresAt > now) {
+          if (isWithinGrace || (qrCode.expiresAt && qrCode.expiresAt > now)) {
             return {
               valid: true,
               workCenterId: qrCode.workCenterId,

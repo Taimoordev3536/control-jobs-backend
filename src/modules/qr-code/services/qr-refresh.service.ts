@@ -49,9 +49,14 @@ export class QrRefreshService {
         values.push(`($${params.length - 1}::uuid, $${params.length})`);
       });
 
+      // Carry the outgoing token into previousToken so a code scanned just
+      // before this rotation still validates while the worker completes the
+      // GPS/work-center step. Its grace window is the rotation period itself.
       await this.qrCodeRepo.query(
         `UPDATE qr_codes AS q
-            SET token = v.token,
+            SET "previousToken" = q.token,
+                "previousExpiresAt" = $2,
+                token = v.token,
                 "expiresAt" = $2,
                 "lastRefreshedAt" = $1,
                 "updatedAt" = CURRENT_TIMESTAMP
