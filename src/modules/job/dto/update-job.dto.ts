@@ -1,5 +1,5 @@
 import { IsString, IsDateString, IsArray, IsOptional, ValidateNested, IsEnum } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import { CreateShiftDto } from './create-shift.dto';
 import { ScheduleType } from '../entities/shift.entity';
 import { CreateSeasonPeriodDto } from './create-season-period.dto';
@@ -27,14 +27,18 @@ export class UpdateJobDto {
   @IsOptional()
   clientId?: string;
 
+  // Same coercion as CreateTaskDto.workCenterId: the UI mixes UUID publicIds
+  // and numeric ids in these arrays, and both resolve fine downstream.
   @IsArray()
-  @IsString({ each: true })
   @IsOptional()
+  @Transform(({ value }) => (Array.isArray(value) ? value.map((v) => (v == null ? v : String(v))) : value))
+  @IsString({ each: true })
   workCenterIds?: string[];
 
   @IsArray()
-  @IsString({ each: true })
   @IsOptional()
+  @Transform(({ value }) => (Array.isArray(value) ? value.map((v) => (v == null ? v : String(v))) : value))
+  @IsString({ each: true })
   workerIds?: string[];
 
   @IsString()

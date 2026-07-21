@@ -110,6 +110,13 @@ async getWorkerJobsForDate(@Req() req, @Query('date') date?: string) {
   return this.jobService.getWorkerJobsForDate(req.user.id, date);
 }
 
+// Whether this worker is clocked in right now, independent of calendar day.
+@UseGuards(JwtAuthGuard)
+@Get('worker/active-session')
+async getWorkerActiveSession(@Req() req) {
+  return this.jobService.getWorkerActiveSession(req.user.id);
+}
+
 @UseGuards(JwtAuthGuard)
 @Get('worker/pending')
 async getWorkerPendingCheckins(@Req() req, @Query('days') days?: string) {

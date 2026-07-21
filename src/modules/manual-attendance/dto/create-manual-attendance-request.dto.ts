@@ -1,4 +1,5 @@
-import { IsString, IsOptional, IsEnum, IsDateString, IsUUID } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsDateString } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ManualAttendanceRequestType } from '../enums/request-type.enum';
 
 export class CreateManualAttendanceRequestDto {
@@ -27,8 +28,11 @@ export class CreateManualAttendanceRequestDto {
   @IsString()
   requestedCheckOut?: string; // ISO timestamp
 
+  // resolveWorkSessionPublicId accepts a UUID or a numeric id; the records list
+  // supplies `publicId || id`, so @IsUUID blocked valid edit requests.
   @IsOptional()
-  @IsUUID()
+  @Transform(({ value }) => (value === null || value === undefined ? value : String(value)))
+  @IsString()
   existingWorkSessionId?: string; // For EDIT_EXISTING type
 
   @IsOptional()

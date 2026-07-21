@@ -17,6 +17,7 @@ import { Job } from '../../job/entities/job.entity';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { EmployerClient } from '../../employers/entities/employer-client.entity';
 import { UserRole } from '../../auth/enums/user-role.enum';
+import { isUUID } from 'class-validator';
 
 @Controller('work-centers')
 @UseGuards(JwtAuthGuard)
@@ -281,7 +282,16 @@ export class QrCodeController {
   async selectWorkCenterByGps(@Body() dto: GpsSelectionDto) {
     let numericJobId: number | undefined;
     if (dto.jobId) {
-      const job = await this.workCenterRepo.manager.findOne(Job, { where: { publicId: dto.jobId } });
+      // Match /jobs/scan, which accepts either form. Querying publicId with a
+      // numeric id made Postgres reject the value as a malformed uuid (a 500),
+      // rather than simply finding the job.
+      const where: any = isUUID(dto.jobId)
+        ? { publicId: dto.jobId }
+        : { id: Number(dto.jobId) };
+      if (!isUUID(dto.jobId) && Number.isNaN(Number(dto.jobId))) {
+        throw new BadRequestException(`Invalid jobId: ${dto.jobId}`);
+      }
+      const job = await this.workCenterRepo.manager.findOne(Job, { where });
       if (!job) throw new NotFoundException(`Job ${dto.jobId} not found`);
       numericJobId = job.id;
     }
@@ -290,6 +300,7 @@ export class QrCodeController {
       dto.latitude,
       dto.longitude,
       numericJobId,
+      dto.accuracy,
     );
 
     return {

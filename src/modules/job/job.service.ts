@@ -2382,6 +2382,49 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * status — powers the worker "Jobs" screen (day selector + cards + the
    * "solicitar fichaje manual" flow for days not yet clocked in).
    */
+  /**
+   * The worker's currently open session, whenever it started.
+   *
+   * Deliberately NOT day-scoped: getWorkerJobsForDate only returns sessions
+   * whose checkInTime falls inside the requested Madrid day, so a night shift
+   * disappears after midnight while still being open. UI that asks "am I
+   * clocked in right now?" must not depend on the calendar day.
+   */
+  async getWorkerActiveSession(userId: number) {
+    const link = await this.workerUserRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['worker'],
+    });
+    const workerId = link?.worker?.id;
+    if (!workerId) throw new NotFoundException('Worker not found for this user');
+
+    const session = await this.workSessionRepo.findOne({
+      where: { workerId, checkOutTime: IsNull() },
+      relations: ['job'],
+      order: { checkInTime: 'DESC' },
+    });
+
+    if (!session) {
+      return { hasActiveSession: false, data: null };
+    }
+
+    // totalBreakMinutes covers completed breaks only; the running break is
+    // reported separately so the caller can freeze its clock instead of
+    // guessing at minute precision.
+    return {
+      hasActiveSession: true,
+      data: {
+        sessionId: session.publicId || String(session.id),
+        jobId: session.job?.publicId || String(session.jobId),
+        jobName: session.job?.jobName || '',
+        checkInTime: session.checkInTime,
+        onBreak: !!session.isOnBreak,
+        breakStartTime: session.currentBreakStart || null,
+        totalBreakMinutes: session.totalBreakMinutes || 0,
+      },
+    };
+  }
+
   async getWorkerJobsForDate(userId: number, dateStr?: string) {
     const link = await this.workerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['worker'] });
     const workerId = link?.worker?.id;
@@ -3440,20 +3483,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
       }
     }
 
-    // Device biometric (WebAuthn): true only if this user server-verified a passkey moments ago.
+    // Device biometric (WebAuthn): true only if this user server-verified a passkey
+    // moments ago. Read here, but ENFORCED later — see the identity block inside
+    // the transaction, after the QR/location checks have passed.
     const webauthnVerified =
       recordScanDto.scanType === 'check-in' ? this.webauthnService.consumeRecentVerification(userId) : false;
-
-    // Identity enforcement — on verifyIdentity jobs the selfie is OPTIONAL (may be skipped),
-    // but device biometric is REQUIRED when the worker has enrolled a device.
-    // Disable entirely with IDENTITY_ENFORCE=false.
-    if (recordScanDto.scanType === 'check-in' && process.env.IDENTITY_ENFORCE !== 'false') {
-      const idJob = await this.jobRepo.findOne({ where: { id: resolvedJobId }, relations: ['signingMethods'] });
-      const requiresIdentity = (idJob?.signingMethods || []).some((sm: any) => sm.verifyIdentity === true);
-      if (requiresIdentity && !webauthnVerified && (await this.webauthnService.hasCredential(userId))) {
-        throw new ForbiddenException('Se requiere verificación biométrica del dispositivo para fichar.');
-      }
-    }
 
     return await this.dataSource.transaction(async (txManager) => {
       try {
@@ -3662,6 +3696,27 @@ async getAllJobsByWorkerFromToken(userId: number) {
                 `Check-in is only allowed within ${allowedRadius}m of the work center.`
               );
             }
+          }
+        }
+
+        // Identity enforcement — deliberately LAST of the checks. Asking a worker
+        // to present a fingerprint only to then reject the scan for an expired QR
+        // or a closed shift window wastes the one step that costs them effort.
+        // On verifyIdentity jobs the selfie is OPTIONAL, but device biometric is
+        // REQUIRED once the worker has enrolled a device.
+        // Disable entirely with IDENTITY_ENFORCE=false.
+        if (recordScanDto.scanType === 'check-in' && process.env.IDENTITY_ENFORCE !== 'false') {
+          const idJob = await txManager.findOne(Job, {
+            where: { id: resolvedJobId },
+            relations: ['signingMethods'],
+          });
+          const requiresIdentity = (idJob?.signingMethods || []).some(
+            (sm: any) => sm.verifyIdentity === true,
+          );
+          if (requiresIdentity && !webauthnVerified && (await this.webauthnService.hasCredential(userId))) {
+            throw new ForbiddenException(
+              'Se requiere verificación biométrica del dispositivo para fichar.',
+            );
           }
         }
 
@@ -4012,12 +4067,22 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * Transaction-aware check-in handler
    */
   private async handleCheckInTx(txManager: any, jobId: number, workerId: number, signingMethod?: string, workCenterId?: number) {
+    // Any open session blocks a new one, not just one on this job — the worker
+    // must close the running one first. Name it so they know where to go.
     const activeSession = await txManager.findOne(WorkSession, {
-      where: { jobId, workerId, checkOutTime: IsNull() },
+      where: { workerId, checkOutTime: IsNull() },
+      relations: ['job'],
     });
 
     if (activeSession) {
-      throw new ConflictException('Worker already has an active session for this job');
+      // English, like every other message here — the frontend matches on these
+      // substrings and renders a translated equivalent.
+      const where = activeSession.job?.jobName ? ` on "${activeSession.job.jobName}"` : '';
+      throw new ConflictException(
+        activeSession.jobId === jobId
+          ? 'Worker is already checked in to this job'
+          : `Worker already has an open session${where}. Check out before starting another job.`,
+      );
     }
 
     const utcNow = DateTime.utc().toJSDate();

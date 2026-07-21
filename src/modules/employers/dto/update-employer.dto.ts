@@ -72,8 +72,12 @@ export class UpdateEmployerDto {
     @Type(() => Number)
     longitude?: number;
 
-    @IsString()
+    // The employer GET returns `partner.publicId || employer.partnerId`, so the
+    // edit form echoes back a number when the partner has no publicId. The
+    // service already stringifies before resolving.
     @IsOptional()
+    @Transform(({ value }) => (value === null || value === undefined ? value : String(value)))
+    @IsString()
     partnerId?: string;
 
     @IsString()

@@ -2,6 +2,9 @@ import { IsNumber, IsOptional, IsString, IsIn, IsBoolean } from 'class-validator
 import { Transform } from 'class-transformer';
 
 export class RecordScanDto {
+  // resolvePublicId accepts a UUID or a numeric id, and the worker dashboard
+  // sends `job.publicId || job.id` — a number whenever publicId is missing.
+  @Transform(({ value }) => (value === null || value === undefined ? value : String(value)))
   @IsString()
   jobId: string;
 

@@ -9,6 +9,13 @@ import { QrValidationResult } from '../interfaces/qr-interfaces';
 import { JobScheduleService } from '../../job/services/job-schedule.service';
 import { madridCivilToday } from '../../../common/helpers/business-time';
 
+/**
+ * Floor for "is the nearest work center clearly the nearest?". A phone reporting
+ * better accuracy than this indoors is usually optimistic, so never trust a gap
+ * smaller than this even when the device claims a tight fix.
+ */
+const MIN_GPS_DECISION_MARGIN_M = 25;
+
 export interface GpsSelectionResult {
   selectionType: 'auto' | 'manual';
   workCenterId?: number;
@@ -242,15 +249,19 @@ export class QrValidationService {
    */
   async selectWorkCenterByGps(
     mergedToken: string,
-    workerLat: number,
-    workerLng: number,
+    workerLat?: number,
+    workerLng?: number,
     jobId?: number,
+    accuracyMeters?: number,
   ): Promise<GpsSelectionResult> {
     const mergedData = QrMerger.parseMergedToken(mergedToken);
 
     if (!mergedData) {
       return { selectionType: 'manual', message: 'Invalid merged QR token — manual selection required' };
     }
+
+    const hasFix =
+      workerLat != null && workerLng != null && !(workerLat === 0 && workerLng === 0);
 
     let workCenterIds = mergedData.workCenters.map(wc => wc.id);
 
@@ -275,21 +286,33 @@ export class QrValidationService {
       where: { id: In(workCenterIds) },
     });
 
-    // Filter work centers that have GPS configured and are within their radius
-    const nearby = workCenters
-      .filter(wc => wc.latitude != null && wc.longitude != null)
-      .map(wc => ({
-        id: wc.id,
-        name: wc.name,
-        address: wc.address,
-        distance: this.calculateDistance(
-          workerLat, workerLng,
-          Number(wc.latitude), Number(wc.longitude),
-        ),
-        radius: wc.gpsRadius ?? 100,
-      }))
-      .filter(wc => wc.distance <= wc.radius)
-      .sort((a, b) => a.distance - b.distance);
+    // Only one work center of this job is in the scanned code — there is nothing
+    // to disambiguate, so don't make the worker wait for GPS or tap a list.
+    if (workCenters.length === 1) {
+      return {
+        selectionType: 'auto',
+        workCenterId: workCenters[0].id,
+        message: `"${workCenters[0].name}"`,
+      };
+    }
+
+    // Without a fix there is nothing to rank by; ask.
+    const nearby = !hasFix
+      ? []
+      : workCenters
+          .filter(wc => wc.latitude != null && wc.longitude != null)
+          .map(wc => ({
+            id: wc.id,
+            name: wc.name,
+            address: wc.address,
+            distance: this.calculateDistance(
+              workerLat!, workerLng!,
+              Number(wc.latitude), Number(wc.longitude),
+            ),
+            radius: wc.gpsRadius ?? 100,
+          }))
+          .filter(wc => wc.distance <= wc.radius)
+          .sort((a, b) => a.distance - b.distance);
 
     if (nearby.length === 1) {
       return {
@@ -297,6 +320,21 @@ export class QrValidationService {
         workCenterId: nearby[0].id,
         message: `Auto-selected "${nearby[0].name}" (${Math.round(nearby[0].distance)}m away)`,
       };
+    }
+
+    // Several in range: auto-pick only when the winner is clearly closer than the
+    // runner-up. Sites in one building can sit metres apart, and a phone fix is
+    // routinely ±20m indoors — guessing there would silently file attendance
+    // against the wrong work center, which is worse than one extra tap.
+    if (nearby.length > 1) {
+      const margin = Math.max(accuracyMeters ?? 0, MIN_GPS_DECISION_MARGIN_M);
+      if (nearby[1].distance - nearby[0].distance > margin) {
+        return {
+          selectionType: 'auto',
+          workCenterId: nearby[0].id,
+          message: `Auto-selected "${nearby[0].name}" (${Math.round(nearby[0].distance)}m away)`,
+        };
+      }
     }
 
     // Zero or multiple nearby — fall back to manual.
@@ -307,18 +345,19 @@ export class QrValidationService {
       name: wc.name,
       address: wc.address,
       distance:
-        wc.latitude != null && wc.longitude != null
-          ? this.calculateDistance(workerLat, workerLng, Number(wc.latitude), Number(wc.longitude))
+        hasFix && wc.latitude != null && wc.longitude != null
+          ? this.calculateDistance(workerLat!, workerLng!, Number(wc.latitude), Number(wc.longitude))
           : -1,
     }));
 
     return {
       selectionType: 'manual',
       workCenters: allForManual,
-      message:
-        nearby.length === 0
-          ? 'No work centers found within GPS radius — manual selection required'
-          : 'Multiple work centers within GPS radius — manual selection required',
+      message: !hasFix
+        ? 'Select your work center'
+        : nearby.length === 0
+          ? 'No work center found near you — please select yours'
+          : 'Several work centers are close together — please select yours',
     };
   }
 

@@ -744,7 +744,15 @@ export class ManualAttendanceService {
       qb.andWhere('r.worker_id = :workerId', { workerId });
     }
     if (query.clientId) {
-      qb.andWhere('client.publicId = :clientPublicId', { clientPublicId: query.clientId });
+      // Comparing the uuid column against a numeric id makes Postgres throw
+      // rather than return no rows, so branch on the shape of the value.
+      if (isUUID(query.clientId)) {
+        qb.andWhere('client.publicId = :clientPublicId', { clientPublicId: query.clientId });
+      } else if (!isNaN(Number(query.clientId))) {
+        qb.andWhere('client.id = :clientId', { clientId: Number(query.clientId) });
+      } else {
+        throw new BadRequestException(`Invalid clientId: ${query.clientId}`);
+      }
     }
     if (query.startDate) {
       qb.andWhere('r.requested_date >= :startDate', { startDate: query.startDate });

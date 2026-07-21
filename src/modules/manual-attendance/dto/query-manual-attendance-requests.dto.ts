@@ -1,4 +1,4 @@
-import { IsOptional, IsEnum, IsUUID, IsDateString } from 'class-validator';
+import { IsOptional, IsEnum, IsString, IsDateString } from 'class-validator';
 import { ManualAttendanceRequestStatus } from '../enums/request-status.enum';
 
 export class QueryManualAttendanceRequestsDto {
@@ -6,16 +6,19 @@ export class QueryManualAttendanceRequestsDto {
   @IsEnum(ManualAttendanceRequestStatus)
   status?: ManualAttendanceRequestStatus;
 
+  // These come from route params, which are a publicId when the record has one
+  // and the numeric id otherwise. The service resolvers accept both, so @IsUUID
+  // rejected ids the code could handle — leaving the tab permanently empty.
   @IsOptional()
-  @IsUUID()
+  @IsString()
   jobId?: string;
 
   @IsOptional()
-  @IsUUID()
+  @IsString()
   workerId?: string;
 
   @IsOptional()
-  @IsUUID()
+  @IsString()
   clientId?: string;
 
   @IsOptional()

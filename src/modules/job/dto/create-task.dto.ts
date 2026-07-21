@@ -83,9 +83,13 @@ export class CreateTaskDto {
   @IsOptional()
   pendingTask?: boolean;
 
-  // Optional per-task work center (select one of the job's work centers)
-  @IsString()
+  // Optional per-task work center (select one of the job's work centers).
+  // The UI sends either the UUID publicId, the numeric id, or the -1/-2 "in
+  // itinere" sentinels; resolveWorkCenterPublicId accepts all three, so coerce
+  // to string here rather than reject a number outright.
   @IsOptional()
+  @Transform(({ value }) => (value === null || value === undefined ? value : String(value)))
+  @IsString()
   workCenterId?: string;
 
   // ---------- Common periodicity fields ----------
