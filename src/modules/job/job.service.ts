@@ -677,6 +677,8 @@ export class JobService {
         throw new Error('Job not found');
       }
 
+      const workerNames = await this.resolveWorkerNames((job.workers || []).map((w: any) => w.id));
+
       // Step 3: Validate permissions
       if (userType === 'employer') {
         if (job.employer.id !== relatedEntityId) {
@@ -714,7 +716,7 @@ export class JobService {
         })) || [],
         workersDetail: job.workers?.map((w: any) => ({
           id: w.publicId || w.id,
-          name: w.user?.name || null,
+          name: workerNames.get(w.id) || w.user?.name || null,
           code: w.code,
           photoUrl: w.logoUrl || null,
         })) || [],
@@ -1450,27 +1452,32 @@ async getControlForDate(userId: number, dateStr?: string) {
   const sessions = jobIds.length
     ? await this.workSessionRepo.find({
         where: { job: { id: In(jobIds) }, checkInTime: Between(startOfDay, endOfDay) },
-        relations: ['job', 'worker'],
+        // workCenter so we can surface WHERE each worker actually checked in,
+        // rather than the job's full list of centres.
+        relations: ['job', 'worker', 'workCenter'],
       })
     : [];
   // Aggregate a worker's sessions for the day. checkIn = earliest of the day; checkOut must be
   // the checkout of the MOST RECENT check-in — so if the latest session is still open (worker
   // re-checked-in after an earlier checkout today), checkOut stays null and the live view is correct.
-  const checkInMap = new Map<string, { checkIn: Date; checkOut: Date | null }>();
+  // workCenterName follows the most recent check-in (where the worker currently is).
+  const checkInMap = new Map<string, { checkIn: Date; checkOut: Date | null; workCenterName: string | null }>();
   const latestCheckIn = new Map<string, Date>();
   for (const s of sessions) {
     if (s.job?.id && s.worker?.id && s.checkInTime) {
       const key = `${s.job.id}:${s.worker.id}`;
       const ci = new Date(s.checkInTime);
       const co = s.checkOutTime ? new Date(s.checkOutTime) : null;
+      const wcName = s.workCenter?.name || null;
       const existing = checkInMap.get(key);
       if (!existing) {
-        checkInMap.set(key, { checkIn: ci, checkOut: co });
+        checkInMap.set(key, { checkIn: ci, checkOut: co, workCenterName: wcName });
         latestCheckIn.set(key, ci);
       } else {
         if (ci < existing.checkIn) existing.checkIn = ci;
         if (ci >= (latestCheckIn.get(key) as Date)) {
           existing.checkOut = co;
+          existing.workCenterName = wcName;
           latestCheckIn.set(key, ci);
         }
       }
@@ -1497,6 +1504,8 @@ async getControlForDate(userId: number, dateStr?: string) {
         checkInTime: sess ? sess.checkIn.toISOString() : null,
         checkOutTime: sess?.checkOut ? sess.checkOut.toISOString() : null,
         durationMinutes,
+        // The specific centre this worker checked in at (null if not checked in).
+        checkInWorkCenter: sess?.workCenterName || null,
       };
     });
     const firstCheckIn = workers.map((w) => w.checkInTime).filter(Boolean).sort()[0] || null;
@@ -1736,8 +1745,11 @@ async getAllJobsByEmployerFromToken(userId: number) {
 
     const workerIdToName = new Map<number, string>();
     for (const wu of workerUsers) {
-      if (wu.worker?.id && wu.user?.name) {
-        workerIdToName.set(wu.worker.id, wu.user.name);
+      // wu.workerId is the scalar FK (always loaded); wu.worker is the relation,
+      // which is NOT loaded here (relations: ['user'] only) — reading wu.worker.id
+      // left this map empty, so every worker fell back to its code.
+      if (wu.workerId && wu.user?.name) {
+        workerIdToName.set(wu.workerId, wu.user.name);
       }
     }
 
@@ -1946,8 +1958,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
     const workerIdToName = new Map<number, string>();
     for (const wu of workerUsers) {
-      if (wu.worker?.id && wu.user?.name) {
-        workerIdToName.set(wu.worker.id, wu.user.name);
+      // wu.workerId is the scalar FK (always loaded); wu.worker is the relation,
+      // which is NOT loaded here (relations: ['user'] only) — reading wu.worker.id
+      // left this map empty, so every worker fell back to its code.
+      if (wu.workerId && wu.user?.name) {
+        workerIdToName.set(wu.workerId, wu.user.name);
       }
     }
 
@@ -2297,11 +2312,38 @@ async getAllJobsByWorkerFromToken(userId: number) {
     };
   }
 
+  // A worker's own calendar — resolves the worker from the session user.
   async getWorkerCalendar(userId: number, start: string, end: string) {
-    if (!start || !end) throw new Error('start and end are required');
     const link = await this.workerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['worker'] });
     const workerId = link?.worker?.id;
-    if (!workerId) throw new Error('Worker not found for this user');
+    if (!workerId) throw new NotFoundException('Worker not found for this user');
+    return this.buildWorkerCalendar(workerId, start, end);
+  }
+
+  // The same calendar for an arbitrary worker (by publicId), used by the
+  // employer's worker-detail Calendar tab. Restricted to the employer that
+  // actually manages the worker.
+  async getWorkerCalendarByPublicId(requesterUserId: number, publicId: string, start: string, end: string) {
+    const worker = await this.workerRepo.findOne({ where: { publicId } });
+    if (!worker) throw new NotFoundException('Worker not found');
+
+    const requesterEmployer = await this.employerUserRepo.findOne({
+      where: { user: { id: requesterUserId } },
+      relations: ['employer'],
+    });
+    const employerId = requesterEmployer?.employer?.id;
+    if (!employerId) throw new ForbiddenException('Not an employer');
+
+    const owns = await this.employerWorkerRepo.findOne({
+      where: { worker: { id: worker.id }, employer: { id: employerId } },
+    });
+    if (!owns) throw new ForbiddenException('This worker is not in your account');
+
+    return this.buildWorkerCalendar(worker.id, start, end);
+  }
+
+  private async buildWorkerCalendar(workerId: number, start: string, end: string) {
+    if (!start || !end) throw new BadRequestException('start and end are required');
 
     const empLink = await this.employerWorkerRepo.findOne({ where: { worker: { id: workerId } }, relations: ['employer'] });
     const employerId = empLink?.employer?.id;
@@ -2595,6 +2637,8 @@ async getAllJobsByWorkerFromToken(userId: number) {
       byJob.get(s.job.id)!.push(s);
     }
 
+    const nameByWorkerId = await this.resolveWorkerNames(sessions.map((s) => s.worker?.id));
+
     const dayDate = new Date(`${date}T12:00:00`);
     const items: any[] = [];
     for (const job of jobs) {
@@ -2602,7 +2646,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       const js = byJob.get(job.id) || [];
       if (!scheduled && js.length === 0) continue;
       const workers = js.map((s) => ({
-        name: s.worker?.user?.name || (s.worker?.code ? `#${s.worker.code}` : 'Trabajador'),
+        name: nameByWorkerId.get(s.worker?.id) || s.worker?.user?.name || (s.worker?.code ? `#${s.worker.code}` : 'Trabajador'),
         checkInTime: s.checkInTime,
         checkOutTime: s.checkOutTime,
         active: !!(s.checkInTime && !s.checkOutTime && s.isActive),
@@ -2862,6 +2906,20 @@ async getAllJobsByWorkerFromToken(userId: number) {
         job: { name: job.jobName, publicId: job.publicId },
         client: job.client?.name || null,
         workCenter: session.workCenter?.name || null,
+        // The site's own registered address. Distinct from any coordinates
+        // captured at the scan — this is where the work center IS, not where the
+        // worker's phone was.
+        workCenterAddress: ((): string | null => {
+          const addr = (session.workCenter?.address || '').trim();
+          const loc = (session.workCenter?.locality || '').trim();
+          if (!addr) return loc || null;
+          // Full addresses usually already contain the town; appending it again
+          // produced "…, Madrid, Spain, Getafe".
+          if (loc && !addr.toLowerCase().includes(loc.toLowerCase())) {
+            return `${addr}, ${loc}`;
+          }
+          return addr;
+        })(),
         date: dayKey,
         checkIn: this.madridTime(session.checkInTime),
         checkOut: checkOut ? this.madridTime(session.checkOutTime) : null,
@@ -2953,6 +3011,23 @@ async getAllJobsByWorkerFromToken(userId: number) {
     return { message: 'OK', data: days, isSuccess: true, statusCode: 200 };
   }
 
+  // Worker names live on the workers_users junction, NOT worker.user_id (that
+  // direct FK is unpopulated), so worker.user?.name is always null and callers
+  // fall back to the bare code (e.g. "3434"). Resolve real names via the junction.
+  private async resolveWorkerNames(workerIds: (number | null | undefined)[]): Promise<Map<number, string>> {
+    const names = new Map<number, string>();
+    const ids = Array.from(new Set(workerIds.filter((id): id is number => id != null)));
+    if (!ids.length) return names;
+    const links = await this.workerUserRepo.find({
+      where: ids.map((id) => ({ workerId: id })),
+      relations: ['user'],
+    });
+    for (const l of links as any[]) {
+      if (l.workerId && l.user?.name) names.set(l.workerId, l.user.name);
+    }
+    return names;
+  }
+
   async getNearbyAvailableWorkers(userId: number, lat: number, lng: number, radiusMeters: number, dateStr?: string) {
     const employerUser = await this.employerUserRepo.findOne({ where: { user: { id: userId } }, relations: ['employer'] });
     if (!employerUser?.employer) throw new Error('Employer not found for this user');
@@ -2978,12 +3053,27 @@ async getAllJobsByWorkerFromToken(userId: number) {
       }
     }
 
+    // Worker names live on the workers_users junction, not worker.user_id (that
+    // FK is unpopulated), so w.user?.name was always null and every card showed
+    // the bare code (e.g. "3434"). Resolve real names via the junction.
+    const workerIds = links.map((l) => l.worker?.id).filter((id): id is number => id != null);
+    const nameByWorkerId = new Map<number, string>();
+    if (workerIds.length) {
+      const wus = await this.workerUserRepo.find({
+        where: [...new Set(workerIds)].map((id) => ({ workerId: id })),
+        relations: ['user'],
+      });
+      for (const wu of wus) {
+        if (wu.workerId && wu.user?.name) nameByWorkerId.set(wu.workerId, wu.user.name);
+      }
+    }
+
     const result = links
       .map((l) => l.worker)
       .filter((w: any) => w && w.latitude != null && w.longitude != null)
       .map((w: any) => ({
         id: w.publicId,
-        name: w.user?.name || w.code,
+        name: nameByWorkerId.get(w.id) || w.user?.name || w.code,
         occupation: w.occupation || null,
         latitude: Number(w.latitude),
         longitude: Number(w.longitude),
@@ -4400,7 +4490,12 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
     }
 
     const workSessions = await sessionQuery.getMany();
-    
+
+    const nameByWorkerId = await this.resolveWorkerNames([
+      ...scanLogs.map((l: any) => l.worker?.id),
+      ...workSessions.map((s: any) => s.worker?.id),
+    ]);
+
     // Query task history for this job
     const taskHistoryQuery = this.taskHistoryRepo.createQueryBuilder('taskHistory')
       .leftJoinAndSelect('taskHistory.task', 'task')
@@ -4431,7 +4526,7 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
         worker: {
           id: log.worker.id,
           code: log.worker.code,
-          name: log.worker.user?.name || null,
+          name: nameByWorkerId.get(log.worker.id) || log.worker.user?.name || null,
         },
       });
       return acc;
@@ -4478,7 +4573,7 @@ async getJobScanHistory(jobId: number, startDate?: string, endDate?: string): Pr
         worker: {
           id: session.worker.id,
           code: session.worker.code,
-          name: session.worker.user?.name || null,
+          name: nameByWorkerId.get(session.worker.id) || session.worker.user?.name || null,
         },
         checkInTime: session.checkInTime,
         checkOutTime: session.checkOutTime,
@@ -5061,28 +5156,18 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
       // Verify worker assigned to job
       const isAssigned = job.workers?.some(w => w.id === Number(workerId));
       if (!isAssigned) {
-        // Find if the worker exists (to provide better error messages)
-        const worker = await this.workerRepo.findOne({ 
-          where: { id: workerId },
-          relations: ['user']
-        });
-        const workerName = worker?.user?.name || 'Unknown worker';
-        
+        const errNames = await this.resolveWorkerNames([Number(workerId), ...(job.workers || []).map((w) => w.id)]);
+        const workerName = errNames.get(Number(workerId)) || 'Unknown worker';
+
         // Return a specific error with all fields needed by frontend to handle this gracefully
         return {
           message: `Worker (ID: ${workerId}) is not assigned to this job`,
           data: {
             jobId,
             workerId,
-            allowedWorkers: await Promise.all((job.workers || []).map(async (w) => {
-              const workerWithUser = await this.workerRepo.findOne({
-                where: { id: w.id },
-                relations: ['user']
-              });
-              return { 
-                id: w.id, 
-                name: workerWithUser?.user?.name || `Worker ${w.id}`
-              };
+            allowedWorkers: (job.workers || []).map((w) => ({
+              id: w.id,
+              name: errNames.get(w.id) || `Worker ${w.id}`,
             })),
             isSuccess: false, // Include inside data for better client detection
             statusCode: 403,

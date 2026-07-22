@@ -899,7 +899,8 @@ export class ManualAttendanceService {
       });
       workerUserId = workerUser?.userId ?? 0;
 
-      const workerName = request.worker?.user?.name
+      const workerName = workerUser?.user?.name
+        || request.worker?.user?.name
         || `Worker #${request.workerId}`;
 
       let message: string;

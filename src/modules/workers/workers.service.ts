@@ -323,7 +323,8 @@ export class WorkersService {
       relations: ['worker', 'worker.user'],
       order: { issueDate: 'DESC', createdAt: 'DESC' },
     });
-    return receipts.map((r) => ({ ...this.mapSalaryReceipt(r), workerName: r.worker?.user?.name || r.worker?.code || null }));
+    const names = await this.resolveWorkerNames(receipts.map((r) => r.workerId));
+    return receipts.map((r) => ({ ...this.mapSalaryReceipt(r), workerName: names.get(r.workerId) || r.worker?.user?.name || r.worker?.code || null }));
   }
 
   async listMySalaries(userId: number) {
@@ -341,6 +342,7 @@ export class WorkersService {
     if (!r) throw new NotFoundException('Salary receipt not found');
     const worker: any = await this.workerRepo.findOne({ where: { id: workerId }, relations: ['user'] });
     const employer: any = await this.employerRepo.findOne({ where: { id: r.employerId } });
+    const workerName = (await this.resolveWorkerNames([workerId])).get(workerId);
 
     const lines: DocLine[] = [];
     if (r.fixedAmount != null) {
@@ -360,7 +362,7 @@ export class WorkersService {
         lines: [employer?.address, [employer?.postalCode, employer?.city].filter(Boolean).join(' '), employer?.province],
       },
       recipient: {
-        name: worker?.user?.name || worker?.code || 'Trabajador',
+        name: workerName || worker?.user?.name || worker?.code || 'Trabajador',
         taxId: worker?.nif || null,
         lines: [worker?.address, [worker?.postalCode, worker?.city].filter(Boolean).join(' '), worker?.province],
       },
@@ -454,6 +456,23 @@ export class WorkersService {
     const worker = await this.workerRepo.findOne({ where: { publicId } });
     if (!worker) throw new NotFoundException('Worker not found');
     return worker.id;
+  }
+
+  // Worker names live on the workers_users junction, NOT worker.user_id (that
+  // direct FK is unpopulated), so worker.user?.name is always null and callers
+  // fall back to the bare code. Resolve real names via the junction.
+  async resolveWorkerNames(workerIds: number[]): Promise<Map<number, string>> {
+    const names = new Map<number, string>();
+    const ids = [...new Set(workerIds.filter((id) => id != null))];
+    if (!ids.length) return names;
+    const links = await this.workerUserRepo.find({
+      where: ids.map((id) => ({ workerId: id })),
+      relations: ['user'],
+    });
+    for (const l of links) {
+      if (l.workerId && l.user?.name) names.set(l.workerId, l.user.name);
+    }
+    return names;
   }
 
   async findWorkerIdByUserId(userId: number): Promise<number> {
@@ -910,7 +929,10 @@ export class WorkersService {
       publicId: j.publicId,
       holder: j.client?.name || '',
       denomination: j.jobName,
+      // Joined string drives sort/search/export; the array feeds the compact
+      // "first + N" popover on the frontend.
       workCenter: (j.workCenters || []).map((wc) => wc.name).join(', '),
+      workCenters: (j.workCenters || []).map((wc) => wc.name).filter(Boolean),
     }));
   }
 

@@ -104,6 +104,18 @@ async getWorkerCalendar(@Req() req, @Query('start') start: string, @Query('end')
   return this.jobService.getWorkerCalendar(req.user.id, start, end);
 }
 
+// Same calendar for a specific worker (employer viewing one of their workers).
+@UseGuards(JwtAuthGuard)
+@Get('worker-calendar/:publicId')
+async getWorkerCalendarByPublicId(
+  @Req() req,
+  @Param('publicId') publicId: string,
+  @Query('start') start: string,
+  @Query('end') end: string,
+) {
+  return this.jobService.getWorkerCalendarByPublicId(req.user.id, publicId, start, end);
+}
+
 @UseGuards(JwtAuthGuard)
 @Get('worker/day')
 async getWorkerJobsForDate(@Req() req, @Query('date') date?: string) {

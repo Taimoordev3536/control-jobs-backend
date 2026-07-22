@@ -21,10 +21,27 @@ export class AbsencesService {
     return ({ vacation: 'Vacaciones', permit: 'Permiso', sick: 'Baja', other: 'Otro' } as Record<string, string>)[type] || type;
   }
 
-  private map(a: AbsenceRequest) {
+  // The worker's name lives on the workers_users junction, NOT on worker.user_id
+  // (that direct FK is unpopulated), so a.worker.user.name was always null and
+  // every request showed the worker's code. Resolve names via the junction.
+  private async resolveWorkerNames(workerIds: number[]): Promise<Map<number, string>> {
+    const names = new Map<number, string>();
+    if (!workerIds.length) return names;
+    const links = await this.workerUserRepo.find({
+      where: [...new Set(workerIds)].map((id) => ({ worker: { id } })),
+      relations: ['user'],
+    });
+    for (const l of links) {
+      if (l.workerId && l.user?.name) names.set(l.workerId, l.user.name);
+    }
+    return names;
+  }
+
+  private map(a: AbsenceRequest, nameByWorkerId?: Map<number, string>) {
     return {
       id: a.publicId,
-      workerName: a.worker?.user?.name || a.worker?.code || null,
+      workerName:
+        nameByWorkerId?.get(a.workerId) || a.worker?.user?.name || a.worker?.code || null,
       type: a.type,
       startDate: a.startDate,
       endDate: a.endDate,
@@ -52,7 +69,8 @@ export class AbsencesService {
     const where: any = { employerId };
     if (status) where.status = status;
     const rows = await this.absenceRepo.find({ where, relations: ['worker', 'worker.user'], order: { createdAt: 'DESC' } });
-    return rows.map((a) => this.map(a));
+    const names = await this.resolveWorkerNames(rows.map((a) => a.workerId));
+    return rows.map((a) => this.map(a, names));
   }
 
   async review(userId: number, publicId: string, body: { status?: string; reviewerNotes?: string }) {
@@ -82,7 +100,7 @@ export class AbsencesService {
       } catch {}
     }
 
-    return this.map(a);
+    return this.map(a, await this.resolveWorkerNames([a.workerId]));
   }
 
   async createForWorker(userId: number, body: { type?: string; startDate?: string; endDate?: string; reason?: string }) {
@@ -111,7 +129,10 @@ export class AbsencesService {
       const empLink = await this.employerUserRepo.findOne({ where: { employer: { id: employerId } }, relations: ['user'] });
       const employerUserId = empLink?.user?.id;
       if (employerUserId) {
-        const workerName = link?.worker?.user?.name || 'Un trabajador';
+        const workerName =
+          (await this.resolveWorkerNames([workerId])).get(workerId) ||
+          link?.worker?.user?.name ||
+          'Un trabajador';
         await this.alerts.createAndEmitForUser({
           userId: employerUserId,
           role: 'EMPLOYER',
@@ -122,12 +143,13 @@ export class AbsencesService {
       }
     } catch {}
 
-    return this.map(saved);
+    return this.map(saved, await this.resolveWorkerNames([saved.workerId]));
   }
 
   async listMine(userId: number) {
     const workerId = await this.workerIdForUser(userId);
     const rows = await this.absenceRepo.find({ where: { workerId }, relations: ['worker', 'worker.user'], order: { createdAt: 'DESC' } });
-    return rows.map((a) => this.map(a));
+    const names = await this.resolveWorkerNames(rows.map((a) => a.workerId));
+    return rows.map((a) => this.map(a, names));
   }
 }
