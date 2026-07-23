@@ -19,6 +19,12 @@ export class ScanLog {
   @Column({ name: 'worker_id' })
   workerId: number;
 
+  // The work session this scan belongs to. Set at scan time so the record
+  // detail shows exactly one session's scans instead of guessing by time window
+  // (which bled shared-boundary scans across back-to-back sessions).
+  @Column({ name: 'work_session_id', nullable: true })
+  workSessionId?: number;
+
   @Column({ name: 'work_center_id', nullable: true })
   workCenterId?: number;
 

@@ -13,10 +13,10 @@ export enum ScheduleType {
   SEASONAL = 'seasonal',
 }
 
-export enum Season {
-  NORMAL = 'normal',
-  SUMMER = 'summer',
-}
+// Re-exported from its own module so existing `import { Season } from
+// './shift.entity'` call sites keep working, without shift.entity being the
+// definition site (which created the circular-import hazard).
+export { Season } from './season.enum';
 
 export enum Weekday {
   MONDAY = 'monday',

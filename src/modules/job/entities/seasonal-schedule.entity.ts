@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { Job } from './job.entity';
-import { Season } from './shift.entity';
+import { Season } from './season.enum';
 import { Shift } from './shift.entity';
 
 @Entity('seasonal_schedule')

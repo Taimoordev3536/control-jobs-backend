@@ -1676,6 +1676,7 @@ async getTasksTabDataForUser(userId: number) {
       id: worker.id,
       code: worker.code,
       name: workerIdToName.get(worker.id) || null,
+      occupation: worker.occupation || null,
     })),
   }));
 
@@ -1880,6 +1881,7 @@ async getAllJobsByEmployerFromToken(userId: number) {
           publicId: worker.publicId,
           code: worker.code,
           name: workerIdToName.get(worker.id) || null,
+          occupation: worker.occupation || null,
         })),
       };
     });
@@ -2066,7 +2068,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
         signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
         hasClientSurvey,
         hasWorkerSurvey,
-        workers: job.workers.map(worker => ({ id: worker.id, publicId: worker.publicId, code: worker.code, name: workerIdToName.get(worker.id) || null })),
+        workers: job.workers.map(worker => ({ id: worker.id, publicId: worker.publicId, code: worker.code, name: workerIdToName.get(worker.id) || null, occupation: worker.occupation || null })),
         // Include active work session if exists
         workSession: jobIdToSession.has(job.id) ? (() => {
           const session = jobIdToSession.get(job.id);
@@ -2784,19 +2786,31 @@ async getAllJobsByWorkerFromToken(userId: number) {
     const checkOut = session.checkOutTime ? new Date(session.checkOutTime) : null;
     const dayKey = this.madridDateKey(session.checkInTime);
     const dayDate = new Date(`${dayKey}T12:00:00`);
-    // Buffer the window: the check-in scan is written a few hundred ms BEFORE the
-    // work session's checkInTime, and the checkout scan slightly before checkOutTime.
-    const scanStart = new Date(new Date(session.checkInTime).getTime() - 60000);
-    const scanEnd = new Date((checkOut ? checkOut.getTime() : Date.now()) + 60000);
 
-    const scanLogs = await this.scanLogRepo.createQueryBuilder('s')
-      .leftJoinAndSelect('s.workCenter', 'wc')
-      .where('s.job = :jobId', { jobId: job.id })
-      .andWhere('s.worker = :workerId', { workerId: session.worker.id })
-      .andWhere('s.scanTime >= :start', { start: scanStart })
-      .andWhere('s.scanTime <= :end', { end: scanEnd })
-      .orderBy('s.scanTime', 'ASC')
-      .getMany();
+    // Prefer the exact session→scan link: a scan belongs to one session, so
+    // back-to-back sessions that share a boundary no longer bleed into each
+    // other's detail. Fall back to the time window only for legacy scans that
+    // predate the link (and weren't backfilled).
+    let scanLogs = await this.scanLogRepo.find({
+      where: { workSessionId: session.id },
+      relations: ['workCenter'],
+      order: { scanTime: 'ASC' },
+    });
+    if (scanLogs.length === 0) {
+      // Buffer the window: the check-in scan is written a few hundred ms BEFORE
+      // the session's checkInTime, and the checkout scan slightly before checkOutTime.
+      const scanStart = new Date(new Date(session.checkInTime).getTime() - 60000);
+      const scanEnd = new Date((checkOut ? checkOut.getTime() : Date.now()) + 60000);
+      scanLogs = await this.scanLogRepo.createQueryBuilder('s')
+        .leftJoinAndSelect('s.workCenter', 'wc')
+        .where('s.job = :jobId', { jobId: job.id })
+        .andWhere('s.worker = :workerId', { workerId: session.worker.id })
+        .andWhere('s.workSessionId IS NULL')
+        .andWhere('s.scanTime >= :start', { start: scanStart })
+        .andWhere('s.scanTime <= :end', { end: scanEnd })
+        .orderBy('s.scanTime', 'ASC')
+        .getMany();
+    }
 
     const scans = scanLogs.map((s) => ({
       scanType: s.scanType,
@@ -3095,8 +3109,11 @@ async getAllJobsByWorkerFromToken(userId: number) {
 
       const workerIdToName = new Map<number, string>();
       for (const wu of workerUsers) {
-        if (wu.worker?.id && wu.user?.name) {
-          workerIdToName.set(wu.worker.id, wu.user.name);
+        // Use the scalar workerId — the query loads only the `user` relation,
+        // so `wu.worker` is undefined and `wu.worker?.id` was always null,
+        // leaving every name unresolved (frontend then showed the bare code).
+        if (wu.workerId && wu.user?.name) {
+          workerIdToName.set(wu.workerId, wu.user.name);
         }
       }
 
@@ -3193,7 +3210,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
           activeScheduleWeekHours,
           tasks: job.tasks?.map(task => ({ id: task.id, publicId: task.publicId, name: task.name, expectedDuration: convertMinutesToDuration(task.expectedDuration) })) || [],
           signingMethods: job.signingMethods?.map(sm => ({ methodType: sm.methodType, methodDetails: sm.methodDetails, verifyIdentity: sm.verifyIdentity })) || [],
-          workers: job.workers.map(worker => ({ id: worker.id, publicId: worker.publicId, code: worker.code, name: workerIdToName.get(worker.id) || null })),
+          workers: job.workers.map(worker => ({ id: worker.id, publicId: worker.publicId, code: worker.code, name: workerIdToName.get(worker.id) || null, occupation: worker.occupation || null })),
         };
       });
 
@@ -3846,6 +3863,15 @@ async getAllJobsByWorkerFromToken(userId: number) {
               }
             }
             break;
+        }
+
+        // Bind the scan to the session it just acted on — the check-in scan to
+        // the new session, the check-out scan to the session it closed, break
+        // scans to the active one. This is what lets the record detail show
+        // exactly this session's scans instead of guessing by time window.
+        if ((workSession as any)?.id) {
+          savedScanLog.workSessionId = (workSession as any).id;
+          await txManager.save(ScanLog, savedScanLog);
         }
 
         return {
