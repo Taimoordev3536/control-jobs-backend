@@ -2134,6 +2134,70 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * than an authenticated user, so admins/employers can view a specific
    * client's jobs instead of being scoped to their own via the token.
    */
+  // Shared core so the employer's Client > Calendario tab and the client's own
+  // Schedule page always return identical data for the same client — only how
+  // the clientId is resolved differs. It deliberately does NOT load the
+  // `workers` relation: loading that to-many alongside the nested
+  // seasonalSchedules.shifts to-many caused a TypeORM join explosion that left
+  // `shifts` under-hydrated, so FIXED-schedule jobs looked "not scheduled" and
+  // silently dropped off the employer view while the client (which loads
+  // workCenters instead) saw them.
+  private async buildClientCalendar(clientId: number, start: string, end: string) {
+    const jobs = await this.jobRepo.find({
+      where: { client: { id: clientId } },
+      relations: ['employer', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'],
+    });
+    const employerId = jobs[0]?.employer?.id;
+    const holidays = employerId ? await this.loadHolidays(employerId, start, end) : new Map<string, string>();
+
+    const jobIds = jobs.map((j) => j.id);
+    const startInstant = DateTime.fromISO(start, { zone: 'Europe/Madrid' }).startOf('day').toJSDate();
+    const endInstant = DateTime.fromISO(end, { zone: 'Europe/Madrid' }).endOf('day').toJSDate();
+    const sessions = jobIds.length
+      ? await this.workSessionRepo.find({ where: { job: { id: In(jobIds) }, checkInTime: Between(startInstant, endInstant) }, relations: ['job'] })
+      : [];
+    const workedByDate = new Map<string, Set<number>>();
+    for (const s of sessions) {
+      if (!s.job?.id) continue;
+      const k = this.madridDateKey(s.checkInTime);
+      if (!workedByDate.has(k)) workedByDate.set(k, new Set());
+      workedByDate.get(k)!.add(s.job.id);
+    }
+
+    const p = (n: number) => String(n).padStart(2, '0');
+    const cursor = new Date(`${start}T12:00:00`);
+    const last = new Date(`${end}T12:00:00`);
+    const days: any[] = [];
+    let guard = 0;
+    while (cursor <= last && guard < 400) {
+      guard++;
+      const dateStr = `${cursor.getFullYear()}-${p(cursor.getMonth() + 1)}-${p(cursor.getDate())}`;
+      const holiday = holidays.has(dateStr);
+      const workedIds = workedByDate.get(dateStr);
+      const dayJobs: any[] = [];
+      for (const job of jobs) {
+        const scheduled = !holiday && this.jobScheduleService.isJobScheduledForDate(job, cursor);
+        const worked = !!workedIds?.has(job.id);
+        if (!scheduled && !worked) continue;
+        const shifts = scheduled ? this.jobScheduleService.getShiftsForDate(job, cursor) : [];
+        const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
+        const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
+        dayJobs.push({
+          jobId: job.publicId,
+          jobName: job.jobName,
+          workCenterName: (job.workCenters || []).map((wc) => wc.name).join(', '),
+          startTime: startTimes[0] || null,
+          endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
+          worked,
+        });
+      }
+      const working = !holiday && dayJobs.length > 0;
+      days.push({ date: dateStr, holiday, holidayName: holidays.get(dateStr) || null, absence: null, working, jobs: dayJobs });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return days;
+  }
+
   async getClientCalendar(publicId: string, start: string, end: string) {
     const client = await this.clientRepo.findOne({ where: { publicId } });
     if (!client) {
@@ -2142,65 +2206,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     if (!start || !end) {
       return { message: 'start and end are required', data: [], isSuccess: false, statusCode: 400 };
     }
-
-    const jobs = await this.jobRepo.find({
-      where: { client: { id: client.id } },
-      relations: ['employer', 'workers', 'seasonalSchedules', 'seasonalSchedules.shifts'],
-    });
-
-    const employerId = jobs[0]?.employer?.id;
-    const holidays = employerId ? await this.loadHolidays(employerId, start, end) : new Map<string, string>();
-
-    const jobIds = jobs.map((j) => j.id);
-    const startInstant = DateTime.fromISO(start, { zone: 'Europe/Madrid' }).startOf('day').toJSDate();
-    const endInstant = DateTime.fromISO(end, { zone: 'Europe/Madrid' }).endOf('day').toJSDate();
-    const idToPublic = new Map(jobs.map((j) => [j.id, j.publicId]));
-    const sessions = jobIds.length
-      ? await this.workSessionRepo.find({
-          where: { job: { id: In(jobIds) }, checkInTime: Between(startInstant, endInstant) },
-          relations: ['job', 'worker'],
-        })
-      : [];
-    const activity = new Map<string, Set<number>>();
-    for (const s of sessions) {
-      if (!s.job?.id || !s.checkInTime) continue;
-      const key = `${this.madridDateKey(s.checkInTime)}:${idToPublic.get(s.job.id)}`;
-      if (!activity.has(key)) activity.set(key, new Set());
-      if (s.worker?.id) activity.get(key)!.add(s.worker.id);
-    }
-
-    const days: { date: string; jobs: any[]; holiday: boolean; holidayName: string | null }[] = [];
-    const cursor = new Date(`${start}T12:00:00`);
-    const last = new Date(`${end}T12:00:00`);
-    const p = (n: number) => String(n).padStart(2, '0');
-    let guard = 0;
-    while (cursor <= last && guard < 400) {
-      guard++;
-      const dateStr = `${cursor.getFullYear()}-${p(cursor.getMonth() + 1)}-${p(cursor.getDate())}`;
-      const holiday = holidays.has(dateStr);
-      const dayJobs: any[] = [];
-      for (const job of jobs) {
-        const scheduled = holiday ? false : this.jobScheduleService.isJobScheduledForDate(job, cursor);
-        const worked = activity.get(`${dateStr}:${job.publicId}`);
-        if (!scheduled && !worked) continue;
-        const shifts = scheduled ? this.jobScheduleService.getShiftsForDate(job, cursor) : [];
-        const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
-        const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
-        dayJobs.push({
-          jobId: job.publicId,
-          jobName: job.jobName,
-          startTime: startTimes[0] || null,
-          endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
-          workerCount: worked ? worked.size : job.workers?.length || 0,
-          worked: !!worked,
-          scheduled,
-        });
-      }
-      dayJobs.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
-      days.push({ date: dateStr, jobs: dayJobs, holiday, holidayName: holidays.get(dateStr) || null });
-      cursor.setDate(cursor.getDate() + 1);
-    }
-
+    const days = await this.buildClientCalendar(client.id, start, end);
     return { message: 'OK', data: days, isSuccess: true, statusCode: 200 };
   }
 
@@ -2959,55 +2965,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
     const clientUser = await this.clientUserRepo.findOne({ where: { user: { id: userId } }, relations: ['client'] });
     const clientId = clientUser?.client?.id;
     if (!clientId) throw new Error('Client not found for this user');
-
-    const jobs = await this.jobRepo.find({ where: { client: { id: clientId } }, relations: ['employer', 'workCenters', 'seasonalSchedules', 'seasonalSchedules.shifts'] });
-    const employerId = jobs[0]?.employer?.id;
-    const holidays = employerId ? await this.loadHolidays(employerId, start, end) : new Map<string, string>();
-
-    const jobIds = jobs.map((j) => j.id);
-    const startInstant = DateTime.fromISO(start, { zone: 'Europe/Madrid' }).startOf('day').toJSDate();
-    const endInstant = DateTime.fromISO(end, { zone: 'Europe/Madrid' }).endOf('day').toJSDate();
-    const sessions = jobIds.length
-      ? await this.workSessionRepo.find({ where: { job: { id: In(jobIds) }, checkInTime: Between(startInstant, endInstant) }, relations: ['job'] })
-      : [];
-    const workedByDate = new Map<string, Set<number>>();
-    for (const s of sessions) {
-      if (!s.job?.id) continue;
-      const k = this.madridDateKey(s.checkInTime);
-      if (!workedByDate.has(k)) workedByDate.set(k, new Set());
-      workedByDate.get(k)!.add(s.job.id);
-    }
-
-    const p = (n: number) => String(n).padStart(2, '0');
-    const cursor = new Date(`${start}T12:00:00`);
-    const last = new Date(`${end}T12:00:00`);
-    const days: any[] = [];
-    let guard = 0;
-    while (cursor <= last && guard < 400) {
-      guard++;
-      const dateStr = `${cursor.getFullYear()}-${p(cursor.getMonth() + 1)}-${p(cursor.getDate())}`;
-      const holiday = holidays.has(dateStr);
-      const workedIds = workedByDate.get(dateStr);
-      const dayJobs: any[] = [];
-      for (const job of jobs) {
-        const scheduled = !holiday && this.jobScheduleService.isJobScheduledForDate(job, cursor);
-        const worked = !!workedIds?.has(job.id);
-        if (!scheduled && !worked) continue;
-        const shifts = scheduled ? this.jobScheduleService.getShiftsForDate(job, cursor) : [];
-        const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
-        const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
-        dayJobs.push({
-          jobName: job.jobName,
-          workCenterName: (job.workCenters || []).map((wc) => wc.name).join(', '),
-          startTime: startTimes[0] || null,
-          endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
-          worked,
-        });
-      }
-      const working = !holiday && dayJobs.length > 0;
-      days.push({ date: dateStr, holiday, holidayName: holidays.get(dateStr) || null, absence: null, working, jobs: dayJobs });
-      cursor.setDate(cursor.getDate() + 1);
-    }
+    const days = await this.buildClientCalendar(clientId, start, end);
     return { message: 'OK', data: days, isSuccess: true, statusCode: 200 };
   }
 
