@@ -17,6 +17,7 @@ import { WorkCentersModule } from './modules/work-centers/work-centers.module';
 import { config } from 'dotenv';
 import { AlertsModule } from './modules/realtime/alerts.module';
 import { ManualAttendanceModule } from './modules/manual-attendance/manual-attendance.module';
+import { AttendancePolicyModule } from './modules/attendance-policy/attendance-policy.module';
 import { AbsencesModule } from './modules/absences/absences.module';
 import { ClientRequestsModule } from './modules/client-requests/client-requests.module';
 import { SurveysModule } from './modules/surveys/surveys.module';
@@ -86,6 +87,7 @@ config();
     WorkCentersModule,
     AlertsModule,
     ManualAttendanceModule,
+    AttendancePolicyModule,
     AbsencesModule,
     ClientRequestsModule,
     SurveysModule,
