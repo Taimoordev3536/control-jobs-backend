@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
 import { SeasonalSchedule } from './seasonal-schedule.entity';
+import { Weekday } from './schedule-type.enum';
 
 export enum ShiftType {
   MORNING = 'morning',
@@ -7,26 +8,11 @@ export enum ShiftType {
   EVENING = 'evening',
 }
 
-export enum ScheduleType {
-  FIXED = 'fixed',
-  FREE = 'free',
-  SEASONAL = 'seasonal',
-}
-
-// Re-exported from its own module so existing `import { Season } from
+// Re-exported from their own modules so existing `import { X } from
 // './shift.entity'` call sites keep working, without shift.entity being the
 // definition site (which created the circular-import hazard).
 export { Season } from './season.enum';
-
-export enum Weekday {
-  MONDAY = 'monday',
-  TUESDAY = 'tuesday',
-  WEDNESDAY = 'wednesday',
-  THURSDAY = 'thursday',
-  FRIDAY = 'friday',
-  SATURDAY = 'saturday',
-  SUNDAY = 'sunday',
-}
+export { ScheduleType, Weekday } from './schedule-type.enum';
 
 @Entity('shift')
 export class Shift {

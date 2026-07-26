@@ -13,7 +13,10 @@ import { User } from '../../users/entities/user.entity';
 import { ScanLog } from './scan-log.entity';
 import { WorkSession } from './work-session.entity';
 import { JobStatus } from '../enums/job-status.enum';
-import { ScheduleType } from './shift.entity';
+// Imported from the standalone enum module, NOT via shift.entity: going
+// through shift.entity re-enters the entity import cycle and can leave
+// ScheduleType undefined when this @Column decorator evaluates.
+import { ScheduleType } from './schedule-type.enum';
 import { SeasonalSchedule } from './seasonal-schedule.entity';
 import { TaskHistory } from './task-history.entity';
 

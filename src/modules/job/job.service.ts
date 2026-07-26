@@ -15,7 +15,7 @@ import { ManualAttendanceRequest } from '../manual-attendance/entities/manual-at
 import { ManualAttendanceRequestType } from '../manual-attendance/enums/request-type.enum';
 import { InjectRepository } from '@nestjs/typeorm';
 import { convertDurationToMinutes, convertMinutesToDuration } from './helpers/duration-converter';
-import { madridNow, madridTodayKey } from '../../common/helpers/business-time';
+import { madridNow, madridTodayKey, madridCivilToday } from '../../common/helpers/business-time';
 
 // Mock WorkCenter data (used for every client)
 const MOCK_WORK_CENTER = { id: 1, name: 'WorkCenter 1' };
@@ -368,10 +368,16 @@ export class JobService {
                 totalHours: typeof w.totalHours === 'number' ? w.totalHours : null,
               });
               await manager.save(shiftEnt);
-              // accumulate only numeric totalHours
-              if (typeof w.totalHours === 'number' && !Number.isNaN(w.totalHours)) {
-                totalWeekHours += Math.floor(w.totalHours);
-              }
+              // Sum the shift's REAL length rather than its whole-hour
+              // totalHours. Flooring each shift and then adding lost up to
+              // 59 minutes per shift per week (5 x 8h30 reported as 40h,
+              // not 42h30).
+              totalWeekHours += this.jobScheduleService.getShiftSpanMinutes(
+                w.startWeekday,
+                w.baseStartTime,
+                w.endWeekday,
+                w.baseEndTime,
+              ) / 60;
             }
 
             // persist computed total_week_hours on seasonal schedule
@@ -1023,9 +1029,13 @@ export class JobService {
                 totalHours: typeof w.totalHours === 'number' ? w.totalHours : null,
               });
               await manager.save(shiftEnt);
-              if (typeof w.totalHours === 'number' && !Number.isNaN(w.totalHours)) {
-                totalWeekHours += Math.floor(w.totalHours);
-              }
+              // Same as create: sum real shift length, not the whole-hour field.
+              totalWeekHours += this.jobScheduleService.getShiftSpanMinutes(
+                w.startWeekday,
+                w.baseStartTime,
+                w.endWeekday,
+                w.baseEndTime,
+              ) / 60;
             }
 
             ssEntity.totalWeekHours = totalWeekHours;
@@ -1313,8 +1323,11 @@ async deleteJob(jobId: number, employerUserId: number): Promise<void> {
     });
     if (!job) throw new Error('Job not found');
 
-    // Helper: weekday order
-    const weekdayOrder = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    // Monday-first, matching WEEKDAY_ORDER in JobScheduleService so every
+    // weekday index in the codebase means the same thing. The expansion below
+    // counts forward from the shift's own start weekday, so the result is the
+    // same either way — this is for consistency, not correctness.
+    const weekdayOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
     // Group shifts by season and include startDate/endDate
     const output: any = {};
@@ -1326,8 +1339,13 @@ async deleteJob(jobId: number, employerUserId: number): Promise<void> {
             const endIdx = weekdayOrder.indexOf(String(shift.endWeekday).toLowerCase());
             if (startIdx === -1 || endIdx === -1) return null;
 
+            // Days the shift spans, counted forward from its start weekday so a
+            // wrapping range (Friday -> Monday) expands correctly. The old
+            // `for (i = startIdx + 1; i < endIdx; i++)` never ran when the
+            // range wrapped, silently dropping every day in between.
+            const dayGap = (endIdx - startIdx + 7) % 7;
             let days = [];
-            if (startIdx === endIdx) {
+            if (dayGap === 0) {
               days.push({
                 day: weekdayOrder[startIdx],
                 startTime: shift.baseStartTime,
@@ -1339,9 +1357,9 @@ async deleteJob(jobId: number, employerUserId: number): Promise<void> {
                 startTime: shift.baseStartTime,
                 endTime: '24:00',
               });
-              for (let i = startIdx + 1; i < endIdx; i++) {
+              for (let k = 1; k < dayGap; k++) {
                 days.push({
-                  day: weekdayOrder[i % 7],
+                  day: weekdayOrder[(startIdx + k) % 7],
                   startTime: '00:00',
                   endTime: '24:00',
                 });
@@ -1486,10 +1504,10 @@ async getControlForDate(userId: number, dateStr?: string) {
 
   const rows = scheduled.map((job) => {
     const shifts = this.jobScheduleService.getShiftsForDate(job, day);
-    const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
-    const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
-    const startTime = startTimes[0] || null;
-    const endTime = endTimes.length ? endTimes[endTimes.length - 1] : null;
+    const { startTime, endTime } = this.jobScheduleService.getDayWindow(
+      job,
+      day,
+    );
 
     const workers = job.workers.map((w) => {
       const sess = checkInMap.get(`${job.id}:${w.id}`);
@@ -1776,67 +1794,9 @@ async getAllJobsByEmployerFromToken(userId: number) {
       let scheduleType: string = 'free';
       let activeScheduleWeekHours: number | null = null;
       try {
-        if (job.scheduleType === ScheduleType.FIXED) {
-          scheduleType = 'fixed';
-        } else if (job.scheduleType === ScheduleType.FREE) {
-          scheduleType = 'free';
-        } else if (job.scheduleType === ScheduleType.SEASONAL) {
-          // Seasonal logic
-          const today = new Date();
-          const dd = String(today.getDate()).padStart(2, '0');
-          const mm = String(today.getMonth() + 1).padStart(2, '0');
-          const todayKey = `${dd}-${mm}`; // matches stored format DD-MM
-
-          const parseDayMonthValue = (dm: string): number => {
-            const [dStr, mStr] = dm.split('-');
-            const d = Number(dStr); const m = Number(mStr);
-            // value used for simple in-year comparison m*100 + d
-            return m * 100 + d;
-          };
-
-          // Separate schedules
-            const summerSchedules = (job.seasonalSchedules || []).filter(ss => !!ss.startDate && !!ss.endDate);
-            const normalSchedules = (job.seasonalSchedules || []).filter(ss => !ss.startDate && !ss.endDate);
-
-          // Find active summer schedule
-          let activeSummer: any = null;
-          const todayVal = parseDayMonthValue(todayKey);
-          for (const ss of summerSchedules) {
-            try {
-              const startVal = parseDayMonthValue(ss.startDate);
-              const endVal = parseDayMonthValue(ss.endDate);
-              // basic non wrap-around comparison (assumes start <= end inside same year)
-              if (startVal <= todayVal && todayVal <= endVal) {
-                activeSummer = ss;
-                break;
-              }
-            } catch { /* ignore parse errors */ }
-          }
-
-          if (activeSummer) {
-            scheduleType = 'summer';
-            // prefer precomputed totalWeekHours, fallback compute from shifts
-            activeScheduleWeekHours = typeof activeSummer.totalWeekHours === 'number'
-              ? activeSummer.totalWeekHours
-              : (activeSummer.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
-          } else if (normalSchedules.length) {
-            // Normal applies when no summer active
-            const normal = normalSchedules[0];
-            scheduleType = 'normal';
-            activeScheduleWeekHours = typeof normal.totalWeekHours === 'number'
-              ? normal.totalWeekHours
-              : (normal.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
-          } else {
-            // Fallback to generic seasonal when no identifiable schedule rows
-            scheduleType = 'seasonal';
-            // sum all shifts as fallback
-            activeScheduleWeekHours = (job.seasonalSchedules || []).reduce((outerAcc: number, ss: any) => {
-              const shifts = ss.shifts || [];
-              const ssTotal = shifts.reduce((sAcc: number, sh: any) => sAcc + (Number(sh.totalHours) || 0), 0);
-              return outerAcc + ssTotal;
-            }, 0);
-          }
-        }
+        const summary = this.jobScheduleService.getScheduleSummary(job, madridCivilToday());
+        scheduleType = summary.scheduleType;
+        activeScheduleWeekHours = summary.weekHours;
       } catch (e) {
         scheduleType = 'free';
         activeScheduleWeekHours = null;
@@ -1979,58 +1939,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
       let scheduleType: string = 'free';
       let activeScheduleWeekHours: number | null = null;
       try {
-        if (job.scheduleType === ScheduleType.FIXED) {
-          scheduleType = 'fixed';
-        } else if (job.scheduleType === ScheduleType.FREE) {
-          scheduleType = 'free';
-        } else if (job.scheduleType === ScheduleType.SEASONAL) {
-          const today = new Date();
-          const dd = String(today.getDate()).padStart(2, '0');
-          const mm = String(today.getMonth() + 1).padStart(2, '0');
-          const todayKey = `${dd}-${mm}`;
-
-          const parseDayMonthValue = (dm: string): number => {
-            const [dStr, mStr] = dm.split('-');
-            const d = Number(dStr); const m = Number(mStr);
-            return m * 100 + d;
-          };
-
-          const summerSchedules = (job.seasonalSchedules || []).filter(ss => !!ss.startDate && !!ss.endDate);
-          const normalSchedules = (job.seasonalSchedules || []).filter(ss => !ss.startDate && !ss.endDate);
-
-          let activeSummer: any = null;
-          const todayVal = parseDayMonthValue(todayKey);
-          for (const ss of summerSchedules) {
-            try {
-              const startVal = parseDayMonthValue(ss.startDate);
-              const endVal = parseDayMonthValue(ss.endDate);
-              if (startVal <= todayVal && todayVal <= endVal) {
-                activeSummer = ss;
-                break;
-              }
-            } catch { /* ignore parse errors */ }
-          }
-
-          if (activeSummer) {
-            scheduleType = 'summer';
-            activeScheduleWeekHours = typeof activeSummer.totalWeekHours === 'number'
-              ? activeSummer.totalWeekHours
-              : (activeSummer.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
-          } else if (normalSchedules.length) {
-            const normal = normalSchedules[0];
-            scheduleType = 'normal';
-            activeScheduleWeekHours = typeof normal.totalWeekHours === 'number'
-              ? normal.totalWeekHours
-              : (normal.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
-          } else {
-            scheduleType = 'seasonal';
-            activeScheduleWeekHours = (job.seasonalSchedules || []).reduce((outerAcc: number, ss: any) => {
-              const shifts = ss.shifts || [];
-              const ssTotal = shifts.reduce((sAcc: number, sh: any) => sAcc + (Number(sh.totalHours) || 0), 0);
-              return outerAcc + ssTotal;
-            }, 0);
-          }
-        }
+        const summary = this.jobScheduleService.getScheduleSummary(job, madridCivilToday());
+        scheduleType = summary.scheduleType;
+        activeScheduleWeekHours = summary.weekHours;
       } catch (e) {
         scheduleType = 'free';
         activeScheduleWeekHours = null;
@@ -2182,14 +2093,13 @@ async getAllJobsByWorkerFromToken(userId: number) {
         const worked = !!workedIds?.has(job.id);
         if (!scheduled && !worked) continue;
         const shifts = scheduled ? this.jobScheduleService.getShiftsForDate(job, cursor) : [];
-        const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
-        const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
+        const { startTime: dayStart, endTime: dayEnd } = scheduled ? this.jobScheduleService.getDayWindow(job, cursor) : { startTime: null, endTime: null };
         dayJobs.push({
           jobId: job.publicId,
           jobName: job.jobName,
           workCenterName: (job.workCenters || []).map((wc) => wc.name).join(', '),
-          startTime: startTimes[0] || null,
-          endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
+          startTime: dayStart,
+          endTime: dayEnd,
           worked,
         });
       }
@@ -2254,8 +2164,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       for (const job of jobs) {
         if (!this.jobScheduleService.isJobScheduledForDate(job, day)) continue;
         const shifts = this.jobScheduleService.getShiftsForDate(job, day);
-        const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
-        const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
+        const { startTime: dayStart, endTime: dayEnd } = this.jobScheduleService.getDayWindow(job, day);
         const wcName = (job.workCenters || []).map((wc) => wc.name).join(', ');
         for (const w of job.workers) {
           if (selectedSet.size && !selectedSet.has(w.publicId)) continue;
@@ -2266,8 +2175,8 @@ async getAllJobsByWorkerFromToken(userId: number) {
             date: dateStr,
             jobName: job.jobName,
             workCenterName: wcName,
-            startTime: startTimes[0] || null,
-            endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
+            startTime: dayStart,
+            endTime: dayEnd,
             worked: false,
           });
         }
@@ -2402,13 +2311,12 @@ async getAllJobsByWorkerFromToken(userId: number) {
         const worked = !!workedIds?.has(job.id);
         if (!scheduled && !worked) continue;
         const shifts = scheduled ? this.jobScheduleService.getShiftsForDate(job, cursor) : [];
-        const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
-        const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
+        const { startTime: dayStart, endTime: dayEnd } = scheduled ? this.jobScheduleService.getDayWindow(job, cursor) : { startTime: null, endTime: null };
         dayJobs.push({
           jobName: job.jobName,
           workCenterName: (job.workCenters || []).map((wc) => wc.name).join(', '),
-          startTime: startTimes[0] || null,
-          endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
+          startTime: dayStart,
+          endTime: dayEnd,
           worked,
         });
       }
@@ -2512,8 +2420,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       const session = sessionByJob.get(job.id) || null;
       if (!scheduled && !session) continue;
       const shifts = scheduled ? this.jobScheduleService.getShiftsForDate(job, dayDate) : [];
-      const startTimes = shifts.map((s) => s.baseStartTime).filter(Boolean).sort();
-      const endTimes = shifts.map((s) => s.baseEndTime).filter(Boolean).sort();
+      const { startTime: dayStart, endTime: dayEnd } = scheduled ? this.jobScheduleService.getDayWindow(job, dayDate) : { startTime: null, endTime: null };
       items.push({
         id: job.id,
         publicId: job.publicId,
@@ -2522,8 +2429,8 @@ async getAllJobsByWorkerFromToken(userId: number) {
         workCenterName: (job.workCenters || []).map((wc) => wc.name).join(', '),
         workCenters: (job.workCenters || []).map((wc) => ({ id: wc.id, publicId: wc.publicId, name: wc.name })),
         workers: (job.workers || []).map((w) => ({ id: w.id, publicId: w.publicId })),
-        startTime: startTimes[0] || null,
-        endTime: endTimes.length ? endTimes[endTimes.length - 1] : null,
+        startTime: dayStart,
+        endTime: dayEnd,
         scheduled,
         session: session
           ? { id: session.id, checkInTime: session.checkInTime, checkOutTime: session.checkOutTime, isActive: session.isActive }
@@ -3123,58 +3030,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
         let scheduleType: string = 'free';
         let activeScheduleWeekHours: number | null = null;
         try {
-          if (job.scheduleType === ScheduleType.FIXED) {
-            scheduleType = 'fixed';
-          } else if (job.scheduleType === ScheduleType.FREE) {
-            scheduleType = 'free';
-          } else if (job.scheduleType === ScheduleType.SEASONAL) {
-            const today = new Date();
-            const dd = String(today.getDate()).padStart(2, '0');
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const todayKey = `${dd}-${mm}`;
-
-            const parseDayMonthValue = (dm: string): number => {
-              const [dStr, mStr] = dm.split('-');
-              const d = Number(dStr); const m = Number(mStr);
-              return m * 100 + d;
-            };
-
-            const summerSchedules = (job.seasonalSchedules || []).filter(ss => !!ss.startDate && !!ss.endDate);
-            const normalSchedules = (job.seasonalSchedules || []).filter(ss => !ss.startDate && !ss.endDate);
-
-            let activeSummer: any = null;
-            const todayVal = parseDayMonthValue(todayKey);
-            for (const ss of summerSchedules) {
-              try {
-                const startVal = parseDayMonthValue(ss.startDate);
-                const endVal = parseDayMonthValue(ss.endDate);
-                if (startVal <= todayVal && todayVal <= endVal) {
-                  activeSummer = ss;
-                  break;
-                }
-              } catch { /* ignore parse errors */ }
-            }
-
-            if (activeSummer) {
-              scheduleType = 'summer';
-              activeScheduleWeekHours = typeof activeSummer.totalWeekHours === 'number'
-                ? activeSummer.totalWeekHours
-                : (activeSummer.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
-            } else if (normalSchedules.length) {
-              const normal = normalSchedules[0];
-              scheduleType = 'normal';
-              activeScheduleWeekHours = typeof normal.totalWeekHours === 'number'
-                ? normal.totalWeekHours
-                : (normal.shifts || []).reduce((acc: number, sh: any) => acc + (Number(sh.totalHours) || 0), 0);
-            } else {
-              scheduleType = 'seasonal';
-              activeScheduleWeekHours = (job.seasonalSchedules || []).reduce((outerAcc: number, ss: any) => {
-                const shifts = ss.shifts || [];
-                const ssTotal = shifts.reduce((sAcc: number, sh: any) => sAcc + (Number(sh.totalHours) || 0), 0);
-                return outerAcc + ssTotal;
-              }, 0);
-            }
-          }
+          const summary = this.jobScheduleService.getScheduleSummary(job, madridCivilToday());
+          scheduleType = summary.scheduleType;
+          activeScheduleWeekHours = summary.weekHours;
         } catch (e) {
           scheduleType = 'free';
           activeScheduleWeekHours = null;
@@ -3453,42 +3311,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
    * For GPS signing method: only checks that a shift EXISTS for today (no time window).
    */
   private isWithinShiftWindow(job: Job, now: Date, signingMethod?: string): { allowed: boolean; reason?: string } {
-    if (job.scheduleType === ScheduleType.FREE) {
-      return { allowed: true };
-    }
-    const activeSchedule = this.jobScheduleService.getActiveSeasonalSchedule(job, now);
-    // No schedule or no shifts configured — allow check-in (not enforced)
-    if (!activeSchedule || !activeSchedule.shifts?.length) {
-      return { allowed: true };
-    }
-
-    // GPS method: only require that a shift exists for today — no time-of-day
-    // restriction. Reuse the canonical weekday/season matching (startWeekday/
-    // endWeekday are string enums, so they must not be compared numerically).
-    if (signingMethod === 'gps') {
-      const hasShiftToday = this.jobScheduleService.getShiftsForDate(job, now).length > 0;
-      if (hasShiftToday) return { allowed: true };
-      return { allowed: false, reason: 'No shift is scheduled for today' };
-    }
-
-    const nowMins = now.getHours() * 60 + now.getMinutes();
-    for (const shift of activeSchedule.shifts) {
-      const [sh, sm] = shift.baseStartTime.split(':').map(Number);
-      const [eh, em] = shift.baseEndTime.split(':').map(Number);
-      const startMins = sh * 60 + sm;
-      const endMins = eh * 60 + em;
-      const windowStart = startMins - 30;       // 30 min early allowed
-      const windowEnd = endMins + 120;           // 2 h late grace period
-      // Use isContinuous flag (set when shift spans midnight) instead of time-only comparison
-      const isOvernight = (shift as any).isContinuous || endMins < startMins;
-      if (isOvernight) {
-        // Overnight: allow from windowStart → midnight OR midnight → windowEnd
-        if (nowMins >= windowStart || nowMins <= windowEnd) return { allowed: true };
-      } else {
-        if (nowMins >= windowStart && nowMins <= windowEnd) return { allowed: true };
-      }
-    }
-    return { allowed: false, reason: 'Current time is outside the allowed check-in window for any shift today' };
+    return this.jobScheduleService.isWithinCheckInWindow(job, now, { signingMethod });
   }
 
   /** Match an observed IP against a work-center allow value: exact IP, CIDR (e.g. 88.14.32.0/24), or comma-separated list of either. IPv4. */
@@ -3708,6 +3531,23 @@ async getAllJobsByWorkerFromToken(userId: number) {
           const jobWcIds = job.workCenters.map(wc => wc.id);
           if (!jobWcIds.includes(validatedWorkCenterId)) {
             throw new BadRequestException('Selected work center does not belong to this job.');
+          }
+        }
+
+        // ── QR activation (check-in only) ──────────────────────────
+        // The work center switch is the authority for every method. Token
+        // validity alone is not enough: deactivating QR in the Methods tab
+        // also deactivates the qr_code rows, so this used to be blocked only
+        // as a side effect. If the flag and the rows ever drift, QR would read
+        // "off" in the UI while still letting workers in.
+        if (
+          recordScanDto.scanType === 'check-in' &&
+          recordScanDto.signingMethod === 'qrcode' &&
+          validatedWorkCenterId
+        ) {
+          const resolvedWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
+          if (resolvedWc && !resolvedWc.isQrcodeActive) {
+            throw new BadRequestException('QR check-in is not activated for this work center');
           }
         }
 
