@@ -105,17 +105,11 @@ export class JobScheduleService {
     const matching = job.seasonalSchedules.filter((s) => this.isDateInSeasonRange(targetDate, s));
     if (matching.length === 0) return null;
 
-    // A season carrying an explicit DD-MM range (summer) is more specific than
-    // one with no dates (normal, which is always active), so it must win inside
-    // its own period. Returning the first array match made `normal` — always
-    // matching and always first by id — shadow `summer` permanently.
+    // A dated season (summer) is more specific than an always-on one (normal).
     const dated = matching.filter((s) => !!s.startDate && !!s.endDate);
     const alwaysOn = matching.filter((s) => !s.startDate || !s.endDate);
 
-    // ...but only if it actually has shifts. An empty season must never empty
-    // the job: the form always persists both `normal` and `summer` rows, so a
-    // job configured for one season alone would otherwise vanish from every
-    // calendar and reject every check-in.
+    // ...but only if it has shifts: an empty season must never empty the job.
     const withShifts = (list: SeasonalSchedule[]) => list.find((s) => s.shifts?.length);
 
     return (
@@ -132,10 +126,7 @@ export class JobScheduleService {
    * Handles year-wrapping seasons (e.g., winter: 15-11 to 15-03)
    */
   private isDateInSeasonRange(date: Date, season: SeasonalSchedule): boolean {
-    // A half-configured range is not a valid period. Treating "one date set,
-    // the other null" as always-active turned a summer season whose end date
-    // failed to parse into a second permanently-active schedule competing with
-    // normal. Only a season with NEITHER date is the always-on one.
+    // Only a season with NEITHER date is the always-on one; half-set is invalid.
     if (!season.startDate && !season.endDate) return true;
     if (!season.startDate || !season.endDate) return false;
 
@@ -262,11 +253,7 @@ export class JobScheduleService {
     );
   }
 
-  /**
-   * Shifts that BEGIN on a given date. Distinct from getShiftsForDate, which
-   * reports every shift touching the day — check-in still has to accept a
-   * worker arriving for a shift that started the previous evening.
-   */
+  /** Shifts that BEGIN on this date, unlike getShiftsForDate which reports every shift touching it. */
   getShiftsStartingOn(job: Job, targetDate: Date): Shift[] {
     if (!this.isJobScheduledForDate(job, targetDate)) return [];
     if (job.scheduleType === ScheduleType.FREE) return [];
@@ -276,13 +263,7 @@ export class JobScheduleService {
     return schedule.shifts.filter((s) => s.startWeekday === weekday);
   }
 
-  /**
-   * Minutes of work scheduled for a date.
-   *
-   * A shift is counted ONCE, on the day it starts — a Tue 11:00 -> Wed 14:00
-   * block is 27h of Tuesday and 0h of Wednesday. Counting it on every weekday
-   * it touched turned a 40h week into 79h and made overtime permanently zero.
-   */
+  /** A shift counts once, on the day it starts. */
   getScheduledMinutesForDate(job: Job, targetDate: Date): number {
     if (job.scheduleType === ScheduleType.FREE) return 0;
     return this.getShiftsStartingOn(job, targetDate).reduce(
@@ -291,13 +272,7 @@ export class JobScheduleService {
     );
   }
 
-  /**
-   * Every shift occurrence running near `instant`, as real start/end moments.
-   *
-   * Looks back a full week because a shift may legitimately span several days
-   * (Tue 11:00 -> Wed 14:00 is a real, 27-hour shift here), so "today's shifts"
-   * alone would miss a worker who is mid-shift.
-   */
+  /** Shift occurrences running near `instant`. Looks back a week: shifts can span days. */
   getShiftOccurrencesAround(
     job: Job,
     instant: Date,
@@ -318,15 +293,7 @@ export class JobScheduleService {
     return occurrences;
   }
 
-  /**
-   * Whether a check-in at `instant` falls inside some shift's window.
-   *
-   * Compares against each shift's real start and end MOMENTS rather than
-   * minutes-of-day. The previous version looped every shift in the season with
-   * no weekday filter, so Friday's window authorised a Wednesday check-in, and
-   * its wrap-around branch degenerated to "any minute of the day" for shifts
-   * ending later than they start.
-   */
+  /** Compares against each shift's real start/end moments, not minutes-of-day. */
   isWithinCheckInWindow(
     job: Job,
     instant: Date,
@@ -361,16 +328,8 @@ export class JobScheduleService {
     };
   }
 
-  /**
-   * The working window a job presents on a given day: earliest start and the
-   * end of whichever shift finishes last.
-   *
-   * Callers used to take the lexicographic min/max of the raw HH:MM strings.
-   * That is wrong as soon as a shift ends after midnight — a night shift's
-   * "06:00" sorts BELOW a day shift's "14:00", so the night shift's real end
-   * never appeared and the whole shift was hidden from the control screen and
-   * the calendars. Ordering by real end MOMENT fixes that.
-   */
+  /** Earliest start and the end of whichever shift finishes last.
+   *  Ordered by real end moment: "06:00" sorts below "14:00" as text. */
   getDayWindow(
     job: Job,
     targetDate: Date,
@@ -398,15 +357,7 @@ export class JobScheduleService {
     return active.shifts.reduce((sum, shift) => sum + this.getShiftMinutes(shift), 0);
   }
 
-  /**
-   * Season label + weekly hours for the job cards.
-   *
-   * Three hand-rolled copies of this lived in job.service.ts. They resolved the
-   * season differently from this service (they preferred summer; the scheduler
-   * always picked normal), so the same job on the same day reported one season
-   * on the card and another to check-in. They also could not handle a
-   * wrap-around season such as 15-11 -> 15-03.
-   */
+  /** Season label + weekly hours for the job cards. */
   getScheduleSummary(
     job: Job,
     targetDate: Date,
@@ -425,11 +376,7 @@ export class JobScheduleService {
     };
   }
 
-  /**
-   * The moment a shift ends, given the date it started on. Needed wherever a
-   * session has to be judged against its own shift rather than a fixed number
-   * of hours — your shifts legitimately run up to several days.
-   */
+  /** The moment a shift ends, given the date it started on. */
   getShiftEndFor(shift: Shift, shiftStartDate: Date): Date {
     const startMins = this.parseTimeToMinutes(shift.baseStartTime) ?? 0;
     const end = new Date(
@@ -441,14 +388,7 @@ export class JobScheduleService {
     return end;
   }
 
-  /**
-   * True length of a shift, derived from its weekdays and times.
-   *
-   * `totalHours` is deliberately NOT used: it is a whole-number column, so an
-   * 08:00-16:30 shift was stored as 8 and lost 30 minutes every day. The
-   * weekday+time pair is exact and reproduces every historical totalHours
-   * value, so no data migration is needed.
-   */
+  /** Derived from weekdays + times; `totalHours` is whole-hours and lossy. */
   private getShiftMinutes(shift: Shift): number {
     return this.getShiftSpanMinutes(
       shift.startWeekday,
@@ -458,11 +398,7 @@ export class JobScheduleService {
     );
   }
 
-  /**
-   * Same calculation from raw values, for callers holding a DTO rather than a
-   * persisted Shift (job create/update, which must total a week before the
-   * rows exist).
-   */
+  /** Same calculation from raw values, for callers holding a DTO. */
   getShiftSpanMinutes(
     startWeekday: Weekday | string,
     baseStartTime: string,

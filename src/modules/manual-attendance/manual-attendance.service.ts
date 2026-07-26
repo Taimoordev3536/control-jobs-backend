@@ -22,7 +22,40 @@ import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { ClientUser } from '../clients/entities/client-user.entity';
 import { User } from '../users/entities/user.entity';
 import { UserRole } from '../auth/enums/user-role.enum';
+import { SubUserPermission } from '../auth/enums/sub-user-permission.enum';
 import { AlertsService } from '../realtime/alerts.service';
+
+/**
+ * The slice of `req.user` these checks need. Controllers pass `req.user`
+ * straight through; only `id` is required.
+ */
+export interface ActorContext {
+  id: number;
+  subUser?: { isSubUser?: boolean; permission?: SubUserPermission | string };
+}
+
+export const MANUAL_ATTENDANCE_FIELDS = [
+  'isEnabled',
+  'workerCanRequest',
+  'employerCanCreate',
+  'clientCanCreate',
+  'maxRetroactiveDays',
+  'maxRequestsPerWorkerMonth',
+  'requireReason',
+] as const;
+
+/** ON by default: limits are the control, not a hard switch. */
+export const MANUAL_ATTENDANCE_DEFAULTS = (): ManualAttendancePermission => {
+  const d = new ManualAttendancePermission();
+  d.isEnabled = true;
+  d.workerCanRequest = true;
+  d.employerCanCreate = true;
+  d.clientCanCreate = true;
+  d.maxRetroactiveDays = 7;
+  d.maxRequestsPerWorkerMonth = 10;
+  d.requireReason = true;
+  return d;
+};
 
 @Injectable()
 export class ManualAttendanceService {
@@ -155,47 +188,92 @@ export class ManualAttendanceService {
     return wu?.worker?.id ?? null;
   }
 
+  /** Max span for a single attendance record. */
+  static readonly MAX_ATTENDANCE_MINUTES = 24 * 60;
+
+  private assertSpanWithinLimit(checkIn?: Date | null, checkOut?: Date | null): void {
+    if (!checkIn || !checkOut) return;
+    if (checkOut.getTime() <= checkIn.getTime()) {
+      throw new BadRequestException('Check-out must be after check-in');
+    }
+    const minutes = (checkOut.getTime() - checkIn.getTime()) / 60000;
+    if (minutes > ManualAttendanceService.MAX_ATTENDANCE_MINUTES) {
+      throw new BadRequestException('Attendance duration cannot exceed 24 hours');
+    }
+  }
+
+  // ─── Authorization ────────────────────────────────────────────────
+
+  /** Role alone is not access: the job has to be theirs. */
+  private async assertUserIsPartyToJob(userId: number, jobId: number): Promise<string> {
+    const role = await this.getUserRoleString(userId);
+    if (role === 'ADMIN') return role;
+
+    const job = await this.jobRepo.findOne({
+      where: { id: jobId },
+      relations: ['employer', 'client', 'workers'],
+    });
+    if (!job) throw new NotFoundException('Job not found');
+
+    if (role === 'EMPLOYER') {
+      const employerId = await this.getEmployerIdForUser(userId);
+      if (employerId && job.employer?.id === employerId) return role;
+    } else if (role === 'CLIENT') {
+      const clientId = await this.getClientIdForUser(userId);
+      if (clientId && job.client?.id === clientId) return role;
+    } else if (role === 'WORKER') {
+      const workerId = await this.getWorkerIdForUser(userId);
+      if (workerId && job.workers?.some((w) => w.id === workerId)) return role;
+    }
+
+    throw new ForbiddenException('You do not have access to this job');
+  }
+
+  /** EDIT sub-users may raise a request, but not approve or configure. */
+  private assertNotSubUser(actor: ActorContext | undefined, action: string): void {
+    const sub = actor?.subUser;
+    if (!sub?.isSubUser) return;
+    if (sub.permission === SubUserPermission.ADMIN) return;
+    throw new ForbiddenException(`Sub-users are not allowed to ${action}`);
+  }
+
   // ─── Permission Resolution (Job → Client → Employer hierarchy) ───
 
   async getEffectivePermissions(jobId: number): Promise<ManualAttendancePermission | null> {
-    // 1. Job-level permission (most specific)
-    const jobPerm = await this.permissionRepo.findOne({ where: { jobId } });
-    if (jobPerm) return jobPerm;
-
-    // 2. Load the job to find client/employer
     const job = await this.jobRepo.findOne({
       where: { id: jobId },
       relations: ['client', 'employer'],
     });
     if (!job) return null;
 
-    // 3. Client-level permission
-    if (job.client) {
-      const clientPerm = await this.permissionRepo.findOne({ where: { clientId: job.client.id } });
-      if (clientPerm) return clientPerm;
+    // Least specific first; each level overrides only the fields it sets.
+    const layers: (ManualAttendancePermission | null)[] = [];
+    if (job.employer?.id) {
+      layers.push(await this.permissionRepo.findOne({ where: { employerId: job.employer.id } }));
     }
+    if (job.client?.id) {
+      layers.push(await this.permissionRepo.findOne({ where: { clientId: job.client.id } }));
+    }
+    layers.push(await this.permissionRepo.findOne({ where: { jobId } }));
 
-    // 4. Employer-level permission
-    const employerPerm = await this.permissionRepo.findOne({
-      where: { employerId: job.employer.id },
-    });
-    if (employerPerm) return employerPerm;
+    const effective = MANUAL_ATTENDANCE_DEFAULTS();
+    let anyLayer = false;
+    for (const layer of layers) {
+      if (!layer) continue;
+      anyLayer = true;
+      for (const field of MANUAL_ATTENDANCE_FIELDS) {
+        const value = (layer as any)[field];
+        if (value !== null && value !== undefined) (effective as any)[field] = value;
+      }
+    }
+    if (anyLayer) return effective;
 
-    // 5. No permission configured - return default enabled settings
-    // This allows the feature to work out of the box without requiring setup
-    const defaults = new ManualAttendancePermission();
-    defaults.isEnabled = true;
-    defaults.workerCanRequest = true;
-    defaults.employerCanCreate = true;
-    defaults.clientCanCreate = true;
-    defaults.maxRetroactiveDays = 7;
-    defaults.maxRequestsPerWorkerMonth = 10;
-    defaults.requireReason = true;
-    return defaults;
+    return MANUAL_ATTENDANCE_DEFAULTS();
   }
 
-  async getEffectivePermissionsByJobPublicId(jobPublicId: string): Promise<ManualAttendancePermission | null> {
+  async getEffectivePermissionsByJobPublicId(jobPublicId: string, actor: ActorContext): Promise<ManualAttendancePermission | null> {
     const jobId = await this.resolveJobPublicId(jobPublicId);
+    await this.assertUserIsPartyToJob(actor.id, jobId);
     return this.getEffectivePermissions(jobId);
   }
 
@@ -207,13 +285,15 @@ export class ManualAttendanceService {
     return this.permissionRepo.findOne({ where: { employerId } });
   }
 
-  async upsertPermissionForEmployer(userId: number, dto: UpdateManualAttendancePermissionDto): Promise<ManualAttendancePermission> {
+  async upsertPermissionForEmployer(userId: number, dto: UpdateManualAttendancePermissionDto, actor?: ActorContext): Promise<ManualAttendancePermission> {
     const employerId = await this.getEmployerIdForUser(userId);
     if (!employerId) throw new ForbiddenException('Not an employer');
+    this.assertNotSubUser(actor, 'change manual attendance settings');
 
     let perm = await this.permissionRepo.findOne({ where: { employerId } });
     if (!perm) {
-      perm = this.permissionRepo.create({ employerId });
+      // Seed from defaults, else unsent fields fall to the column defaults.
+      perm = this.permissionRepo.create({ employerId, ...MANUAL_ATTENDANCE_DEFAULTS() , id: undefined });
     }
     Object.assign(perm, dto);
     return this.permissionRepo.save(perm);
@@ -225,28 +305,37 @@ export class ManualAttendanceService {
     return this.permissionRepo.findOne({ where: { clientId } });
   }
 
-  async upsertPermissionForClient(userId: number, dto: UpdateManualAttendancePermissionDto): Promise<ManualAttendancePermission> {
+  async upsertPermissionForClient(userId: number, dto: UpdateManualAttendancePermissionDto, actor?: ActorContext): Promise<ManualAttendancePermission> {
     const clientId = await this.getClientIdForUser(userId);
     if (!clientId) throw new ForbiddenException('Not a client');
+    this.assertNotSubUser(actor, 'change manual attendance settings');
 
     let perm = await this.permissionRepo.findOne({ where: { clientId } });
     if (!perm) {
-      perm = this.permissionRepo.create({ clientId });
+      // Seed from defaults, else unsent fields fall to the column defaults.
+      perm = this.permissionRepo.create({ clientId, ...MANUAL_ATTENDANCE_DEFAULTS() , id: undefined });
     }
     Object.assign(perm, dto);
     return this.permissionRepo.save(perm);
   }
 
-  async getPermissionForJob(jobPublicId: string): Promise<ManualAttendancePermission | null> {
+  async getPermissionForJob(jobPublicId: string, actor: ActorContext): Promise<ManualAttendancePermission | null> {
     const jobId = await this.resolveJobPublicId(jobPublicId);
+    await this.assertUserIsPartyToJob(actor.id, jobId);
     return this.permissionRepo.findOne({ where: { jobId } });
   }
 
-  async upsertPermissionForJob(jobPublicId: string, dto: UpdateManualAttendancePermissionDto): Promise<ManualAttendancePermission> {
+  async upsertPermissionForJob(jobPublicId: string, dto: UpdateManualAttendancePermissionDto, actor: ActorContext): Promise<ManualAttendancePermission> {
     const jobId = await this.resolveJobPublicId(jobPublicId);
+    const role = await this.assertUserIsPartyToJob(actor.id, jobId);
+    if (role === 'WORKER') {
+      throw new ForbiddenException('Workers cannot change manual attendance settings');
+    }
+    this.assertNotSubUser(actor, 'change manual attendance settings');
     let perm = await this.permissionRepo.findOne({ where: { jobId } });
     if (!perm) {
-      perm = this.permissionRepo.create({ jobId });
+      // Seed from defaults, else unsent fields fall to the column defaults.
+      perm = this.permissionRepo.create({ jobId, ...MANUAL_ATTENDANCE_DEFAULTS() , id: undefined });
     }
     Object.assign(perm, dto);
     return this.permissionRepo.save(perm);
@@ -390,6 +479,10 @@ export class ManualAttendanceService {
       }
       originalCheckIn = existingSession.checkInTime;
       originalCheckOut = existingSession.checkOutTime;
+      this.assertSpanWithinLimit(
+        (dto.requestedCheckIn as any) ?? existingSession.checkInTime,
+        (dto.requestedCheckOut as any) ?? existingSession.checkOutTime,
+      );
     }
 
     // For CHECK_OUT_ONLY, verify there's an open session
@@ -402,6 +495,9 @@ export class ManualAttendanceService {
       }
       existingWorkSessionId = openSession.id;
       originalCheckIn = openSession.checkInTime;
+      // The guard above only sees DTO times; here the check-in comes from the
+      // session, which is how multi-day spans got in.
+      this.assertSpanWithinLimit(openSession.checkInTime, dto.requestedCheckOut as any);
     }
 
     // Create the request
@@ -437,6 +533,7 @@ export class ManualAttendanceService {
     requestPublicId: string,
     dto: ReviewManualAttendanceRequestDto,
     userId: number,
+    actor?: ActorContext,
   ): Promise<ManualAttendanceRequest> {
     const userRole = await this.getUserRoleString(userId);
 
@@ -454,6 +551,9 @@ export class ManualAttendanceService {
     if (request.status !== ManualAttendanceRequestStatus.PENDING) {
       throw new BadRequestException('This request has already been reviewed');
     }
+
+    await this.assertUserIsPartyToJob(userId, request.jobId);
+    this.assertNotSubUser(actor, 'approve or reject manual attendance');
 
     // Self-review block
     if (request.requestedByUserId === userId) {
@@ -499,6 +599,9 @@ export class ManualAttendanceService {
 
       let workSession: WorkSession;
 
+      // Re-check at approval: the session can change between request and review.
+      this.assertSpanWithinLimit(request.requestedCheckIn, request.requestedCheckOut);
+
       if (request.requestType === ManualAttendanceRequestType.EDIT_EXISTING) {
         // Update existing work session
         workSession = await workSessionRepo.findOne({ where: { id: request.existingWorkSessionId } });
@@ -516,6 +619,20 @@ export class ManualAttendanceService {
         }
 
         await workSessionRepo.save(workSession);
+
+        // Keep the scan logs in step, else they contradict the session times.
+        if (request.requestedCheckIn) {
+          await scanLogRepo.update(
+            { workSessionId: workSession.id, scanType: 'check-in' },
+            { scanTime: request.requestedCheckIn, source: 'MANUAL' },
+          );
+        }
+        if (request.requestedCheckOut) {
+          await scanLogRepo.update(
+            { workSessionId: workSession.id, scanType: 'check-out' },
+            { scanTime: request.requestedCheckOut, source: 'MANUAL' },
+          );
+        }
       } else if (request.requestType === ManualAttendanceRequestType.CHECK_OUT_ONLY) {
         // Add check-out to existing open session
         workSession = await workSessionRepo.findOne({ where: { id: request.existingWorkSessionId } });
@@ -524,6 +641,10 @@ export class ManualAttendanceService {
         workSession.checkOutTime = request.requestedCheckOut;
         workSession.checkOutMethod = 'manual';
         workSession.source = 'MANUAL';
+        // Always clear: ux_worker_active_session keys on is_active, so leaving
+        // it true blocks the worker's next check-in.
+        workSession.isActive = false;
+        workSession.isOnBreak = false;
 
         if (workSession.checkInTime && workSession.checkOutTime) {
           const diffMs = workSession.checkOutTime.getTime() - workSession.checkInTime.getTime();
@@ -548,6 +669,23 @@ export class ManualAttendanceService {
         });
         await scanLogRepo.save(checkOutLog);
       } else {
+        // A day can hold several shifts, so only an OVERLAP is a clash.
+        if (request.requestedCheckIn) {
+          const newStart = request.requestedCheckIn;
+          const newEnd = request.requestedCheckOut ?? newStart;
+          const clash = await workSessionRepo
+            .createQueryBuilder('ws')
+            .where('ws.worker_id = :workerId', { workerId: request.workerId })
+            .andWhere('ws.check_in_time < :newEnd', { newEnd })
+            .andWhere('(ws.check_out_time IS NULL OR ws.check_out_time > :newStart)', { newStart })
+            .getOne();
+          if (clash) {
+            throw new BadRequestException(
+              'This worker is already checked in somewhere during that time. Edit that session instead.',
+            );
+          }
+        }
+
         // FULL_DAY or CHECK_IN_ONLY: create new work session
         workSession = workSessionRepo.create({
           jobId: request.jobId,
@@ -568,7 +706,8 @@ export class ManualAttendanceService {
         // Calculate total work minutes if both times provided
         if (request.requestedCheckIn && request.requestedCheckOut) {
           const diffMs = request.requestedCheckOut.getTime() - request.requestedCheckIn.getTime();
-          workSession.totalWorkMinutes = Math.round(diffMs / 60000);
+          workSession.totalWorkMinutes =
+            Math.round(diffMs / 60000) - (workSession.totalBreakMinutes || 0);
           workSession.isActive = false;
         }
 
@@ -780,12 +919,13 @@ export class ManualAttendanceService {
     return this.enrichWorkerUsers(results);
   }
 
-  async getRequestByPublicId(publicId: string): Promise<ManualAttendanceRequest> {
+  async getRequestByPublicId(publicId: string, actor: ActorContext): Promise<ManualAttendanceRequest> {
     const request = await this.requestRepo.findOne({
       where: { publicId },
       relations: ['job', 'job.client', 'worker', 'worker.user', 'workCenter', 'resultWorkSession', 'requestedByUser', 'reviewedByUser'],
     });
     if (!request) throw new NotFoundException('Request not found');
+    await this.assertUserIsPartyToJob(actor.id, request.jobId);
     return request;
   }
 
@@ -804,6 +944,11 @@ export class ManualAttendanceService {
     } else if (userRole === 'CLIENT') {
       const clientId = await this.getClientIdForUser(userId);
       qb.andWhere('client.id = :clientId', { clientId });
+    } else if (userRole === 'WORKER') {
+      const workerId = await this.getWorkerIdForUser(userId);
+      qb.andWhere('r.worker_id = :workerId', { workerId: workerId ?? -1 });
+    } else if (userRole !== 'ADMIN') {
+      return 0;
     }
 
     return qb.getCount();
@@ -814,12 +959,15 @@ export class ManualAttendanceService {
   async directCreateAttendance(
     dto: CreateManualAttendanceRequestDto,
     userId: number,
+    actor?: ActorContext,
   ): Promise<{ request: ManualAttendanceRequest; workSession: WorkSession }> {
     const userRole = await this.getUserRoleString(userId);
 
     if (userRole !== 'EMPLOYER' && userRole !== 'CLIENT' && userRole !== 'ADMIN') {
       throw new ForbiddenException('Only employers, clients, or admins can directly create attendance entries');
     }
+    // Direct entry self-approves, so it carries review authority.
+    this.assertNotSubUser(actor, 'create attendance entries directly');
 
     // Create the request
     const request = await this.createRequest(dto, userId);

@@ -47,7 +47,7 @@ export class ManualAttendanceController {
     @Body() dto: CreateManualAttendanceRequestDto,
     @Req() req,
   ) {
-    const result = await this.service.directCreateAttendance(dto, req.user.id);
+    const result = await this.service.directCreateAttendance(dto, req.user.id, req.user);
     return {
       message: 'Attendance entry created and approved',
       data: result,
@@ -89,8 +89,8 @@ export class ManualAttendanceController {
    * Get a specific request by its publicId.
    */
   @Get('requests/:publicId')
-  async getRequestById(@Param('publicId', ParseUUIDPipe) publicId: string) {
-    const request = await this.service.getRequestByPublicId(publicId);
+  async getRequestById(@Param('publicId', ParseUUIDPipe) publicId: string, @Req() req) {
+    const request = await this.service.getRequestByPublicId(publicId, req.user);
     return { message: 'Success', data: request, isSuccess: true };
   }
 
@@ -103,7 +103,7 @@ export class ManualAttendanceController {
     @Body() dto: ReviewManualAttendanceRequestDto,
     @Req() req,
   ) {
-    const result = await this.service.reviewRequest(publicId, dto, req.user.id);
+    const result = await this.service.reviewRequest(publicId, dto, req.user.id, req.user);
     return {
       message: dto.action === 'APPROVE' ? 'Request approved' : 'Request rejected',
       data: result,
@@ -142,7 +142,7 @@ export class ManualAttendanceController {
     @Body() dto: UpdateManualAttendancePermissionDto,
     @Req() req,
   ) {
-    const perm = await this.service.upsertPermissionForEmployer(req.user.id, dto);
+    const perm = await this.service.upsertPermissionForEmployer(req.user.id, dto, req.user);
     return { message: 'Permissions updated', data: perm, isSuccess: true };
   }
 
@@ -163,7 +163,7 @@ export class ManualAttendanceController {
     @Body() dto: UpdateManualAttendancePermissionDto,
     @Req() req,
   ) {
-    const perm = await this.service.upsertPermissionForClient(req.user.id, dto);
+    const perm = await this.service.upsertPermissionForClient(req.user.id, dto, req.user);
     return { message: 'Permissions updated', data: perm, isSuccess: true };
   }
 
@@ -171,8 +171,8 @@ export class ManualAttendanceController {
    * Get job-level manual attendance permissions.
    */
   @Get('permissions/job/:jobId')
-  async getJobPermissions(@Param('jobId', ParseUUIDPipe) jobId: string) {
-    const perm = await this.service.getPermissionForJob(jobId);
+  async getJobPermissions(@Param('jobId', ParseUUIDPipe) jobId: string, @Req() req) {
+    const perm = await this.service.getPermissionForJob(jobId, req.user);
     return { message: 'Success', data: perm, isSuccess: true };
   }
 
@@ -183,8 +183,9 @@ export class ManualAttendanceController {
   async upsertJobPermissions(
     @Param('jobId', ParseUUIDPipe) jobId: string,
     @Body() dto: UpdateManualAttendancePermissionDto,
+    @Req() req,
   ) {
-    const perm = await this.service.upsertPermissionForJob(jobId, dto);
+    const perm = await this.service.upsertPermissionForJob(jobId, dto, req.user);
     return { message: 'Permissions updated', data: perm, isSuccess: true };
   }
 
@@ -193,8 +194,8 @@ export class ManualAttendanceController {
    * Resolves: Job-level → Client-level → Employer-level hierarchy.
    */
   @Get('permissions/job/:jobId/resolved')
-  async getResolvedJobPermissions(@Param('jobId', ParseUUIDPipe) jobId: string) {
-    const perm = await this.service.getEffectivePermissionsByJobPublicId(jobId);
+  async getResolvedJobPermissions(@Param('jobId', ParseUUIDPipe) jobId: string, @Req() req) {
+    const perm = await this.service.getEffectivePermissionsByJobPublicId(jobId, req.user);
     return { message: 'Success', data: perm, isSuccess: true };
   }
 }

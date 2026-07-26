@@ -26,8 +26,10 @@ export class ManualAttendancePermission {
   @Column({ name: 'employer_id', nullable: true, unique: true })
   employerId?: number;
 
-  // Master toggle
-  @Column({ name: 'is_enabled', type: 'boolean', default: false })
+  // Master toggle. Defaults ON: the column default used to be false while the
+  // service treated "no row" as enabled, so the first row ever written for a
+  // company switched the feature off for all of its jobs.
+  @Column({ name: 'is_enabled', type: 'boolean', default: true })
   isEnabled: boolean;
 
   // Who can create requests
@@ -37,7 +39,7 @@ export class ManualAttendancePermission {
   @Column({ name: 'employer_can_create', type: 'boolean', default: true })
   employerCanCreate: boolean;
 
-  @Column({ name: 'client_can_create', type: 'boolean', default: false })
+  @Column({ name: 'client_can_create', type: 'boolean', default: true })
   clientCanCreate: boolean;
 
   // Limits
