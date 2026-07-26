@@ -178,7 +178,9 @@ export class WorkersService {
          FROM work_sessions
         WHERE worker_id = $1
           AND check_in_time >= $2
-          AND check_in_time < ($3::date + INTERVAL '1 day')`,
+          AND check_in_time < ($3::date + INTERVAL '1 day')
+          -- Auto-closed sessions stay out until a human settles them.
+          AND (review_status IS NULL OR review_status = 'CONFIRMED')`,
       [workerId, periodStart, periodEnd],
     );
     const minutes = Number(row?.[0]?.minutes || 0);

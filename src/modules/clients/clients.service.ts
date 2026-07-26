@@ -217,7 +217,9 @@ export class ClientsService {
          JOIN job j ON j.id = ws.job_id
         WHERE j."clientId" = $1
           AND ws.check_in_time >= $2
-          AND ws.check_in_time < ($3::date + INTERVAL '1 day')`,
+          AND ws.check_in_time < ($3::date + INTERVAL '1 day')
+          -- Auto-closed sessions stay out until a human settles them.
+          AND (ws.review_status IS NULL OR ws.review_status = 'CONFIRMED')`,
       [clientId, periodStart, periodEnd],
     );
     const minutes = Number(row?.[0]?.minutes || 0);

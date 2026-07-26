@@ -3,6 +3,20 @@ import { Job } from './job.entity';
 import { Worker } from '../../workers/entities/worker.entity';
 import { WorkCenter } from '../../work-centers/entities/work-center.entity';
 
+export enum SessionReviewStatus {
+  /** Auto-closed at the shift's scheduled end; a human only has to agree. */
+  NEEDS_CONFIRMATION = 'NEEDS_CONFIRMATION',
+  /** Auto-closed with no shift to guess from; the hours are blank. */
+  NEEDS_TIME = 'NEEDS_TIME',
+  CONFIRMED = 'CONFIRMED',
+}
+
+/** Statuses whose hours must stay out of pay and invoices. */
+export const UNSETTLED_REVIEW_STATUSES = [
+  SessionReviewStatus.NEEDS_CONFIRMATION,
+  SessionReviewStatus.NEEDS_TIME,
+];
+
 @Entity('work_sessions')
 @Index('idx_work_sessions_worker_checkin', ['workerId', 'checkInTime'])
 @Index('idx_work_sessions_job_active', ['jobId', 'isActive'])
@@ -54,6 +68,26 @@ export class WorkSession {
 
   @Column({ type: 'varchar', length: 20, default: 'SCAN' })
   source: string; // 'SCAN' (normal real-time) or 'MANUAL' (from approved manual request)
+
+  /** NULL = nothing owed. See SessionReviewStatus. */
+  @Column({ name: 'review_status', type: 'varchar', length: 30, nullable: true })
+  reviewStatus?: SessionReviewStatus | null;
+
+  @Column({ name: 'auto_closed_at', type: 'timestamptz', nullable: true })
+  autoClosedAt?: Date | null;
+
+  @Column({ name: 'reviewed_by_user_id', type: 'int', nullable: true })
+  reviewedByUserId?: number | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt?: Date | null;
+
+  // So the watchdog chases each person once rather than on every pass.
+  @Column({ name: 'worker_notified_at', type: 'timestamptz', nullable: true })
+  workerNotifiedAt?: Date | null;
+
+  @Column({ name: 'employer_notified_at', type: 'timestamptz', nullable: true })
+  employerNotifiedAt?: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

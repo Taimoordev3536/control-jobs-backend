@@ -27,6 +27,10 @@ import { AlertsModule } from '../realtime/alerts.module';
 import { QrCodeModule } from '../qr-code/qr-code.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { JobScheduleService } from './services/job-schedule.service';
+import { SessionWatchdogService } from './services/session-watchdog.service';
+import { SessionReviewService } from './services/session-review.service';
+import { SessionReviewController } from './session-review.controller';
+import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.module';
 
 @Module({
   imports: [
@@ -53,12 +57,13 @@ import { JobScheduleService } from './services/job-schedule.service';
       ManualAttendanceRequest,
     ]),
     AlertsModule,
+    AttendancePolicyModule,
     QrCodeModule,
     CloudinaryModule,
     WebauthnModule,
   ],
-  providers: [JobService, JobScheduleService],
-  controllers: [JobController],
+  providers: [JobService, JobScheduleService, SessionWatchdogService, SessionReviewService],
+  controllers: [JobController, SessionReviewController],
   exports: [TypeOrmModule],
 })
 export class JobModule {} 

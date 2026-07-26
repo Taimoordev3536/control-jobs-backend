@@ -22,7 +22,9 @@ export type AlertType =
   | 'CLIENT_REQUEST_REVIEWED'
   | 'ABSENCE_REQUEST_CREATED'
   | 'ABSENCE_REQUEST_REVIEWED'
-  | 'SURVEY_PUBLISHED';
+  | 'SURVEY_PUBLISHED'
+  | 'SESSION_STILL_OPEN'
+  | 'SESSION_AUTO_CLOSED';
 export interface AlertPayload {
   type: AlertType;
   jobId: number;
