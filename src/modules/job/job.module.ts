@@ -29,6 +29,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { JobScheduleService } from './services/job-schedule.service';
 import { SessionWatchdogService } from './services/session-watchdog.service';
 import { SessionReviewService } from './services/session-review.service';
+import { User } from '../users/entities/user.entity';
 import { SessionReviewController } from './session-review.controller';
 import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.module';
 
@@ -55,6 +56,7 @@ import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.m
       WorkerUser,
       ClientUser,
       ManualAttendanceRequest,
+      User,
     ]),
     AlertsModule,
     AttendancePolicyModule,
