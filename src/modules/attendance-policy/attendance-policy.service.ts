@@ -120,6 +120,20 @@ export class AttendancePolicyService {
     return effective;
   }
 
+  /** Company-wide policy, with no job or worker override applied. */
+  async resolveForEmployer(employerId: number | null): Promise<EffectivePolicy> {
+    const effective = POLICY_DEFAULTS();
+    if (employerId === null) return effective;
+    const layer = await this.policyRepo.findOne({ where: { employerId } });
+    if (layer) {
+      for (const field of POLICY_FIELDS) {
+        const value = (layer as any)[field];
+        if (value !== null && value !== undefined) (effective as any)[field] = value;
+      }
+    }
+    return effective;
+  }
+
   // ─── Authorization ────────────────────────────────────────────────
 
   private async roleOf(userId: number): Promise<string> {

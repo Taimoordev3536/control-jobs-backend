@@ -10,7 +10,10 @@ import { OvertimeService } from './overtime.service';
  * overtime at all.
  */
 describe('OvertimeService.decide', () => {
-  const svc = new OvertimeService(null as any, null as any, null as any, null as any);
+  // decide() is pure; nothing it touches is injected.
+  const svc = new OvertimeService(
+    ...(Array(8).fill(null) as [any, any, any, any, any, any, any, any]),
+  );
 
   describe('a job with a roster, on a scheduled day', () => {
     it('is the excess over the scheduled day', () => {

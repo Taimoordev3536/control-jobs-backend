@@ -29,6 +29,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { JobScheduleService } from './services/job-schedule.service';
 import { SessionWatchdogService } from './services/session-watchdog.service';
 import { OvertimeService } from './services/overtime.service';
+import { OvertimeController } from './overtime.controller';
 import { SessionReviewService } from './services/session-review.service';
 import { User } from '../users/entities/user.entity';
 import { SessionReviewController } from './session-review.controller';
@@ -66,7 +67,7 @@ import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.m
     WebauthnModule,
   ],
   providers: [JobService, JobScheduleService, SessionWatchdogService, SessionReviewService, OvertimeService],
-  controllers: [JobController, SessionReviewController],
+  controllers: [JobController, SessionReviewController, OvertimeController],
   exports: [TypeOrmModule, OvertimeService],
 })
 export class JobModule {} 

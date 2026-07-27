@@ -1,4 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
@@ -6,6 +12,11 @@ import { WorkSession } from '../entities/work-session.entity';
 import { Job } from '../entities/job.entity';
 import { JobScheduleService } from './job-schedule.service';
 import { ScheduleType } from '../entities/schedule-type.enum';
+import { EmployerUser } from '../../employers/entities/employer-user.entity';
+import { WorkerUser } from '../../workers/entities/worker-user.entity';
+import { User } from '../../users/entities/user.entity';
+import { UserRole } from '../../auth/enums/user-role.enum';
+import { AttendancePolicyService } from '../../attendance-policy/attendance-policy.service';
 
 export type OvertimeStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
@@ -34,9 +45,124 @@ export class OvertimeService {
   constructor(
     @InjectRepository(WorkSession) private readonly sessionRepo: Repository<WorkSession>,
     @InjectRepository(Job) private readonly jobRepo: Repository<Job>,
+    @InjectRepository(EmployerUser) private readonly employerUserRepo: Repository<EmployerUser>,
+    @InjectRepository(WorkerUser) private readonly workerUserRepo: Repository<WorkerUser>,
+    @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly schedule: JobScheduleService,
+    private readonly policies: AttendancePolicyService,
     private readonly dataSource: DataSource,
   ) {}
+
+  /**
+   * The employer that owns the session, or null for an admin who sees all.
+   * Only the employer decides: the record and the liability are theirs.
+   */
+  private async employerScope(userId: number): Promise<number | null> {
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['role'] });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role?.value === UserRole.Admin) return null;
+    if (user.role?.value !== UserRole.Employer) {
+      throw new ForbiddenException('Only the employer can decide on overtime');
+    }
+    const eu = await this.employerUserRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['employer'],
+    });
+    if (!eu?.employer?.id) throw new ForbiddenException('Not an employer');
+    return eu.employer.id;
+  }
+
+  /** Overtime waiting on a decision, for the caller's own workers. */
+  async listPending(userId: number) {
+    const employerId = await this.employerScope(userId);
+    const rows = await this.sessionRepo
+      .createQueryBuilder('ws')
+      .leftJoinAndSelect('ws.job', 'job')
+      .leftJoinAndSelect('ws.worker', 'worker')
+      .leftJoin('job.employer', 'employer')
+      .where(`ws.overtime_status = 'PENDING'`)
+      .andWhere(employerId === null ? '1=1' : 'employer.id = :employerId', { employerId })
+      .orderBy('ws.check_in_time', 'DESC')
+      .getMany();
+    return rows;
+  }
+
+  async countPending(userId: number): Promise<number> {
+    return (await this.listPending(userId)).length;
+  }
+
+  private async loadOwned(publicId: string, userId: number): Promise<WorkSession> {
+    const employerId = await this.employerScope(userId);
+    const session = await this.sessionRepo.findOne({
+      where: { publicId },
+      relations: ['job', 'job.employer'],
+    });
+    if (!session) throw new NotFoundException('Session not found');
+    if (employerId !== null && (session.job as any)?.employer?.id !== employerId) {
+      throw new ForbiddenException('This session belongs to another company');
+    }
+    if (session.overtimeStatus !== 'PENDING') {
+      throw new BadRequestException(
+        session.overtimeStatus
+          ? `This overtime was already ${String(session.overtimeStatus).toLowerCase()}`
+          : 'This session has no overtime to decide on',
+      );
+    }
+    return session;
+  }
+
+  /**
+   * Accept the overtime. Refused once the year's cap is reached: Art. 35.2 ET
+   * makes the cap a limit on what may be worked, so approving past it would
+   * record a breach rather than prevent one.
+   */
+  async approve(
+    publicId: string,
+    userId: number,
+    compensation?: 'PAID' | 'TIME_OFF',
+  ): Promise<WorkSession> {
+    const session = await this.loadOwned(publicId, userId);
+    const policy = await this.policies.resolve(session.jobId, session.workerId);
+
+    const year = new Date(session.checkInTime).getFullYear();
+    const sofar = await this.annualTotal(session.workerId, year, policy.overtimeAnnualCapHours);
+    const adding = Math.round(((session.overtimeMinutes || 0) / 60) * 100) / 100;
+    if (policy.overtimeAnnualCapHours > 0 && sofar.hours + adding > policy.overtimeAnnualCapHours) {
+      throw new BadRequestException(
+        `Approving ${adding} h would take ${year} to ${Math.round((sofar.hours + adding) * 100) / 100} h, ` +
+          `over the ${policy.overtimeAnnualCapHours} h limit. ` +
+          (sofar.remainingHours > 0 ? `${sofar.remainingHours} h remain.` : 'The limit is already reached.'),
+      );
+    }
+
+    session.overtimeStatus = 'APPROVED';
+    session.overtimeCompensation = compensation || policy.overtimeDefaultCompensation;
+    return this.sessionRepo.save(session);
+  }
+
+  /** A worker's approved overtime for a year, resolved by their public id. */
+  async annualForWorker(workerPublicId: string, userId: number, year?: number) {
+    const employerId = await this.employerScope(userId);
+    const [w] = await this.dataSource.query(
+      `SELECT w.id FROM workers w
+        WHERE w.public_id = $1
+          AND ($2::int IS NULL OR EXISTS (
+                SELECT 1 FROM "employerWorkers" ew
+                 WHERE ew."workerId" = w.id AND ew."employerId" = $2))`,
+      [workerPublicId, employerId],
+    );
+    if (!w) throw new NotFoundException('Worker not found');
+    const policy = await this.policies.resolveForEmployer(employerId);
+    return this.annualTotal(w.id, year || new Date().getFullYear(), policy.overtimeAnnualCapHours);
+  }
+
+  /** Refuse the overtime. The attendance record is untouched either way. */
+  async reject(publicId: string, userId: number): Promise<WorkSession> {
+    const session = await this.loadOwned(publicId, userId);
+    session.overtimeStatus = 'REJECTED';
+    session.overtimeCompensation = null;
+    return this.sessionRepo.save(session);
+  }
 
   /**
    * Overtime for one closed session.
@@ -91,7 +217,10 @@ export class OvertimeService {
       [workerId, year],
     );
     const hours = Math.round((Number(row?.mins || 0) / 60) * 100) / 100;
-    return { year, hours, capHours, remainingHours: Math.round((capHours - hours) * 100) / 100 };
+    // Clamped: once the cap is reached there is nothing left, and a negative
+    // "remaining" reads as nonsense in the refusal message.
+    const remainingHours = Math.max(0, Math.round((capHours - hours) * 100) / 100);
+    return { year, hours, capHours, remainingHours };
   }
 
   @Cron('7 */2 * * *')
