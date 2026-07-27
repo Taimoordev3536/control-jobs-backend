@@ -107,4 +107,19 @@ export class WorkSession {
   @ManyToOne(() => WorkCenter, { nullable: true })
   @JoinColumn({ name: 'work_center_id' })
   workCenter?: WorkCenter;
+  // Frozen when the session closes; deriving it from the job's current
+  // schedule let a schedule edit rewrite last month's overtime.
+  @Column({ name: 'overtime_minutes', type: 'int', nullable: true })
+  overtimeMinutes?: number | null;
+
+  // The worked total the figure came from, so a later correction is detected.
+  @Column({ name: 'overtime_basis_minutes', type: 'int', nullable: true })
+  overtimeBasisMinutes?: number | null;
+
+  @Column({ name: 'overtime_status', type: 'varchar', length: 20, nullable: true })
+  overtimeStatus?: string | null;
+
+  @Column({ name: 'overtime_compensation', type: 'varchar', length: 20, nullable: true })
+  overtimeCompensation?: string | null;
+
 }

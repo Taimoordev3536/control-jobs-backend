@@ -87,4 +87,16 @@ export class AttendancePolicy {
   @ManyToOne(() => Worker, { nullable: true })
   @JoinColumn({ name: 'worker_id' })
   worker?: Worker;
+  @Column({ name: 'overtime_requires_approval', type: 'boolean', nullable: true })
+  overtimeRequiresApproval?: boolean | null;
+
+  @Column({ name: 'overtime_annual_cap_hours', type: 'int', nullable: true })
+  overtimeAnnualCapHours?: number | null;
+
+  @Column({ name: 'overtime_rate_multiplier', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  overtimeRateMultiplier?: string | null;
+
+  @Column({ name: 'overtime_default_compensation', type: 'varchar', length: 20, nullable: true })
+  overtimeDefaultCompensation?: string | null;
+
 }

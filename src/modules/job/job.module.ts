@@ -28,6 +28,7 @@ import { QrCodeModule } from '../qr-code/qr-code.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { JobScheduleService } from './services/job-schedule.service';
 import { SessionWatchdogService } from './services/session-watchdog.service';
+import { OvertimeService } from './services/overtime.service';
 import { SessionReviewService } from './services/session-review.service';
 import { User } from '../users/entities/user.entity';
 import { SessionReviewController } from './session-review.controller';
@@ -64,8 +65,8 @@ import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.m
     CloudinaryModule,
     WebauthnModule,
   ],
-  providers: [JobService, JobScheduleService, SessionWatchdogService, SessionReviewService],
+  providers: [JobService, JobScheduleService, SessionWatchdogService, SessionReviewService, OvertimeService],
   controllers: [JobController, SessionReviewController],
-  exports: [TypeOrmModule],
+  exports: [TypeOrmModule, OvertimeService],
 })
 export class JobModule {} 

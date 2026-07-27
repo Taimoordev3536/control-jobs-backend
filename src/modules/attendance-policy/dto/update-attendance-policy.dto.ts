@@ -1,4 +1,4 @@
-import { IsOptional, IsBoolean, IsInt, Min, Max } from 'class-validator';
+import { IsOptional, IsBoolean, IsInt, IsNumber, IsIn, Min, Max } from 'class-validator';
 
 /**
  * Every field optional and nullable: omitting one leaves it inheriting, and
@@ -37,4 +37,16 @@ export class UpdateAttendancePolicyDto {
 
   @IsOptional() @IsBoolean()
   countEarlyCheckin?: boolean | null;
+  @IsOptional() @IsBoolean()
+  overtimeRequiresApproval?: boolean | null;
+
+  @IsOptional() @IsInt() @Min(0) @Max(2000)
+  overtimeAnnualCapHours?: number | null;
+
+  @IsOptional() @IsNumber() @Min(1) @Max(5)
+  overtimeRateMultiplier?: number | null;
+
+  @IsOptional() @IsIn(['PAID', 'TIME_OFF'])
+  overtimeDefaultCompensation?: 'PAID' | 'TIME_OFF' | null;
+
 }

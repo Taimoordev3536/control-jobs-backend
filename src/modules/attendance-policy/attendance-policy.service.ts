@@ -29,6 +29,10 @@ export const POLICY_FIELDS = [
   'freeCloseAfterMins',
   'earlyCheckinMins',
   'countEarlyCheckin',
+  'overtimeRequiresApproval',
+  'overtimeAnnualCapHours',
+  'overtimeRateMultiplier',
+  'overtimeDefaultCompensation',
 ] as const;
 
 export type EffectivePolicy = {
@@ -43,6 +47,10 @@ export type EffectivePolicy = {
   freeCloseAfterMins: number;
   earlyCheckinMins: number;
   countEarlyCheckin: boolean;
+  overtimeRequiresApproval: boolean;
+  overtimeAnnualCapHours: number;
+  overtimeRateMultiplier: number;
+  overtimeDefaultCompensation: 'PAID' | 'TIME_OFF';
 };
 
 /** What a company gets before anyone configures anything. */
@@ -58,6 +66,12 @@ export const POLICY_DEFAULTS = (): EffectivePolicy => ({
   freeCloseAfterMins: 14 * 60,
   earlyCheckinMins: 30,
   countEarlyCheckin: false,
+  overtimeRequiresApproval: true,
+  // Art. 35.2 ET. The real figure comes from the convenio, so it is a setting.
+  overtimeAnnualCapHours: 80,
+  overtimeRateMultiplier: 1,
+  // Art. 35.1 ET: absent an agreement, overtime is compensated with rest.
+  overtimeDefaultCompensation: 'TIME_OFF',
 });
 
 @Injectable()
