@@ -7,7 +7,7 @@ import {
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Worker } from './entities/worker.entity';
 import { WorkerUser } from './entities/worker-user.entity';
 import { CreateWorkerDto } from './dto/create-worker.dto';
@@ -181,19 +181,30 @@ export class WorkersService {
     return this.getWorkerSalaryConfig(workerId);
   }
 
+  /** Sessions in the period that no receipt has paid for yet. */
+  private billableSessionSql = `
+    SELECT id, total_work_minutes
+      FROM work_sessions
+     WHERE worker_id = $1
+       AND check_in_time >= $2
+       AND check_in_time < ($3::date + INTERVAL '1 day')
+       -- Auto-closed sessions stay out until a human settles them.
+       AND (review_status IS NULL OR review_status = 'CONFIRMED')
+       AND salary_receipt_id IS NULL`;
+
+  private async billableSessions(
+    manager: EntityManager | DataSource,
+    workerId: number,
+    periodStart: string,
+    periodEnd: string,
+  ): Promise<{ ids: number[]; hours: number }> {
+    const rows = await manager.query(this.billableSessionSql, [workerId, periodStart, periodEnd]);
+    const minutes = rows.reduce((sum: number, r: any) => sum + Number(r.total_work_minutes || 0), 0);
+    return { ids: rows.map((r: any) => Number(r.id)), hours: Math.round((minutes / 60) * 100) / 100 };
+  }
+
   private async workedHoursForWorker(workerId: number, periodStart: string, periodEnd: string): Promise<number> {
-    const row = await this.dataSource.query(
-      `SELECT COALESCE(SUM(total_work_minutes), 0) AS minutes
-         FROM work_sessions
-        WHERE worker_id = $1
-          AND check_in_time >= $2
-          AND check_in_time < ($3::date + INTERVAL '1 day')
-          -- Auto-closed sessions stay out until a human settles them.
-          AND (review_status IS NULL OR review_status = 'CONFIRMED')`,
-      [workerId, periodStart, periodEnd],
-    );
-    const minutes = Number(row?.[0]?.minutes || 0);
-    return Math.round((minutes / 60) * 100) / 100;
+    return (await this.billableSessions(this.dataSource, workerId, periodStart, periodEnd)).hours;
   }
 
   private async employerIdForWorker(workerId: number): Promise<number | null> {
@@ -292,9 +303,7 @@ export class WorkersService {
     if (!employerId) throw new BadRequestException('This worker is not linked to an employer');
 
     const fixedAmount = body.fixedAmount != null ? Number(body.fixedAmount) : null;
-    const hoursQty = this.num(body.hoursQty);
     const hourRate = this.num(body.hourRate);
-    const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
     const extraLines = (body.lines || [])
       .filter((l) => l?.description?.trim())
       .map((l, i) => {
@@ -309,13 +318,25 @@ export class WorkersService {
         };
       });
     const extraTotal = extraLines.reduce((sum, l) => sum + Number(l.lineTotal), 0);
-    const total = Math.round(((fixedAmount ?? 0) + hoursAmount + extraTotal) * 100) / 100;
 
+    return this.salaryReceiptRepo.manager.transaction(async (manager) => {
+    // Recomputed here rather than trusted from the request: the figure the
+    // form previewed can be stale, and nothing stops a caller posting any
+    // number at all.
+    const billable = await this.billableSessions(manager, workerId, body.periodStart!, body.periodEnd!);
+    const hoursQty = body.hoursQty != null ? this.num(body.hoursQty) : billable.hours;
+    if (hoursQty > billable.hours) {
+      throw new BadRequestException(
+        `Only ${billable.hours} unbilled hours are recorded for this period. ` +
+          `To pay more than the clock recorded, add it as a separate concept.`,
+      );
+    }
+    const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
+    const total = Math.round(((fixedAmount ?? 0) + hoursAmount + extraTotal) * 100) / 100;
     if (total < 0 || hoursQty < 0 || hourRate < 0) {
       throw new BadRequestException('A salary receipt cannot be negative. Issue a credit note instead.');
     }
 
-    return this.salaryReceiptRepo.manager.transaction(async (manager) => {
     const year = Number((body.issueDate || madridTodayKey()).slice(0, 4));
     const receiptNumber =
       body.receiptNumber?.trim() ||
@@ -332,6 +353,7 @@ export class WorkersService {
       fixedAmount: fixedAmount == null ? null : String(fixedAmount),
       hoursLabel: body.hoursLabel || worker.salaryHoursLabel || 'Horas de trabajo',
       hoursQty: String(hoursQty),
+      computedHoursQty: String(billable.hours),
       hourRate: String(hourRate),
       hoursAmount: String(hoursAmount),
       total: String(total),
@@ -341,6 +363,12 @@ export class WorkersService {
       uploadedByUserId: userId || null,
     });
       const saved = await manager.save(SalaryReceipt, rec);
+      if (billable.ids.length) {
+        await manager.query(
+          `UPDATE work_sessions SET salary_receipt_id = $1 WHERE id = ANY($2)`,
+          [saved.id, billable.ids],
+        );
+      }
       if (extraLines.length) {
         await manager.save(
           SalaryReceiptLine,
@@ -387,6 +415,9 @@ export class WorkersService {
     if (!r) throw new NotFoundException('Salary receipt not found');
     if (r.status !== 'PENDING') throw new BadRequestException('Only a pending receipt can be cancelled');
     r.status = 'CANCELLED';
+    // Its hours go back into the pool; a cancelled receipt paid nobody.
+    await this.dataSource.query(
+      `UPDATE work_sessions SET salary_receipt_id = NULL WHERE salary_receipt_id = $1`, [r.id]);
     return this.mapSalaryReceipt(await this.salaryReceiptRepo.save(r));
   }
 

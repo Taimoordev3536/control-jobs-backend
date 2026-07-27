@@ -52,6 +52,11 @@ export class SalaryReceipt {
   @Column({ name: 'hours_qty', type: 'numeric', precision: 10, scale: 2, default: 0 })
   hoursQty: string;
 
+  // What the clock recorded, kept beside hoursQty so any manual reduction
+  // is visible rather than silent.
+  @Column({ name: 'computed_hours_qty', type: 'numeric', precision: 10, scale: 2, nullable: true })
+  computedHoursQty: string | null;
+
   @Column({ name: 'hour_rate', type: 'numeric', precision: 12, scale: 2, default: 0 })
   hourRate: string;
 

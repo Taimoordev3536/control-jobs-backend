@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, ForbiddenException, BadRequestException 
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Client } from './entities/client.entity';
 import { ClientFile } from './entities/client-file.entity';
 import { ClientInvoice } from './entities/client-invoice.entity';
@@ -247,20 +247,31 @@ export class ClientsService {
     return this.getClientBillingConfig(clientId);
   }
 
+  /** Sessions in the period that no invoice has billed yet. */
+  private billableSessionSql = `
+    SELECT ws.id, ws.total_work_minutes
+      FROM work_sessions ws
+      JOIN job j ON j.id = ws.job_id
+     WHERE j."clientId" = $1
+       AND ws.check_in_time >= $2
+       AND ws.check_in_time < ($3::date + INTERVAL '1 day')
+       -- Auto-closed sessions stay out until a human settles them.
+       AND (ws.review_status IS NULL OR ws.review_status = 'CONFIRMED')
+       AND ws.client_invoice_id IS NULL`;
+
+  private async billableSessions(
+    manager: EntityManager | DataSource,
+    clientId: number,
+    periodStart: string,
+    periodEnd: string,
+  ): Promise<{ ids: number[]; hours: number }> {
+    const rows = await manager.query(this.billableSessionSql, [clientId, periodStart, periodEnd]);
+    const minutes = rows.reduce((sum: number, r: any) => sum + Number(r.total_work_minutes || 0), 0);
+    return { ids: rows.map((r: any) => Number(r.id)), hours: Math.round((minutes / 60) * 100) / 100 };
+  }
+
   private async workedHoursForClient(clientId: number, periodStart: string, periodEnd: string): Promise<number> {
-    const row = await this.dataSource.query(
-      `SELECT COALESCE(SUM(ws.total_work_minutes), 0) AS minutes
-         FROM work_sessions ws
-         JOIN job j ON j.id = ws.job_id
-        WHERE j."clientId" = $1
-          AND ws.check_in_time >= $2
-          AND ws.check_in_time < ($3::date + INTERVAL '1 day')
-          -- Auto-closed sessions stay out until a human settles them.
-          AND (ws.review_status IS NULL OR ws.review_status = 'CONFIRMED')`,
-      [clientId, periodStart, periodEnd],
-    );
-    const minutes = Number(row?.[0]?.minutes || 0);
-    return Math.round((minutes / 60) * 100) / 100;
+    return (await this.billableSessions(this.dataSource, clientId, periodStart, periodEnd)).hours;
   }
 
   private mapInvoice(i: ClientInvoice) {
@@ -367,9 +378,7 @@ export class ClientsService {
     if (!employerId) throw new BadRequestException('This client is not linked to an employer');
 
     const fixedAmount = body.fixedAmount != null ? Number(body.fixedAmount) : null;
-    const hoursQty = this.num(body.hoursQty);
     const hourRate = this.num(body.hourRate);
-    const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
     const extraLines = (body.lines || [])
       .filter((l) => l?.description?.trim())
       .map((l, i) => {
@@ -384,16 +393,27 @@ export class ClientsService {
         };
       });
     const extraTotal = extraLines.reduce((sum, l) => sum + Number(l.lineTotal), 0);
-    const subtotal = Math.round(((fixedAmount ?? 0) + hoursAmount + extraTotal) * 100) / 100;
     const vatPct = this.num(body.vatPct);
+
+    return this.clientInvoiceRepo.manager.transaction(async (manager) => {
+    // Recomputed here rather than trusted from the request: the previewed
+    // figure can be stale, and nothing stops a caller posting any number.
+    const billable = await this.billableSessions(manager, clientId, body.periodStart!, body.periodEnd!);
+    const hoursQty = body.hoursQty != null ? this.num(body.hoursQty) : billable.hours;
+    if (hoursQty > billable.hours) {
+      throw new BadRequestException(
+        `Only ${billable.hours} unbilled hours are recorded for this period. ` +
+          `To bill more than the clock recorded, add it as a separate concept.`,
+      );
+    }
+    const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
+    const subtotal = Math.round(((fixedAmount ?? 0) + hoursAmount + extraTotal) * 100) / 100;
     const vatAmount = Math.round(subtotal * (vatPct / 100) * 100) / 100;
     const total = Math.round((subtotal + vatAmount) * 100) / 100;
-
     if (total < 0 || hoursQty < 0 || hourRate < 0) {
       throw new BadRequestException('An invoice cannot be negative. Issue a credit note instead.');
     }
 
-    return this.clientInvoiceRepo.manager.transaction(async (manager) => {
     const year = Number((body.issueDate || madridTodayKey()).slice(0, 4));
     const invoiceNumber =
       body.invoiceNumber?.trim() ||
@@ -411,6 +431,7 @@ export class ClientsService {
       fixedAmount: fixedAmount == null ? null : String(fixedAmount),
       hoursLabel: body.hoursLabel || client.billingHoursLabel || 'Horas de servicio',
       hoursQty: String(hoursQty),
+      computedHoursQty: String(billable.hours),
       hourRate: String(hourRate),
       hoursAmount: String(hoursAmount),
       subtotal: String(subtotal),
@@ -423,6 +444,12 @@ export class ClientsService {
       uploadedByUserId: userId || null,
     });
       const saved = await manager.save(ClientInvoice, rec);
+      if (billable.ids.length) {
+        await manager.query(
+          `UPDATE work_sessions SET client_invoice_id = $1 WHERE id = ANY($2)`,
+          [saved.id, billable.ids],
+        );
+      }
       if (extraLines.length) {
         await manager.save(
           ClientInvoiceLine,
@@ -469,6 +496,9 @@ export class ClientsService {
     if (!i) throw new NotFoundException('Invoice not found');
     if (i.status !== 'PENDING') throw new BadRequestException('Only a pending invoice can be cancelled');
     i.status = 'CANCELLED';
+    // Its hours go back into the pool; a cancelled invoice billed nobody.
+    await this.dataSource.query(
+      `UPDATE work_sessions SET client_invoice_id = NULL WHERE client_invoice_id = $1`, [i.id]);
     return this.mapInvoice(await this.clientInvoiceRepo.save(i));
   }
 
