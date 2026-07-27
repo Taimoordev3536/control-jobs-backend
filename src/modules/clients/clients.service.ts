@@ -12,6 +12,8 @@ import { AssignClientUserDto } from './dto/assign-client-user.dto';
 import { User } from '../users/entities/user.entity';
 import { Employer } from '../employers/entities/employer.entity';
 import { EmployerClient } from '../employers/entities/employer-client.entity';
+import { UserRole } from '../auth/enums/user-role.enum';
+import { DocumentNumberService } from '../../common/services/document-number.service';
 import { Role } from '../users/entities/role.entity';
 import { madridTodayKey } from '../../common/helpers/business-time';
 import { revokeUserSessions } from '../../common/helpers/account-status';
@@ -41,6 +43,7 @@ export class ClientsService {
     private employerRepo: Repository<Employer>,
     @InjectRepository(EmployerClient)
     private employerClientRepo: Repository<EmployerClient>,
+    private readonly documentNumbers: DocumentNumberService,
     @InjectRepository(EmployerUser)
     private employerUserRepo: Repository<EmployerUser>,
     private dataSource: DataSource,
@@ -52,6 +55,34 @@ export class ClientsService {
     const client = await this.clientRepo.findOne({ where: { publicId } });
     if (!client) throw new NotFoundException('Client not found');
     return client.id;
+  }
+
+  /**
+   * Resolve a client the caller is actually entitled to. The invoice routes
+   * used resolvePublicId, which checks nothing, so any employer holding
+   * another company's client UUID could reprice, invoice and delete for them.
+   */
+  async resolveOwnedClientId(publicId: string, actor: { id: number }): Promise<number> {
+    const clientId = await this.resolvePublicId(publicId);
+    const user = await this.userRepo.findOne({
+      where: { id: actor?.id },
+      relations: ['role'],
+    });
+    if (!user) throw new ForbiddenException('Not authenticated');
+    if (user.role?.value === UserRole.Admin) return clientId;
+
+    const eu = await this.employerUserRepo.findOne({
+      where: { user: { id: actor.id } },
+      relations: ['employer'],
+    });
+    const employerId = eu?.employer?.id;
+    if (!employerId) throw new ForbiddenException('Not an employer');
+
+    const link = await this.employerClientRepo.findOne({
+      where: { client: { id: clientId }, employer: { id: employerId } },
+    });
+    if (!link) throw new ForbiddenException('You do not have access to this client');
+    return clientId;
   }
 
   async findClientIdByUserId(userId: number): Promise<number> {
@@ -336,10 +367,20 @@ export class ClientsService {
     const vatAmount = Math.round(subtotal * (vatPct / 100) * 100) / 100;
     const total = Math.round((subtotal + vatAmount) * 100) / 100;
 
-    const rec = this.clientInvoiceRepo.create({
+    if (total < 0 || hoursQty < 0 || hourRate < 0) {
+      throw new BadRequestException('An invoice cannot be negative. Issue a credit note instead.');
+    }
+
+    return this.clientInvoiceRepo.manager.transaction(async (manager) => {
+    const year = Number((body.issueDate || madridTodayKey()).slice(0, 4));
+    const invoiceNumber =
+      body.invoiceNumber?.trim() ||
+      (await this.documentNumbers.next(manager, 'clientInvoice', `F-${year}-`, employerId, year));
+
+    const rec = manager.create(ClientInvoice, {
       clientId,
       employerId,
-      invoiceNumber: body.invoiceNumber?.trim() || (await this.nextInvoiceNumber(employerId, 'F')),
+      invoiceNumber,
       issueDate: body.issueDate || madridTodayKey(),
       dueDate: body.dueDate || null,
       periodStart: body.periodStart,
@@ -354,12 +395,13 @@ export class ClientsService {
       vatPct: String(vatPct),
       vatAmount: String(vatAmount),
       total: String(total),
-      status: body.status || 'pending',
+      status: 'PENDING',
       notes: body.notes || null,
       uploadedByUserId: userId || null,
     });
-    const saved = await this.clientInvoiceRepo.save(rec);
-    return this.mapInvoice(saved);
+      const saved = await manager.save(ClientInvoice, rec);
+      return this.mapInvoice(saved);
+    });
   }
 
   async deleteClientInvoice(clientId: number, invoicePublicId: string): Promise<void> {
@@ -367,7 +409,38 @@ export class ClientsService {
       where: { publicId: invoicePublicId, clientId },
     });
     if (!i) throw new NotFoundException('Invoice not found');
+    if (i.status !== 'PENDING') {
+      throw new BadRequestException('Only a pending invoice can be deleted');
+    }
+    const isLast = await this.documentNumbers.isLast(
+      this.clientInvoiceRepo.manager,
+      'clientInvoice',
+      i.invoiceNumber,
+      i.employerId,
+    );
+    if (!isLast) {
+      throw new BadRequestException(
+        'Only the last invoice can be deleted, so the numbering stays sequential',
+      );
+    }
     await this.clientInvoiceRepo.delete(i.id);
+  }
+
+  async markClientInvoicePaid(clientId: number, invoicePublicId: string) {
+    const i = await this.clientInvoiceRepo.findOne({ where: { publicId: invoicePublicId, clientId } });
+    if (!i) throw new NotFoundException('Invoice not found');
+    if (i.status !== 'PENDING') throw new BadRequestException('Only a pending invoice can be marked paid');
+    i.status = 'PAID';
+    i.paidAt = new Date();
+    return this.mapInvoice(await this.clientInvoiceRepo.save(i));
+  }
+
+  async cancelClientInvoice(clientId: number, invoicePublicId: string) {
+    const i = await this.clientInvoiceRepo.findOne({ where: { publicId: invoicePublicId, clientId } });
+    if (!i) throw new NotFoundException('Invoice not found');
+    if (i.status !== 'PENDING') throw new BadRequestException('Only a pending invoice can be cancelled');
+    i.status = 'CANCELLED';
+    return this.mapInvoice(await this.clientInvoiceRepo.save(i));
   }
 
   private async employerIdForUser(userId: number): Promise<number> {

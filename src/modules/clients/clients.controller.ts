@@ -192,8 +192,8 @@ export class ClientsController {
   @Get(':id/billing-config')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer, UserRole.Admin)
-  async getBillingConfig(@Param('id', ParseUUIDPipe) id: string) {
-    const clientId = await this.clientsService.resolvePublicId(id);
+  async getBillingConfig(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
     return this.clientsService.getClientBillingConfig(clientId);
   }
 
@@ -203,16 +203,17 @@ export class ClientsController {
   async updateBillingConfig(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { fixedAmount?: number | null; hoursLabel?: string; hourRate?: number | null; vatPct?: number },
+    @Req() req,
   ) {
-    const clientId = await this.clientsService.resolvePublicId(id);
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
     return this.clientsService.updateClientBillingConfig(clientId, body);
   }
 
   @Get(':id/invoices')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer, UserRole.Admin)
-  async listInvoices(@Param('id', ParseUUIDPipe) id: string) {
-    const clientId = await this.clientsService.resolvePublicId(id);
+  async listInvoices(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
     return this.clientsService.listClientInvoices(clientId);
   }
 
@@ -223,8 +224,9 @@ export class ClientsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Query('periodStart') periodStart: string,
     @Query('periodEnd') periodEnd: string,
+    @Req() req,
   ) {
-    const clientId = await this.clientsService.resolvePublicId(id);
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
     return this.clientsService.previewClientInvoice(clientId, periodStart, periodEnd);
   }
 
@@ -236,7 +238,7 @@ export class ClientsController {
     @Body() body: any,
     @Req() req,
   ) {
-    const clientId = await this.clientsService.resolvePublicId(id);
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
     return this.clientsService.createClientInvoice(clientId, body, req.user?.id);
   }
 
@@ -246,10 +248,35 @@ export class ClientsController {
   async deleteInvoice(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
+    @Req() req,
   ) {
-    const clientId = await this.clientsService.resolvePublicId(id);
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
     await this.clientsService.deleteClientInvoice(clientId, invoiceId);
     return { isSuccess: true };
+  }
+
+  @Post(':id/invoices/:invoiceId/mark-paid')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async markInvoicePaid(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
+    @Req() req,
+  ) {
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
+    return this.clientsService.markClientInvoicePaid(clientId, invoiceId);
+  }
+
+  @Post(':id/invoices/:invoiceId/cancel')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async cancelInvoice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
+    @Req() req,
+  ) {
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
+    return this.clientsService.cancelClientInvoice(clientId, invoiceId);
   }
 
   @Get(':id/invoices/:invoiceId/pdf')
@@ -259,8 +286,9 @@ export class ClientsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
     @Res() res: Response,
+    @Req() req,
   ) {
-    const clientId = await this.clientsService.resolvePublicId(id);
+    const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
     const { buffer, fileName } = await this.clientsService.renderClientInvoicePdf(clientId, invoiceId);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);

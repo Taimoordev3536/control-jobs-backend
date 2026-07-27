@@ -28,6 +28,8 @@ import { In } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { EmailService } from '../../common/services/email.service';
 import { renderLineDocPdf, DocLine } from '../../common/helpers/line-doc-pdf';
+import { UserRole } from '../auth/enums/user-role.enum';
+import { DocumentNumberService } from '../../common/services/document-number.service';
 
 @Injectable()
 export class WorkersService {
@@ -46,6 +48,7 @@ export class WorkersService {
     private employerWorkerRepo: Repository<EmployerWorker>,
     private dataSource: DataSource,
     private readonly emailService: EmailService,
+    private readonly documentNumbers: DocumentNumberService,
     private readonly cloudinaryService: CloudinaryService,
     @InjectRepository(Client)
     private clientRepo: Repository<Client>,
@@ -286,10 +289,20 @@ export class WorkersService {
     const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
     const total = Math.round(((fixedAmount ?? 0) + hoursAmount) * 100) / 100;
 
-    const rec = this.salaryReceiptRepo.create({
+    if (total < 0 || hoursQty < 0 || hourRate < 0) {
+      throw new BadRequestException('A salary receipt cannot be negative. Issue a credit note instead.');
+    }
+
+    return this.salaryReceiptRepo.manager.transaction(async (manager) => {
+    const year = Number((body.issueDate || madridTodayKey()).slice(0, 4));
+    const receiptNumber =
+      body.receiptNumber?.trim() ||
+      (await this.documentNumbers.next(manager, 'salaryReceipt', `RS-${year}-`, employerId, year));
+
+    const rec = manager.create(SalaryReceipt, {
       workerId,
       employerId,
-      receiptNumber: body.receiptNumber?.trim() || (await this.nextReceiptNumber(employerId)),
+      receiptNumber,
       issueDate: body.issueDate || madridTodayKey(),
       periodStart: body.periodStart,
       periodEnd: body.periodEnd,
@@ -300,12 +313,13 @@ export class WorkersService {
       hourRate: String(hourRate),
       hoursAmount: String(hoursAmount),
       total: String(total),
-      status: body.status || 'pending',
+      status: 'PENDING',
       notes: body.notes || null,
       uploadedByUserId: userId || null,
     });
-    const saved = await this.salaryReceiptRepo.save(rec);
-    return this.mapSalaryReceipt(saved);
+      const saved = await manager.save(SalaryReceipt, rec);
+      return this.mapSalaryReceipt(saved);
+    });
   }
 
   async deleteSalaryReceipt(workerId: number, receiptPublicId: string): Promise<void> {
@@ -313,7 +327,38 @@ export class WorkersService {
       where: { publicId: receiptPublicId, workerId },
     });
     if (!r) throw new NotFoundException('Salary receipt not found');
+    if (r.status !== 'PENDING') {
+      throw new BadRequestException('Only a pending receipt can be deleted');
+    }
+    const isLast = await this.documentNumbers.isLast(
+      this.salaryReceiptRepo.manager,
+      'salaryReceipt',
+      r.receiptNumber,
+      r.employerId,
+    );
+    if (!isLast) {
+      throw new BadRequestException(
+        'Only the last receipt can be deleted, so the numbering stays sequential',
+      );
+    }
     await this.salaryReceiptRepo.delete(r.id);
+  }
+
+  async markSalaryReceiptPaid(workerId: number, receiptPublicId: string) {
+    const r = await this.salaryReceiptRepo.findOne({ where: { publicId: receiptPublicId, workerId } });
+    if (!r) throw new NotFoundException('Salary receipt not found');
+    if (r.status !== 'PENDING') throw new BadRequestException('Only a pending receipt can be marked paid');
+    r.status = 'PAID';
+    r.paidAt = new Date();
+    return this.mapSalaryReceipt(await this.salaryReceiptRepo.save(r));
+  }
+
+  async cancelSalaryReceipt(workerId: number, receiptPublicId: string) {
+    const r = await this.salaryReceiptRepo.findOne({ where: { publicId: receiptPublicId, workerId } });
+    if (!r) throw new NotFoundException('Salary receipt not found');
+    if (r.status !== 'PENDING') throw new BadRequestException('Only a pending receipt can be cancelled');
+    r.status = 'CANCELLED';
+    return this.mapSalaryReceipt(await this.salaryReceiptRepo.save(r));
   }
 
   async listAllSalaryReceiptsForEmployer(userId: number) {
@@ -458,6 +503,34 @@ export class WorkersService {
     const worker = await this.workerRepo.findOne({ where: { publicId } });
     if (!worker) throw new NotFoundException('Worker not found');
     return worker.id;
+  }
+
+  /**
+   * Resolve a worker the caller is actually entitled to. The salary routes used
+   * resolvePublicId, which checks nothing, so any employer holding another
+   * company's worker UUID could read, reprice, issue and delete their payroll.
+   */
+  async resolveOwnedWorkerId(publicId: string, actor: { id: number }): Promise<number> {
+    const workerId = await this.resolvePublicId(publicId);
+    const user = await this.userRepo.findOne({
+      where: { id: actor?.id },
+      relations: ['role'],
+    });
+    if (!user) throw new ForbiddenException('Not authenticated');
+    if (user.role?.value === UserRole.Admin) return workerId;
+
+    const eu = await this.employerUserRepo.findOne({
+      where: { user: { id: actor.id } },
+      relations: ['employer'],
+    });
+    const employerId = eu?.employer?.id;
+    if (!employerId) throw new ForbiddenException('Not an employer');
+
+    const link = await this.employerWorkerRepo.findOne({
+      where: { worker: { id: workerId }, employer: { id: employerId } },
+    });
+    if (!link) throw new ForbiddenException('You do not have access to this worker');
+    return workerId;
   }
 
   // Worker names live on the workers_users junction, NOT worker.user_id (that

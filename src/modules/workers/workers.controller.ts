@@ -173,8 +173,8 @@ export class WorkersController {
   @Get(':id/salary-config')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer, UserRole.Admin)
-  async getSalaryConfig(@Param('id', ParseUUIDPipe) id: string) {
-    const numericId = await this.workersService.resolvePublicId(id);
+  async getSalaryConfig(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
     return this.workersService.getWorkerSalaryConfig(numericId);
   }
 
@@ -184,16 +184,17 @@ export class WorkersController {
   async updateSalaryConfig(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { fixedAmount?: number | null; hoursLabel?: string; hourRate?: number | null },
+    @Req() req,
   ) {
-    const numericId = await this.workersService.resolvePublicId(id);
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
     return this.workersService.updateWorkerSalaryConfig(numericId, body);
   }
 
   @Get(':id/salaries')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.Employer, UserRole.Admin)
-  async listSalaries(@Param('id', ParseUUIDPipe) id: string) {
-    const numericId = await this.workersService.resolvePublicId(id);
+  async listSalaries(@Param('id', ParseUUIDPipe) id: string, @Req() req) {
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
     return this.workersService.listSalaryReceipts(numericId);
   }
 
@@ -204,8 +205,9 @@ export class WorkersController {
     @Param('id', ParseUUIDPipe) id: string,
     @Query('periodStart') periodStart: string,
     @Query('periodEnd') periodEnd: string,
+    @Req() req,
   ) {
-    const numericId = await this.workersService.resolvePublicId(id);
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
     return this.workersService.getWorkerSalaryPreview(numericId, periodStart, periodEnd);
   }
 
@@ -217,7 +219,7 @@ export class WorkersController {
     @Body() body: any,
     @Req() req,
   ) {
-    const numericId = await this.workersService.resolvePublicId(id);
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
     return this.workersService.createSalaryReceipt(numericId, body, req.user?.id);
   }
 
@@ -227,10 +229,35 @@ export class WorkersController {
   async deleteSalary(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('salaryId', ParseUUIDPipe) salaryId: string,
+    @Req() req,
   ) {
-    const numericId = await this.workersService.resolvePublicId(id);
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
     await this.workersService.deleteSalaryReceipt(numericId, salaryId);
     return { isSuccess: true };
+  }
+
+  @Post(':id/salaries/:salaryId/mark-paid')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async markSalaryPaid(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('salaryId', ParseUUIDPipe) salaryId: string,
+    @Req() req,
+  ) {
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
+    return this.workersService.markSalaryReceiptPaid(numericId, salaryId);
+  }
+
+  @Post(':id/salaries/:salaryId/cancel')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async cancelSalary(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('salaryId', ParseUUIDPipe) salaryId: string,
+    @Req() req,
+  ) {
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
+    return this.workersService.cancelSalaryReceipt(numericId, salaryId);
   }
 
   @Get(':id/salaries/:salaryId/pdf')
@@ -240,8 +267,9 @@ export class WorkersController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('salaryId', ParseUUIDPipe) salaryId: string,
     @Res() res: Response,
+    @Req() req,
   ) {
-    const numericId = await this.workersService.resolvePublicId(id);
+    const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
     const { buffer, fileName } = await this.workersService.renderSalaryReceiptPdf(numericId, salaryId);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
