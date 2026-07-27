@@ -26,6 +26,7 @@ import { WorkerDocument } from './entities/worker-document.entity';
 import { SalaryReceipt } from './entities/salary-receipt.entity';
 import { SalaryReceiptLine } from './entities/salary-receipt-line.entity';
 import { PaymentMethod } from '../../shared/entities/payment-method.entity';
+import { AttendancePolicyService } from '../attendance-policy/attendance-policy.service';
 import { In } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { EmailService } from '../../common/services/email.service';
@@ -64,6 +65,7 @@ export class WorkersService {
     private salaryReceiptLineRepo: Repository<SalaryReceiptLine>,
     @InjectRepository(PaymentMethod)
     private paymentMethodRepo: Repository<PaymentMethod>,
+    private attendancePolicies: AttendancePolicyService,
     @InjectRepository(EmployerUser)
     private employerUserRepo: Repository<EmployerUser>,
   ) {}
@@ -183,7 +185,7 @@ export class WorkersService {
 
   /** Sessions in the period that no receipt has paid for yet. */
   private billableSessionSql = `
-    SELECT id, total_work_minutes
+    SELECT id, total_work_minutes, overtime_minutes, overtime_status, overtime_compensation
       FROM work_sessions
      WHERE worker_id = $1
        AND check_in_time >= $2
@@ -192,15 +194,53 @@ export class WorkersService {
        AND (review_status IS NULL OR review_status = 'CONFIRMED')
        AND salary_receipt_id IS NULL`;
 
+  /**
+   * What the period owes, split the way the payslip has to show it.
+   *
+   * Overtime approved for pay is its own concept at its own rate; overtime
+   * taken as rest is not paid at all, because the worker is given the time
+   * back instead. Rejected overtime falls back into ordinary hours — refusing
+   * to treat time as overtime does not make it unworked.
+   */
   private async billableSessions(
     manager: EntityManager | DataSource,
     workerId: number,
     periodStart: string,
     periodEnd: string,
-  ): Promise<{ ids: number[]; hours: number }> {
+  ): Promise<{
+    ids: number[];
+    hours: number;
+    ordinaryHours: number;
+    paidOvertimeHours: number;
+    restOvertimeHours: number;
+    pendingCount: number;
+  }> {
     const rows = await manager.query(this.billableSessionSql, [workerId, periodStart, periodEnd]);
-    const minutes = rows.reduce((sum: number, r: any) => sum + Number(r.total_work_minutes || 0), 0);
-    return { ids: rows.map((r: any) => Number(r.id)), hours: Math.round((minutes / 60) * 100) / 100 };
+    const h = (mins: number) => Math.round((mins / 60) * 100) / 100;
+
+    let worked = 0;
+    let paidOt = 0;
+    let restOt = 0;
+    let pendingCount = 0;
+    for (const r of rows) {
+      worked += Number(r.total_work_minutes || 0);
+      const ot = Number(r.overtime_minutes || 0);
+      if (!ot) continue;
+      if (r.overtime_status === 'PENDING') pendingCount++;
+      else if (r.overtime_status === 'APPROVED') {
+        if (r.overtime_compensation === 'PAID') paidOt += ot;
+        else restOt += ot;
+      }
+    }
+
+    return {
+      ids: rows.map((r: any) => Number(r.id)),
+      hours: h(worked),
+      ordinaryHours: h(worked - paidOt - restOt),
+      paidOvertimeHours: h(paidOt),
+      restOvertimeHours: h(restOt),
+      pendingCount,
+    };
   }
 
   private async workedHoursForWorker(workerId: number, periodStart: string, periodEnd: string): Promise<number> {
@@ -324,15 +364,46 @@ export class WorkersService {
     // form previewed can be stale, and nothing stops a caller posting any
     // number at all.
     const billable = await this.billableSessions(manager, workerId, body.periodStart!, body.periodEnd!);
-    const hoursQty = body.hoursQty != null ? this.num(body.hoursQty) : billable.hours;
-    if (hoursQty > billable.hours) {
+
+    // Payroll must not run past an undecided question. The employer has the
+    // overtime queue to settle these, and the answer changes what is owed.
+    if (billable.pendingCount > 0) {
       throw new BadRequestException(
-        `Only ${billable.hours} unbilled hours are recorded for this period. ` +
-          `To pay more than the clock recorded, add it as a separate concept.`,
+        `${billable.pendingCount} session${billable.pendingCount === 1 ? '' : 's'} in this period ` +
+          `${billable.pendingCount === 1 ? 'has' : 'have'} overtime waiting for a decision. ` +
+          `Settle it before issuing the receipt.`,
+      );
+    }
+
+    // Overtime paid in money is its own concept at its own rate, as Art. 35.5
+    // requires it to be distinguishable. Overtime taken as rest is not paid.
+    const policy = await this.attendancePolicies.resolveForEmployer(employerId);
+    const otRate = Math.round(hourRate * Number(policy.overtimeRateMultiplier || 1) * 100) / 100;
+    const otAmount = Math.round(billable.paidOvertimeHours * otRate * 100) / 100;
+
+    const hoursQty = body.hoursQty != null ? this.num(body.hoursQty) : billable.ordinaryHours;
+    if (hoursQty > billable.ordinaryHours) {
+      throw new BadRequestException(
+        `Only ${billable.ordinaryHours} unbilled ordinary hours are recorded for this period` +
+          (billable.paidOvertimeHours
+            ? ` (plus ${billable.paidOvertimeHours} h of overtime, billed separately).`
+            : '.') +
+          ` To pay more than the clock recorded, add it as a separate concept.`,
       );
     }
     const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
-    const total = Math.round(((fixedAmount ?? 0) + hoursAmount + extraTotal) * 100) / 100;
+
+    if (billable.paidOvertimeHours > 0) {
+      extraLines.push({
+        description: `Horas extra (x${Number(policy.overtimeRateMultiplier || 1)})`,
+        quantity: String(billable.paidOvertimeHours),
+        unitPrice: String(otRate),
+        lineTotal: String(otAmount),
+        sortOrder: extraLines.length,
+      });
+    }
+    const totalExtra = extraTotal + otAmount;
+    const total = Math.round(((fixedAmount ?? 0) + hoursAmount + totalExtra) * 100) / 100;
     if (total < 0 || hoursQty < 0 || hourRate < 0) {
       throw new BadRequestException('A salary receipt cannot be negative. Issue a credit note instead.');
     }
@@ -353,7 +424,7 @@ export class WorkersService {
       fixedAmount: fixedAmount == null ? null : String(fixedAmount),
       hoursLabel: body.hoursLabel || worker.salaryHoursLabel || 'Horas de trabajo',
       hoursQty: String(hoursQty),
-      computedHoursQty: String(billable.hours),
+      computedHoursQty: String(billable.ordinaryHours),
       hourRate: String(hourRate),
       hoursAmount: String(hoursAmount),
       total: String(total),

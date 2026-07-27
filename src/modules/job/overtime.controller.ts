@@ -20,6 +20,13 @@ export class OvertimeController {
     return { message: 'Success', data: { count }, isSuccess: true };
   }
 
+  /** The caller's own overtime for a year. Workers only. */
+  @Get('mine')
+  async mine(@Query('year') year: string, @Req() req) {
+    const data = await this.service.mine(req.user.id, year ? Number(year) : undefined);
+    return { message: 'Success', data, isSuccess: true };
+  }
+
   /** A worker's approved overtime for a year, against the cap. */
   @Get('worker/:workerPublicId/annual')
   async annual(

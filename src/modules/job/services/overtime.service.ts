@@ -156,6 +156,48 @@ export class OvertimeService {
     return this.annualTotal(w.id, year || new Date().getFullYear(), policy.overtimeAnnualCapHours);
   }
 
+  /**
+   * A worker's own overtime for a year: the running total against the cap and
+   * the sessions behind it. Read-only — the worker sees, the employer decides.
+   */
+  async mine(userId: number, year?: number) {
+    const wu = await this.workerUserRepo.findOne({ where: { userId } });
+    if (!wu?.workerId) throw new ForbiddenException('Not a worker');
+    const y = year || new Date().getFullYear();
+
+    const [emp] = await this.dataSource.query(
+      `SELECT "employerId" FROM "employerWorkers" WHERE "workerId" = $1 LIMIT 1`,
+      [wu.workerId],
+    );
+    const policy = await this.policies.resolveForEmployer(emp?.employerId ?? null);
+    const total = await this.annualTotal(wu.workerId, y, policy.overtimeAnnualCapHours);
+
+    const sessions = await this.dataSource.query(
+      `SELECT ws.public_id AS "publicId", ws.check_in_time AS "checkInTime",
+              ws.check_out_time AS "checkOutTime", ws.overtime_minutes AS "overtimeMinutes",
+              ws.overtime_status AS "overtimeStatus",
+              ws.overtime_compensation AS "overtimeCompensation",
+              j."jobName" AS "jobName"
+         FROM work_sessions ws JOIN job j ON j.id = ws.job_id
+        WHERE ws.worker_id = $1
+          AND ws.overtime_minutes > 0
+          AND ws.check_in_time >= make_date($2, 1, 1)
+          AND ws.check_in_time < make_date($2 + 1, 1, 1)
+        ORDER BY ws.check_in_time DESC`,
+      [wu.workerId, y],
+    );
+
+    const pendingMinutes = sessions
+      .filter((r: any) => r.overtimeStatus === 'PENDING')
+      .reduce((sum: number, r: any) => sum + Number(r.overtimeMinutes || 0), 0);
+
+    return {
+      ...total,
+      pendingHours: Math.round((pendingMinutes / 60) * 100) / 100,
+      sessions,
+    };
+  }
+
   /** Refuse the overtime. The attendance record is untouched either way. */
   async reject(publicId: string, userId: number): Promise<WorkSession> {
     const session = await this.loadOwned(publicId, userId);

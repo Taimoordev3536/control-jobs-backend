@@ -17,6 +17,7 @@ import { Client } from '../clients/entities/client.entity';
 import { Job } from '../job/entities/job.entity';
 import { CommonModule } from '../../common/common.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
+import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
       PaymentMethod,
     ]),
     CommonModule,
+    AttendancePolicyModule,
     CloudinaryModule,
   ],
   controllers: [WorkersController],
