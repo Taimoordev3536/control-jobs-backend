@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Worker } from './worker.entity';
+import { PaymentMethod } from '../../../shared/entities/payment-method.entity';
 
 @Entity('cjobs_salary_receipts')
 export class SalaryReceipt {
@@ -65,6 +66,13 @@ export class SalaryReceipt {
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   notes: string | null;
+
+  @Column({ name: 'payment_method_id', nullable: true })
+  paymentMethodId: number | null;
+
+  @ManyToOne(() => PaymentMethod, { nullable: true })
+  @JoinColumn({ name: 'payment_method_id' })
+  paymentMethod?: PaymentMethod | null;
 
   @Column({ name: 'uploaded_by_user_id', nullable: true })
   uploadedByUserId: number | null;

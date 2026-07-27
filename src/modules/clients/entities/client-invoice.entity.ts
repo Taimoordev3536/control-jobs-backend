@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Client } from './client.entity';
+import { PaymentMethod } from '../../../shared/entities/payment-method.entity';
 
 @Entity('cjobs_client_invoices')
 export class ClientInvoice {
@@ -89,4 +90,11 @@ export class ClientInvoice {
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
+  @Column({ name: 'payment_method_id', nullable: true })
+  paymentMethodId: number | null;
+
+  @ManyToOne(() => PaymentMethod, { nullable: true })
+  @JoinColumn({ name: 'payment_method_id' })
+  paymentMethod?: PaymentMethod | null;
+
 }

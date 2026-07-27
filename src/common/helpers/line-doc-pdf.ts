@@ -34,6 +34,13 @@ export interface ServiceDetail {
   notes?: string | null;
 }
 
+/** PENDING is the default state and is not stamped. */
+const STATUS_STAMP: Record<string, { label: string; color: string }> = {
+  PAID: { label: 'PAGADA', color: '#16a34a' },
+  CANCELLED: { label: 'ANULADA', color: '#9ca3af' },
+  OVERDUE: { label: 'VENCIDA', color: '#ef4444' },
+};
+
 export interface LineDocParams {
   docType: string;
   number: string;
@@ -50,6 +57,8 @@ export interface LineDocParams {
   total: number;
   showVat: boolean;
   serviceDetail?: ServiceDetail;
+  status?: string | null;
+  paymentMethod?: string | null;
 }
 
 const fmtEur = (n: number | string) => {
@@ -65,19 +74,30 @@ const fmtDateEs = (iso: string | Date | null | undefined): string => {
   return `${m[3]}/${m[2]}/${m[1]}`;
 };
 
-export function renderLineDocPdf(params: LineDocParams): Promise<Buffer> {
-  const MARGIN = 48;
+function drawStatusStamp(doc: any, status: string, cx: number, cy: number): void {
+  const stamp = STATUS_STAMP[status];
+  if (!stamp) return;
+  doc.save();
+  doc.fillOpacity(0.7).strokeOpacity(0.7);
+  doc.rotate(-18, { origin: [cx, cy] });
+  doc.fontSize(26).font('Helvetica-Bold').fillColor(stamp.color);
+  const textW = doc.widthOfString(stamp.label);
+  const boxW = textW + 28;
+  doc.lineWidth(3).strokeColor(stamp.color);
+  doc.roundedRect(cx - boxW / 2, cy - 21, boxW, 42, 4).stroke();
+  doc.text(stamp.label, cx - textW / 2, cy - 13, { lineBreak: false });
+  doc.restore();
+  doc.fillOpacity(1).strokeOpacity(1);
+}
+
+const MARGIN = 48;
+
+/** Draws one document onto an open PDF. Callers own the page break. */
+function drawLineDoc(doc: any, params: LineDocParams): void {
   const PURPLE = '#662D91';
   const TEXT_DARK = '#222222';
   const TEXT_MUTED = '#666666';
   const BORDER = '#dddddd';
-
-  const doc = new PDFDocument({ size: 'A4', margin: MARGIN });
-  const chunks: Buffer[] = [];
-  doc.on('data', (c: Buffer) => chunks.push(c));
-  const done = new Promise<Buffer>((resolve) => {
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-  });
 
   const PAGE_WIDTH = doc.page.width;
   const CONTENT_WIDTH = PAGE_WIDTH - 2 * MARGIN;
@@ -106,6 +126,7 @@ export function renderLineDocPdf(params: LineDocParams): Promise<Buffer> {
   metaRow('Nº', params.number);
   metaRow('Fecha', fmtDateEs(params.issueDate));
   metaRow('Periodo', `${fmtDateEs(params.periodStart)} - ${fmtDateEs(params.periodEnd)}`);
+  if (params.paymentMethod) metaRow('Forma de pago', params.paymentMethod);
 
   let rightY = MARGIN + 18;
   doc.fontSize(22).fillColor(TEXT_DARK).font('Helvetica-Bold');
@@ -178,6 +199,10 @@ export function renderLineDocPdf(params: LineDocParams): Promise<Buffer> {
   doc.text('Total', boxX + padX, y + 7, { width: labelW });
   doc.text(fmtEur(params.total), boxX + boxW / 2, y + 7, { width: valW, align: 'right' });
 
+  if (params.status) {
+    drawStatusStamp(doc, String(params.status).toUpperCase(), MARGIN + 120, y - 40);
+  }
+
   if (params.serviceDetail) {
     const d = params.serviceDetail;
     doc.addPage();
@@ -247,7 +272,32 @@ export function renderLineDocPdf(params: LineDocParams): Promise<Buffer> {
       doc.text(d.notes, MARGIN, dy, { width: CONTENT_WIDTH });
     }
   }
+}
 
+export function renderLineDocPdf(params: LineDocParams): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margin: MARGIN });
+  const done = collect(doc);
+  drawLineDoc(doc, params);
   doc.end();
   return done;
+}
+
+/** One PDF holding several documents, each starting on its own page. */
+export function renderLineDocsPdf(list: LineDocParams[]): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margin: MARGIN });
+  const done = collect(doc);
+  list.forEach((params, i) => {
+    if (i > 0) doc.addPage();
+    drawLineDoc(doc, params);
+  });
+  doc.end();
+  return done;
+}
+
+function collect(doc: any): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  doc.on('data', (c: Buffer) => chunks.push(c));
+  return new Promise<Buffer>((resolve) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+  });
 }

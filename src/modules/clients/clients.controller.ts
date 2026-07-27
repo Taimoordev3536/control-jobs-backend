@@ -15,6 +15,7 @@ import {
   UseInterceptors,
   UploadedFile,
   Request,
+  BadRequestException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -277,6 +278,22 @@ export class ClientsController {
   ) {
     const clientId = await this.clientsService.resolveOwnedClientId(id, req.user);
     return this.clientsService.cancelClientInvoice(clientId, invoiceId);
+  }
+
+  @Post('invoices/bulk-pdf')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async invoicesBulkPdf(
+    @Body() body: { publicIds?: string[] },
+    @Res() res: Response,
+    @Req() req,
+  ) {
+    const ids = Array.isArray(body?.publicIds) ? body.publicIds : [];
+    if (!ids.length) throw new BadRequestException('publicIds is required');
+    const buffer = await this.clientsService.renderClientInvoicesPdf(req.user, ids);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="facturas.pdf"');
+    res.send(buffer);
   }
 
   @Get(':id/invoices/:invoiceId/pdf')

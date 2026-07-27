@@ -6,6 +6,8 @@ import { Worker } from './entities/worker.entity';
 import { WorkerUser } from './entities/worker-user.entity';
 import { WorkerDocument } from './entities/worker-document.entity';
 import { SalaryReceipt } from './entities/salary-receipt.entity';
+import { SalaryReceiptLine } from './entities/salary-receipt-line.entity';
+import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { User } from '../users/entities/user.entity';
 import { Role } from '../users/entities/role.entity';
 import { Employer } from '../employers/entities/employer.entity';
@@ -30,6 +32,8 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
       Job,
       WorkerDocument,
       SalaryReceipt,
+      SalaryReceiptLine,
+      PaymentMethod,
     ]),
     CommonModule,
     CloudinaryModule,

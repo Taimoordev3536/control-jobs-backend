@@ -5,6 +5,8 @@ import { ClientsService } from './clients.service';
 import { Client } from './entities/client.entity';
 import { ClientFile } from './entities/client-file.entity';
 import { ClientInvoice } from './entities/client-invoice.entity';
+import { ClientInvoiceLine } from './entities/client-invoice-line.entity';
+import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { ClientUser } from './entities/client-user.entity';
 import { User } from '../users/entities/user.entity';
 import { Role } from '../users/entities/role.entity';
@@ -16,7 +18,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Client, ClientFile, ClientInvoice, ClientUser, User, Role, Employer, EmployerClient, EmployerUser]),
+    TypeOrmModule.forFeature([Client, ClientFile, ClientInvoice, ClientInvoiceLine, PaymentMethod, ClientUser, User, Role, Employer, EmployerClient, EmployerUser]),
     CommonModule,
     CloudinaryModule,
   ],

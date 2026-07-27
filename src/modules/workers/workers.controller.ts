@@ -16,6 +16,7 @@ import {
   UseInterceptors,
   UploadedFile,
   Request,
+  BadRequestException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -258,6 +259,22 @@ export class WorkersController {
   ) {
     const numericId = await this.workersService.resolveOwnedWorkerId(id, req.user);
     return this.workersService.cancelSalaryReceipt(numericId, salaryId);
+  }
+
+  @Post('salaries/bulk-pdf')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer, UserRole.Admin)
+  async salariesBulkPdf(
+    @Body() body: { publicIds?: string[] },
+    @Res() res: Response,
+    @Req() req,
+  ) {
+    const ids = Array.isArray(body?.publicIds) ? body.publicIds : [];
+    if (!ids.length) throw new BadRequestException('publicIds is required');
+    const buffer = await this.workersService.renderSalaryReceiptsPdf(req.user, ids);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="recibos.pdf"');
+    res.send(buffer);
   }
 
   @Get(':id/salaries/:salaryId/pdf')

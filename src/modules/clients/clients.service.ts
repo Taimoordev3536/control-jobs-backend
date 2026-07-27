@@ -6,6 +6,8 @@ import { Repository, DataSource } from 'typeorm';
 import { Client } from './entities/client.entity';
 import { ClientFile } from './entities/client-file.entity';
 import { ClientInvoice } from './entities/client-invoice.entity';
+import { ClientInvoiceLine } from './entities/client-invoice-line.entity';
+import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { ClientUser } from './entities/client-user.entity';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { AssignClientUserDto } from './dto/assign-client-user.dto';
@@ -21,7 +23,7 @@ import * as bcrypt from 'bcryptjs';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { randomBytes } from 'crypto';
 import { EmailService } from '../../common/services/email.service';
-import { renderLineDocPdf, DocLine } from '../../common/helpers/line-doc-pdf';
+import { renderLineDocPdf, renderLineDocsPdf, DocLine, LineDocParams } from '../../common/helpers/line-doc-pdf';
 import { In } from 'typeorm';
 
 @Injectable()
@@ -31,6 +33,10 @@ export class ClientsService {
     private clientRepo: Repository<Client>,
     @InjectRepository(ClientFile)
     private clientFileRepo: Repository<ClientFile>,
+    @InjectRepository(ClientInvoiceLine)
+    private clientInvoiceLineRepo: Repository<ClientInvoiceLine>,
+    @InjectRepository(PaymentMethod)
+    private paymentMethodRepo: Repository<PaymentMethod>,
     @InjectRepository(ClientInvoice)
     private clientInvoiceRepo: Repository<ClientInvoice>,
     @InjectRepository(ClientUser)
@@ -344,6 +350,8 @@ export class ClientsService {
       vatPct?: number;
       status?: string;
       notes?: string;
+      paymentMethodId?: number | null;
+      lines?: { description: string; quantity?: number; unitPrice: number }[];
     },
     userId: number | undefined,
   ) {
@@ -362,7 +370,21 @@ export class ClientsService {
     const hoursQty = this.num(body.hoursQty);
     const hourRate = this.num(body.hourRate);
     const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
-    const subtotal = Math.round(((fixedAmount ?? 0) + hoursAmount) * 100) / 100;
+    const extraLines = (body.lines || [])
+      .filter((l) => l?.description?.trim())
+      .map((l, i) => {
+        const quantity = l.quantity != null ? this.num(l.quantity) : 1;
+        const unitPrice = this.num(l.unitPrice);
+        return {
+          description: l.description.trim().slice(0, 500),
+          quantity: String(quantity),
+          unitPrice: String(unitPrice),
+          lineTotal: String(Math.round(quantity * unitPrice * 100) / 100),
+          sortOrder: i,
+        };
+      });
+    const extraTotal = extraLines.reduce((sum, l) => sum + Number(l.lineTotal), 0);
+    const subtotal = Math.round(((fixedAmount ?? 0) + hoursAmount + extraTotal) * 100) / 100;
     const vatPct = this.num(body.vatPct);
     const vatAmount = Math.round(subtotal * (vatPct / 100) * 100) / 100;
     const total = Math.round((subtotal + vatAmount) * 100) / 100;
@@ -397,9 +419,16 @@ export class ClientsService {
       total: String(total),
       status: 'PENDING',
       notes: body.notes || null,
+      paymentMethodId: body.paymentMethodId ?? null,
       uploadedByUserId: userId || null,
     });
       const saved = await manager.save(ClientInvoice, rec);
+      if (extraLines.length) {
+        await manager.save(
+          ClientInvoiceLine,
+          extraLines.map((l) => manager.create(ClientInvoiceLine, { ...l, invoiceId: saved.id })),
+        );
+      }
       return this.mapInvoice(saved);
     });
   }
@@ -467,16 +496,60 @@ export class ClientsService {
   async renderClientInvoicePdf(clientId: number, invoicePublicId: string): Promise<{ buffer: Buffer; fileName: string }> {
     const inv = await this.clientInvoiceRepo.findOne({ where: { publicId: invoicePublicId, clientId } });
     if (!inv) throw new NotFoundException('Invoice not found');
+    const buffer = await renderLineDocPdf(await this.buildClientInvoiceDoc(inv));
+    return { buffer, fileName: `${inv.invoiceNumber}.pdf` };
+  }
+
+  /**
+   * One PDF holding several invoices. Each is re-checked against the caller's
+   * employer, so an id from another company is simply skipped.
+   */
+  async renderClientInvoicesPdf(actor: { id: number }, publicIds: string[]): Promise<Buffer> {
+    const employerId = await this.resolveActorEmployerId(actor);
+    const invoices = await this.clientInvoiceRepo.find({
+      where: employerId === null ? { publicId: In(publicIds) } : { publicId: In(publicIds), employerId },
+      order: { invoiceNumber: 'ASC' },
+    });
+    if (!invoices.length) throw new NotFoundException('No invoices found');
+    const docs = [];
+    for (const inv of invoices) docs.push(await this.buildClientInvoiceDoc(inv));
+    return renderLineDocsPdf(docs);
+  }
+
+  /** Employer the actor belongs to; null for an admin, who sees everything. */
+  private async resolveActorEmployerId(actor: { id: number }): Promise<number | null> {
+    const user = await this.userRepo.findOne({ where: { id: actor?.id }, relations: ['role'] });
+    if (!user) throw new ForbiddenException('Not authenticated');
+    if (user.role?.value === UserRole.Admin) return null;
+    const eu = await this.employerUserRepo.findOne({ where: { user: { id: actor.id } }, relations: ['employer'] });
+    if (!eu?.employer?.id) throw new ForbiddenException('Not an employer');
+    return eu.employer.id;
+  }
+
+  private async buildClientInvoiceDoc(inv: ClientInvoice): Promise<LineDocParams> {
+    const clientId = inv.clientId;
     const client = await this.clientRepo.findOne({ where: { id: clientId } });
     const employer: any = await this.employerRepo.findOne({ where: { id: inv.employerId } });
+
+    const extra = await this.clientInvoiceLineRepo.find({
+      where: { invoiceId: inv.id },
+      order: { sortOrder: 'ASC', id: 'ASC' },
+    });
 
     const lines: DocLine[] = [];
     if (inv.fixedAmount != null) {
       lines.push({ description: inv.fixedLabel, quantity: 1, unitPrice: Number(inv.fixedAmount), amount: Number(inv.fixedAmount) });
     }
     lines.push({ description: inv.hoursLabel, quantity: Number(inv.hoursQty), unitPrice: Number(inv.hourRate), amount: Number(inv.hoursAmount) });
+    for (const l of extra) {
+      lines.push({ description: l.description, quantity: Number(l.quantity), unitPrice: Number(l.unitPrice), amount: Number(l.lineTotal) });
+    }
 
-    const buffer = await renderLineDocPdf({
+    const method = inv.paymentMethodId
+      ? await this.paymentMethodRepo.findOne({ where: { id: inv.paymentMethodId } })
+      : null;
+
+    return {
       docType: 'FACTURA',
       number: inv.invoiceNumber,
       issueDate: inv.issueDate,
@@ -499,6 +572,8 @@ export class ClientsService {
       vatAmount: Number(inv.vatAmount),
       total: Number(inv.total),
       showVat: true,
+      status: inv.status,
+      paymentMethod: method?.name || null,
       serviceDetail: {
         periodStart: inv.periodStart,
         periodEnd: inv.periodEnd,
@@ -521,6 +596,13 @@ export class ClientsService {
             unitPrice: Number(inv.hourRate),
             amount: Number(inv.hoursAmount),
           },
+          ...extra.map((l) => ({
+            concept: l.description,
+            detail: null,
+            quantity: String(Number(l.quantity)),
+            unitPrice: Number(l.unitPrice),
+            amount: Number(l.lineTotal),
+          })),
         ],
         subtotal: Number(inv.subtotal),
         vatPct: Number(inv.vatPct),
@@ -529,8 +611,7 @@ export class ClientsService {
         showVat: true,
         notes: inv.notes,
       },
-    });
-    return { buffer, fileName: `${inv.invoiceNumber}.pdf` };
+    };
   }
 
   async clearLogo(id: number): Promise<BaseResponse<null>> {

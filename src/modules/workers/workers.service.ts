@@ -24,10 +24,12 @@ import { Client } from '../clients/entities/client.entity';
 import { Job } from '../job/entities/job.entity';
 import { WorkerDocument } from './entities/worker-document.entity';
 import { SalaryReceipt } from './entities/salary-receipt.entity';
+import { SalaryReceiptLine } from './entities/salary-receipt-line.entity';
+import { PaymentMethod } from '../../shared/entities/payment-method.entity';
 import { In } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { EmailService } from '../../common/services/email.service';
-import { renderLineDocPdf, DocLine } from '../../common/helpers/line-doc-pdf';
+import { renderLineDocPdf, renderLineDocsPdf, DocLine, LineDocParams } from '../../common/helpers/line-doc-pdf';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { DocumentNumberService } from '../../common/services/document-number.service';
 
@@ -58,6 +60,10 @@ export class WorkersService {
     private workerDocumentRepo: Repository<WorkerDocument>,
     @InjectRepository(SalaryReceipt)
     private salaryReceiptRepo: Repository<SalaryReceipt>,
+    @InjectRepository(SalaryReceiptLine)
+    private salaryReceiptLineRepo: Repository<SalaryReceiptLine>,
+    @InjectRepository(PaymentMethod)
+    private paymentMethodRepo: Repository<PaymentMethod>,
     @InjectRepository(EmployerUser)
     private employerUserRepo: Repository<EmployerUser>,
   ) {}
@@ -273,6 +279,8 @@ export class WorkersService {
       hourRate?: number;
       status?: string;
       notes?: string;
+      paymentMethodId?: number | null;
+      lines?: { description: string; quantity?: number; unitPrice: number }[];
     },
     userId: number | undefined,
   ) {
@@ -287,7 +295,21 @@ export class WorkersService {
     const hoursQty = this.num(body.hoursQty);
     const hourRate = this.num(body.hourRate);
     const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
-    const total = Math.round(((fixedAmount ?? 0) + hoursAmount) * 100) / 100;
+    const extraLines = (body.lines || [])
+      .filter((l) => l?.description?.trim())
+      .map((l, i) => {
+        const quantity = l.quantity != null ? this.num(l.quantity) : 1;
+        const unitPrice = this.num(l.unitPrice);
+        return {
+          description: l.description.trim().slice(0, 500),
+          quantity: String(quantity),
+          unitPrice: String(unitPrice),
+          lineTotal: String(Math.round(quantity * unitPrice * 100) / 100),
+          sortOrder: i,
+        };
+      });
+    const extraTotal = extraLines.reduce((sum, l) => sum + Number(l.lineTotal), 0);
+    const total = Math.round(((fixedAmount ?? 0) + hoursAmount + extraTotal) * 100) / 100;
 
     if (total < 0 || hoursQty < 0 || hourRate < 0) {
       throw new BadRequestException('A salary receipt cannot be negative. Issue a credit note instead.');
@@ -315,9 +337,16 @@ export class WorkersService {
       total: String(total),
       status: 'PENDING',
       notes: body.notes || null,
+      paymentMethodId: body.paymentMethodId ?? null,
       uploadedByUserId: userId || null,
     });
       const saved = await manager.save(SalaryReceipt, rec);
+      if (extraLines.length) {
+        await manager.save(
+          SalaryReceiptLine,
+          extraLines.map((l) => manager.create(SalaryReceiptLine, { ...l, receiptId: saved.id })),
+        );
+      }
       return this.mapSalaryReceipt(saved);
     });
   }
@@ -387,17 +416,61 @@ export class WorkersService {
   async renderSalaryReceiptPdf(workerId: number, receiptPublicId: string): Promise<{ buffer: Buffer; fileName: string }> {
     const r = await this.salaryReceiptRepo.findOne({ where: { publicId: receiptPublicId, workerId } });
     if (!r) throw new NotFoundException('Salary receipt not found');
+    const buffer = await renderLineDocPdf(await this.buildSalaryReceiptDoc(r));
+    return { buffer, fileName: `${r.receiptNumber}.pdf` };
+  }
+
+  /**
+   * One PDF holding several receipts. Every receipt is re-checked against the
+   * caller's employer, so a public id from another company is simply skipped.
+   */
+  async renderSalaryReceiptsPdf(actor: { id: number }, publicIds: string[]): Promise<Buffer> {
+    const employerId = await this.resolveActorEmployerId(actor);
+    const receipts = await this.salaryReceiptRepo.find({
+      where: employerId === null ? { publicId: In(publicIds) } : { publicId: In(publicIds), employerId },
+      order: { receiptNumber: 'ASC' },
+    });
+    if (!receipts.length) throw new NotFoundException('No salary receipts found');
+    const docs = [];
+    for (const r of receipts) docs.push(await this.buildSalaryReceiptDoc(r));
+    return renderLineDocsPdf(docs);
+  }
+
+  /** Employer the actor belongs to; null for an admin, who sees everything. */
+  private async resolveActorEmployerId(actor: { id: number }): Promise<number | null> {
+    const user = await this.userRepo.findOne({ where: { id: actor?.id }, relations: ['role'] });
+    if (!user) throw new ForbiddenException('Not authenticated');
+    if (user.role?.value === UserRole.Admin) return null;
+    const eu = await this.employerUserRepo.findOne({ where: { user: { id: actor.id } }, relations: ['employer'] });
+    if (!eu?.employer?.id) throw new ForbiddenException('Not an employer');
+    return eu.employer.id;
+  }
+
+  private async buildSalaryReceiptDoc(r: SalaryReceipt): Promise<LineDocParams> {
+    const workerId = r.workerId;
     const worker: any = await this.workerRepo.findOne({ where: { id: workerId }, relations: ['user'] });
     const employer: any = await this.employerRepo.findOne({ where: { id: r.employerId } });
     const workerName = (await this.resolveWorkerNames([workerId])).get(workerId);
+
+    const extra = await this.salaryReceiptLineRepo.find({
+      where: { receiptId: r.id },
+      order: { sortOrder: 'ASC', id: 'ASC' },
+    });
 
     const lines: DocLine[] = [];
     if (r.fixedAmount != null) {
       lines.push({ description: r.fixedLabel, quantity: 1, unitPrice: Number(r.fixedAmount), amount: Number(r.fixedAmount) });
     }
     lines.push({ description: r.hoursLabel, quantity: Number(r.hoursQty), unitPrice: Number(r.hourRate), amount: Number(r.hoursAmount) });
+    for (const l of extra) {
+      lines.push({ description: l.description, quantity: Number(l.quantity), unitPrice: Number(l.unitPrice), amount: Number(l.lineTotal) });
+    }
 
-    const buffer = await renderLineDocPdf({
+    const method = r.paymentMethodId
+      ? await this.paymentMethodRepo.findOne({ where: { id: r.paymentMethodId } })
+      : null;
+
+    return {
       docType: 'RECIBO DE SALARIO',
       number: r.receiptNumber,
       issueDate: r.issueDate,
@@ -417,8 +490,42 @@ export class WorkersService {
       lines,
       total: Number(r.total),
       showVat: false,
-    });
-    return { buffer, fileName: `${r.receiptNumber}.pdf` };
+      status: r.status,
+      paymentMethod: method?.name || null,
+      serviceDetail: {
+        title: 'Detalle de las horas',
+        periodStart: r.periodStart,
+        periodEnd: r.periodEnd,
+        rows: [
+          ...(r.fixedAmount != null
+            ? [{
+                concept: r.fixedLabel,
+                detail: 'Importe fijo del periodo',
+                quantity: '1',
+                unitPrice: Number(r.fixedAmount),
+                amount: Number(r.fixedAmount),
+              }]
+            : []),
+          {
+            concept: r.hoursLabel,
+            detail: `${Number(r.hoursQty)} h x ${Number(r.hourRate).toFixed(2).replace('.', ',')} EUR/h`,
+            quantity: `${Number(r.hoursQty)} h`,
+            unitPrice: Number(r.hourRate),
+            amount: Number(r.hoursAmount),
+          },
+          ...extra.map((l) => ({
+            concept: l.description,
+            detail: null,
+            quantity: String(Number(l.quantity)),
+            unitPrice: Number(l.unitPrice),
+            amount: Number(l.lineTotal),
+          })),
+        ],
+        total: Number(r.total),
+        showVat: false,
+        notes: r.notes,
+      },
+    };
   }
 
   // Workers connected to a client *via the jobs they are assigned to*. This
