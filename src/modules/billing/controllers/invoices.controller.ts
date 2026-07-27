@@ -182,6 +182,7 @@ export class InvoicesController {
     const isLastInvoice = await this.invoices.isLastInvoice(
       (invoice as any).invoiceNumber,
     );
+    const rectifiedBy = await this.invoices.rectifiedBy((invoice as any).id);
 
     const hideEmployer = this.access.hidesEmployer(scope);
     if (hideEmployer && context?.client) {
@@ -193,9 +194,9 @@ export class InvoicesController {
       // Strip the page-2 snapshots so Bronze/Affiliate partners can't see worksite
       // / worker names. The financial breakdown stays.
       const { workCenters: _wc, workers: _wk, ...page1 } = invoice as any;
-      return { data: { ...page1, ...context, accessLevel: 'page1Only', hideEmployer, isLastInvoice } };
+      return { data: { ...page1, ...context, accessLevel: 'page1Only', hideEmployer, isLastInvoice, rectifiedBy } };
     }
-    return { data: { ...invoice, ...context, accessLevel: 'full', hideEmployer, isLastInvoice } };
+    return { data: { ...invoice, ...context, accessLevel: 'full', hideEmployer, isLastInvoice, rectifiedBy } };
   }
 
   @Post(':publicId/payment-method')
@@ -256,6 +257,23 @@ export class InvoicesController {
     }
     await this.invoices.deleteInvoice(publicId);
     return { data: { ok: true } };
+  }
+
+  /** Issue a credit note against this invoice. Admin only. */
+  @Post(':publicId/rectify')
+  async rectify(
+    @Param('publicId') publicId: string,
+    @Body() body: { reason: string; lineIds?: number[] },
+    @Req() req,
+  ) {
+    if (!this.access.isAdmin(req.user)) {
+      throw new ForbiddenException('Only admins can issue a credit note');
+    }
+    const data = await this.invoices.rectify(publicId, {
+      reason: body?.reason,
+      lineIds: body?.lineIds,
+    });
+    return { data };
   }
 
   @Post(':publicId/mark-paid')

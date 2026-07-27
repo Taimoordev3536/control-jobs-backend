@@ -8,6 +8,7 @@ import { EntityManager } from 'typeorm';
 export const NUMBERED_DOCUMENTS = {
   salaryReceipt: { table: 'cjobs_salary_receipts', column: 'receipt_number', scope: 'employer_id', pad: 4 },
   clientInvoice: { table: 'cjobs_client_invoices', column: 'invoice_number', scope: 'employer_id', pad: 4 },
+  autofactura: { table: 'cjobs_autofacturas', column: 'autofactura_number', scope: 'partner_id', pad: 2 },
 } as const;
 
 export type NumberedDocument = keyof typeof NUMBERED_DOCUMENTS;

@@ -77,10 +77,14 @@ export class BankOperationsService {
     }
     // employer
     if (tab === 'FACTURAS') {
-      const rows = await this.clientInvoiceRepo.find({ where: { employerId: scope.employerId, periodStart: range } });
+      const rows = await this.clientInvoiceRepo.find({
+        where: { employerId: scope.employerId, periodStart: range, status: 'PENDING' as any },
+      });
       return { kind: 'COBRO' as const, items: rows, total: rows.reduce((s, r) => s + this.num(r.total), 0), refIds: rows.map((r) => r.publicId) };
     }
-    const rows = await this.salaryRepo.find({ where: { employerId: scope.employerId, periodStart: range } });
+    const rows = await this.salaryRepo.find({
+      where: { employerId: scope.employerId, periodStart: range, status: 'PENDING' as any },
+    });
     return { kind: 'PAGO' as const, items: rows, total: rows.reduce((s, r) => s + this.num(r.total), 0), refIds: rows.map((r) => r.publicId) };
   }
 
@@ -89,6 +93,26 @@ export class BankOperationsService {
     if (!periodStart || !periodEnd) throw new BadRequestException('A period is required');
     const s = await this.summarise(scope, tab, periodStart, periodEnd);
     if (!s.items.length) return null;
+
+    // The cron and the manual button can both close the same month. Refresh the
+    // open task instead of stacking a second one for the same period.
+    const existing = await this.repo.findOne({
+      where: {
+        scopeType: scope.kind === 'all' ? 'ADMIN' : 'EMPLOYER',
+        employerId: scope.kind === 'employer' ? scope.employerId! : (null as any),
+        tab,
+        periodStart,
+        periodEnd,
+        status: 'PENDING' as any,
+      },
+    });
+    if (existing) {
+      existing.itemCount = s.items.length;
+      existing.totalAmount = String(Math.round(s.total * 100) / 100);
+      existing.refIds = s.refIds;
+      return this.map(await this.repo.save(existing));
+    }
+
     const op = this.repo.create({
       scopeType: scope.kind === 'all' ? 'ADMIN' : 'EMPLOYER',
       employerId: scope.kind === 'employer' ? scope.employerId! : null,
@@ -144,6 +168,7 @@ export class BankOperationsService {
 
   async markDone(publicId: string, scope: BillingScope) {
     const o = await this.loadScoped(publicId, scope);
+    if (o.status === 'DONE') return this.map(o);
     o.status = 'DONE';
     o.doneAt = new Date();
     return this.map(await this.repo.save(o));

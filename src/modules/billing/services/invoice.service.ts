@@ -225,6 +225,68 @@ export class InvoiceService {
    * Create a manually-entered invoice or credit note (factura rectificativa)
    * from free-form lines. Totals (incl. negatives) are derived from the lines.
    */
+  /**
+   * Issue a credit note against an existing invoice.
+   *
+   * Built from the original rather than from a blank form: Spanish law
+   * (RD 1619/2012 art. 15) requires a rectificative to name the invoice it
+   * corrects and the reason, so deriving both removes any chance of the link
+   * being wrong or missing. Its own R- series keeps the two sequences apart.
+   */
+  async rectify(
+    publicId: string,
+    opts: { reason: string; lineIds?: number[] },
+  ): Promise<Invoice> {
+    const original = await this.invoiceRepo.findOne({
+      where: { publicId },
+      relations: ['lines'],
+    });
+    if (!original) throw new NotFoundException('Invoice not found');
+    if (original.invoiceType === 'RECTIFICATIVA') {
+      throw new BadRequestException('A credit note cannot itself be rectified');
+    }
+    if (!opts.reason?.trim()) {
+      throw new BadRequestException('A reason is required for a credit note');
+    }
+
+    const existing = await this.invoiceRepo.findOne({
+      where: { rectifiesInvoiceId: original.id },
+    });
+    if (existing) {
+      throw new BadRequestException(
+        `This invoice was already rectified by ${existing.invoiceNumber}`,
+      );
+    }
+
+    // Mirror the original's lines, negated. An auto invoice has no line rows,
+    // so its three tariff concepts are reconstructed.
+    const source = original.lines?.length
+      ? original.lines
+          .filter((l) => !opts.lineIds?.length || opts.lineIds.includes(l.id))
+          .map((l) => ({ description: l.description, quantity: Number(l.quantity), unitPrice: -Number(l.unitPrice) }))
+      : [
+          { description: 'Cuota fija', quantity: 1, unitPrice: -Number(original.fixedAmount || 0) },
+          { description: 'Centros de trabajo', quantity: Number(original.workcenterCount || 0), unitPrice: -Number(original.perWorkCenterRate || 0) },
+          { description: 'Trabajadores', quantity: Number(original.workerCount || 0), unitPrice: -Number(original.perWorkerRate || 0) },
+        ].filter((l) => l.quantity > 0 && l.unitPrice !== 0);
+
+    if (!source.length) {
+      throw new BadRequestException('There is nothing to rectify on this invoice');
+    }
+
+    return this.createManual({
+      employerId: original.employerId,
+      invoiceType: 'RECTIFICATIVA',
+      rectifiesInvoiceId: original.id,
+      periodStart: original.periodStart,
+      periodEnd: original.periodEnd,
+      discountPct: Number(original.discountPct || 0),
+      vatPct: Number(original.vatPct || 0),
+      remarks: `Rectifica la factura ${original.invoiceNumber}. Motivo: ${opts.reason.trim()}`,
+      lines: source,
+    } as CreateManualInvoiceDto);
+  }
+
   async createManual(dto: CreateManualInvoiceDto): Promise<Invoice> {
     const employer = await this.employerRepo.findOne({
       where: { id: dto.employerId },
@@ -260,7 +322,9 @@ export class InvoiceService {
     }
 
     const adminConfig = await this.adminConfigRepo.find({ take: 1 });
-    const series = adminConfig.length ? adminConfig[0].invoiceSeries : 'CJOBS';
+    const baseSeries = adminConfig.length ? adminConfig[0].invoiceSeries : 'CJOBS';
+    // Credit notes run in their own series, so neither sequence gets a hole.
+    const series = invoiceType === 'RECTIFICATIVA' ? `${baseSeries}-R` : baseSeries;
     const vatPct =
       dto.vatPct ??
       (adminConfig.length ? Number(adminConfig[0].vatRate) || 0 : 0);
@@ -854,6 +918,12 @@ export class InvoiceService {
 
   async markPaid(publicId: string): Promise<Invoice> {
     const invoice = await this.findByPublicId(publicId);
+    if (invoice.status === 'PAID') {
+      throw new BadRequestException('This invoice is already marked as paid');
+    }
+    if (invoice.status === 'CANCELLED') {
+      throw new BadRequestException('A cancelled invoice cannot be marked as paid');
+    }
     invoice.status = 'PAID';
     invoice.paidAt = new Date();
     return this.invoiceRepo.save(invoice);
@@ -861,6 +931,16 @@ export class InvoiceService {
 
   async cancel(publicId: string): Promise<Invoice> {
     const invoice = await this.findByPublicId(publicId);
+    if (invoice.status === 'CANCELLED') {
+      throw new BadRequestException('This invoice is already cancelled');
+    }
+    // A paid invoice is corrected with a credit note, not cancelled — the
+    // payment already happened and the books have to show it.
+    if (invoice.status === 'PAID') {
+      throw new BadRequestException(
+        'A paid invoice cannot be cancelled. Issue a credit note instead.',
+      );
+    }
     invoice.status = 'CANCELLED';
     return this.invoiceRepo.save(invoice);
   }
@@ -925,6 +1005,16 @@ export class InvoiceService {
       relations: ['workCenters', 'workers'],
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
+    // An issued invoice that has been settled or voided is a closed document;
+    // editing its amounts after the fact is what a credit note is for.
+    if (invoice.status === 'PAID' || invoice.status === 'CANCELLED') {
+      throw new BadRequestException(
+        `A ${invoice.status === 'PAID' ? 'paid' : 'cancelled'} invoice cannot be edited. Issue a credit note instead.`,
+      );
+    }
+    if (invoice.invoiceType === 'RECTIFICATIVA') {
+      throw new BadRequestException('A credit note cannot be edited');
+    }
     const employer = await this.employerRepo.findOne({ where: { id: invoice.employerId } });
 
     const ratePlan = employer?.ratePlanId
@@ -1041,11 +1131,25 @@ export class InvoiceService {
     return rows[0]?.max === invoiceNumber;
   }
 
+  /** Number of the credit note correcting this invoice, if one was issued. */
+  async rectifiedBy(invoiceId: number): Promise<string | null> {
+    const row = await this.invoiceRepo.findOne({ where: { rectifiesInvoiceId: invoiceId } });
+    return row?.invoiceNumber ?? null;
+  }
+
   async deleteInvoice(publicId: string): Promise<void> {
     const invoice = await this.invoiceRepo.findOne({ where: { publicId } });
     if (!invoice) throw new NotFoundException('Invoice not found');
     if (invoice.status !== 'PENDING') {
       throw new BadRequestException('Only pending invoices can be deleted');
+    }
+    const rectifiedBy = await this.invoiceRepo.findOne({
+      where: { rectifiesInvoiceId: invoice.id },
+    });
+    if (rectifiedBy) {
+      throw new BadRequestException(
+        `This invoice cannot be deleted: it was rectified by ${rectifiedBy.invoiceNumber}`,
+      );
     }
     if (!(await this.isLastInvoice(invoice.invoiceNumber))) {
       throw new BadRequestException(

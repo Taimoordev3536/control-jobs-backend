@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, Between, In } from 'typeorm';
+import { Repository, DataSource, EntityManager, Between, In } from 'typeorm';
 import { Autofactura } from '../entities/autofactura.entity';
 import { AutofacturaLine } from '../entities/autofactura-line.entity';
 import { AutofacturaSource } from '../entities/autofactura-source.entity';
@@ -10,7 +10,8 @@ import { Employer } from '../../employers/entities/employer.entity';
 import { AdminUser } from '../../users/entities/admin-user.entity';
 import { resolveCompanyIdentity } from '../helpers/company-identity';
 import { BillingScope } from './billing-access.service';
-import { madridTodayKey } from '../../../common/helpers/business-time';
+import { madridTodayKey, madridCivilToday } from '../../../common/helpers/business-time';
+import { DocumentNumberService } from '../../../common/services/document-number.service';
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100;
 
@@ -25,6 +26,7 @@ export class AutofacturaService {
     @InjectRepository(Employer) private employerRepo: Repository<Employer>,
     @InjectRepository(AdminUser) private adminUserRepo: Repository<AdminUser>,
     private dataSource: DataSource,
+    private documentNumbers: DocumentNumberService,
   ) {}
 
   async getContext(partnerPublicId?: string) {
@@ -49,7 +51,7 @@ export class AutofacturaService {
           ibanMasked: clean ? `${clean.slice(0, 4)} **** **** **** ${clean.slice(-4)}` : null,
           retention: this.num(p.retention),
         };
-        nextNumber = await this.nextNumber(p, madridTodayKey());
+        nextNumber = await this.dataSource.transaction((m) => this.nextNumber(m, p, madridTodayKey()));
       }
     }
     return { company, partner, nextNumber };
@@ -61,11 +63,10 @@ export class AutofacturaService {
     return Number.isFinite(n) ? n : 0;
   }
 
+  /** First three letters of the partner's name, per the client's spec. */
   private prefix(name: string): string {
-    const words = (name || '').trim().split(/\s+/).filter(Boolean);
-    let p = words.map((w) => w[0]).join('').slice(0, 3).toUpperCase();
-    if (p.length < 3) p = (name || '').replace(/\s+/g, '').slice(0, 3).toUpperCase();
-    return p || 'AUT';
+    const clean = (name || '').replace(/[^A-Za-z0-9ÁÉÍÓÚÑáéíóúñ]/g, '');
+    return clean.slice(0, 3).toUpperCase() || 'AUT';
   }
 
   private groupLabel(subType?: string | null): string {
@@ -75,14 +76,18 @@ export class AutofacturaService {
     return 'Otros';
   }
 
-  private async nextNumber(partner: Partner, issueDate: string): Promise<string> {
-    const year = Number((issueDate || '').slice(0, 4)) || new Date().getFullYear();
-    const count = await this.repo
-      .createQueryBuilder('a')
-      .where('a.partner_id = :pid', { pid: partner.id })
-      .andWhere('EXTRACT(YEAR FROM a.issue_date) = :year', { year })
-      .getCount();
-    return `${this.prefix(partner.name)}-${year}-${String(count + 1).padStart(2, '0')}`;
+  /**
+   * MAX+1 rather than COUNT+1: counting hands out a number that already exists
+   * as soon as one autofactura is deleted, and two concurrent issues collide.
+   */
+  private async nextNumber(
+    manager: EntityManager,
+    partner: Partner,
+    issueDate: string,
+  ): Promise<string> {
+    const year = Number((issueDate || '').slice(0, 4)) || madridCivilToday().getFullYear();
+    const prefix = `${this.prefix(partner.name)}-${year}-`;
+    return this.documentNumbers.next(manager, 'autofactura', prefix, partner.id, year);
   }
 
   private partnerBlock(p: any) {
@@ -186,7 +191,7 @@ export class AutofacturaService {
 
     return this.dataSource.transaction(async (m) => {
       const af = m.create(Autofactura, {
-        autofacturaNumber: await this.nextNumber(partner, issueDate),
+        autofacturaNumber: await this.nextNumber(m, partner, issueDate),
         partnerId: partner.id,
         issueDate,
         periodStart: dto.periodStart,
@@ -272,7 +277,7 @@ export class AutofacturaService {
 
     return this.dataSource.transaction(async (mgr) => {
       const af = mgr.create(Autofactura, {
-        autofacturaNumber: await this.nextNumber(partner, issueDate),
+        autofacturaNumber: await this.nextNumber(mgr, partner, issueDate),
         partnerId: partner.id,
         issueDate,
         periodStart,
