@@ -2860,11 +2860,21 @@ async getAllJobsByWorkerFromToken(userId: number) {
         hours: {
           // Overtime only applies to jobs with a real schedule. Free jobs have no fixed hours,
           // so all worked time is just "worked" — never overtime.
-          hasSchedule: scheduledMinutes > 0,
+          hasSchedule: scheduledMinutes > 0 || session.overtimeMinutes != null,
           scheduledMinutes,
           workedMinutes,
           breakMinutes: session.totalBreakMinutes || 0,
-          overtimeMinutes: scheduledMinutes > 0 ? Math.max(0, workedMinutes - scheduledMinutes) : 0,
+          // The frozen figure wins. Deriving it here again would disagree with
+          // the overtime queue on a day the job has no shift, where the whole
+          // session counts but scheduled minutes are zero.
+          overtimeMinutes:
+            session.overtimeMinutes != null
+              ? session.overtimeMinutes
+              : scheduledMinutes > 0
+                ? Math.max(0, workedMinutes - scheduledMinutes)
+                : 0,
+          overtimeStatus: session.overtimeStatus || null,
+          overtimeCompensation: session.overtimeCompensation || null,
         },
         punctuality: {
           in: this.calcPunctuality(shiftStart, this.madridMinutes(session.checkInTime)),
