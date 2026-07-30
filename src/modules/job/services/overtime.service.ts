@@ -286,9 +286,15 @@ export class OvertimeService {
    * a correction after approval is a decision for a person, not a sweep.
    */
   async sweep(limit = 500): Promise<number> {
-    const rows: Array<{ id: number; job_id: number; check_in_time: Date; total_work_minutes: number }> =
+    const rows: Array<{
+      id: number;
+      job_id: number;
+      worker_id: number;
+      check_in_time: Date;
+      total_work_minutes: number;
+    }> =
       await this.dataSource.query(
-        `SELECT id, job_id, check_in_time, total_work_minutes
+        `SELECT id, job_id, worker_id, check_in_time, total_work_minutes
            FROM work_sessions
           WHERE check_out_time IS NOT NULL
             AND (review_status IS NULL OR review_status = 'CONFIRMED')
@@ -301,6 +307,7 @@ export class OvertimeService {
     if (!rows.length) return 0;
 
     const jobs = new Map<number, Job | null>();
+    const policies = new Map<number, any>();
     let done = 0;
     for (const r of rows) {
       if (!jobs.has(r.job_id)) {
@@ -317,11 +324,38 @@ export class OvertimeService {
 
       const scheduled = this.schedule.getScheduledMinutesForDate(job, new Date(r.check_in_time)) || 0;
       const d = this.decide(this.hasSchedule(job), scheduled, r.total_work_minutes);
+
+      let status = d.status;
+      let compensation: string | null = null;
+
+      // A company that does not want a queue gets the overtime counted
+      // straight away. It still stops at the annual limit: past that the
+      // figure is exactly what somebody needs to look at.
+      if (status === 'PENDING') {
+        if (!policies.has(r.job_id)) {
+          policies.set(r.job_id, await this.policies.resolve(r.job_id, r.worker_id));
+        }
+        const policy = policies.get(r.job_id);
+        if (!policy.overtimeRequiresApproval) {
+          const year = new Date(r.check_in_time).getFullYear();
+          const sofar = await this.annualTotal(r.worker_id, year, policy.overtimeAnnualCapHours);
+          const adding = Math.round((d.minutes / 60) * 100) / 100;
+          if (
+            policy.overtimeAnnualCapHours <= 0 ||
+            sofar.hours + adding <= policy.overtimeAnnualCapHours
+          ) {
+            status = 'APPROVED';
+            compensation = policy.overtimeDefaultCompensation;
+          }
+        }
+      }
+
       await this.dataSource.query(
         `UPDATE work_sessions
-            SET overtime_minutes = $1, overtime_basis_minutes = $2, overtime_status = $3
-          WHERE id = $4`,
-        [d.minutes, d.basisMinutes, d.status, r.id],
+            SET overtime_minutes = $1, overtime_basis_minutes = $2,
+                overtime_status = $3, overtime_compensation = $4
+          WHERE id = $5`,
+        [d.minutes, d.basisMinutes, status, compensation, r.id],
       );
       done++;
     }
