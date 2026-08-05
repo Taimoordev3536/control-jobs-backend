@@ -14,6 +14,7 @@ import {
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RatePlanService } from '../services/rate-plan.service';
 import { UpdateRatePlanDto } from '../dto/rate-plan.dto';
+import { AuditService } from '../../audit/audit.service';
 
 function isAdmin(req: any): boolean {
   return String(req?.user?.role?.name || '').toLowerCase() === 'admin';
@@ -21,7 +22,9 @@ function isAdmin(req: any): boolean {
 
 @Controller('rate-plans')
 export class RatePlansController {
-  constructor(private readonly ratePlanService: RatePlanService) {}
+  constructor(private readonly ratePlanService: RatePlanService,
+    private readonly audit: AuditService,
+  ) {}
 
   // Public — used by the invitation accept page to render an estimate before
   // the user has an account. Rates are not sensitive (they're the price book).
@@ -77,6 +80,18 @@ export class RatePlansController {
         .notifyAffectedEmployers(id, 'SCHEDULED', previousLive)
         .catch(() => undefined);
     }
+    // Rates decide what every employer is charged, so who changed them, when,
+    // and from what has to be answerable later.
+    await this.audit.record({
+      actorUserId: req.user?.id,
+      actorName: req.user?.name,
+      actorRole: req.user?.role?.name,
+      action: 'RATE_PLAN_CHANGED',
+      detail: `Plan #${id}: fixed ${previousLive.fixed} -> ${dto.monthlyFixed}, `
+        + `per work centre ${previousLive.perWorkCenter} -> ${dto.perWorkCenter}, `
+        + `per worker ${previousLive.perWorker} -> ${dto.perWorker}`
+        + (plan.pendingEffectiveAt ? ` (effective ${plan.pendingEffectiveAt})` : ''),
+    });
     return { data: plan };
   }
 
@@ -88,6 +103,13 @@ export class RatePlansController {
     this.ratePlanService
       .notifyAffectedEmployers(id, 'CANCELLED')
       .catch(() => undefined);
+    await this.audit.record({
+      actorUserId: req.user?.id,
+      actorName: req.user?.name,
+      actorRole: req.user?.role?.name,
+      action: 'RATE_PLAN_PENDING_CANCELLED',
+      detail: `Plan #${id}`,
+    });
     return { data: plan };
   }
 }

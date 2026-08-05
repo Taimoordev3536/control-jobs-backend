@@ -141,10 +141,20 @@ export class AutofacturaService {
     };
   }
 
-  async list(scope: BillingScope) {
+  /**
+   * Commissions the caller may see. A partner is always pinned to their own,
+   * whatever they ask for; the filter exists so an admin can look at one
+   * partner from that partner's own detail page.
+   */
+  async list(scope: BillingScope, partnerPublicId?: string) {
     if (scope.kind === 'employer') throw new ForbiddenException('No commission access for this role');
     const qb = this.repo.createQueryBuilder('a').leftJoinAndSelect('a.partner', 'partner').orderBy('a.issue_date', 'DESC').addOrderBy('a.autofactura_number', 'DESC');
-    if (scope.kind === 'partner') qb.where('a.partner_id = :pid', { pid: scope.partnerId });
+    if (scope.kind === 'partner') {
+      qb.where('a.partner_id = :pid', { pid: scope.partnerId });
+    } else if (partnerPublicId) {
+      const p = await this.partnerRepo.findOne({ where: { publicId: partnerPublicId } });
+      qb.where('a.partner_id = :pid', { pid: p?.id ?? -1 });
+    }
     const rows = await qb.getMany();
     return rows.map((a) => this.map(a));
   }

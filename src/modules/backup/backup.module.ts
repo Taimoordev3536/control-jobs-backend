@@ -10,9 +10,10 @@ import { BackupController } from './backup.controller';
 import { BackupCloudController } from './backup-cloud.controller';
 import { BackupService } from './backup.service';
 import { BackupCronService } from './backup-cron.service';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([BackupRecord, BackupSettings, CloudConnection])],
+  imports: [TypeOrmModule.forFeature([BackupRecord, BackupSettings, CloudConnection]), AuditModule],
   controllers: [BackupController, BackupCloudController],
   providers: [BackupService, LocalStorageProvider, GoogleDriveProvider, OneDriveProvider, BackupCronService],
   exports: [BackupService],

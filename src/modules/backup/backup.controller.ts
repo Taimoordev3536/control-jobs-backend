@@ -16,12 +16,16 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../auth/enums/user-role.enum';
 import { BackupService } from './backup.service';
+import { AuditService } from '../audit/audit.service';
 
 @Controller('backup')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.Admin)
 export class BackupController {
-  constructor(private readonly backupService: BackupService) {}
+  constructor(
+    private readonly backupService: BackupService,
+    private readonly audit: AuditService,
+  ) {}
 
   @Get()
   async list() {
@@ -63,6 +67,13 @@ export class BackupController {
   @Post('run')
   async run(@Request() req, @Body() dto: { provider?: string }) {
     const data = await this.backupService.runBackup(req.user?.name ?? 'Admin', dto?.provider);
+    await this.audit.record({
+      actorUserId: req.user?.id,
+      actorName: req.user?.name,
+      actorRole: req.user?.role?.name,
+      action: 'BACKUP_CREATED',
+      detail: `${dto?.provider || 'local'} — ${data.status}`,
+    });
     return { isSuccess: data.status === 'SUCCESS', statusCode: 201, message: 'Backup executed', data };
   }
 
@@ -78,14 +89,31 @@ export class BackupController {
   }
 
   @Post(':publicId/restore')
-  async restore(@Param('publicId') publicId: string) {
+  async restore(@Request() req, @Param('publicId') publicId: string) {
     const data = await this.backupService.restore(publicId);
+    // Logged after the fact on purpose: a restore truncates every table,
+    // audit_logs included, so an entry written first would erase itself.
+    await this.audit.record({
+      actorUserId: req.user?.id,
+      actorName: req.user?.name,
+      actorRole: req.user?.role?.name,
+      action: 'BACKUP_RESTORED',
+      detail: `Backup ${publicId} — ${data.tablesRestored} tables, ${data.rowsRestored} rows. `
+        + 'Everything before this point was replaced.',
+    });
     return { isSuccess: true, statusCode: 200, message: 'Backup restored', data };
   }
 
   @Delete(':publicId')
-  async remove(@Param('publicId') publicId: string) {
+  async remove(@Request() req, @Param('publicId') publicId: string) {
     const data = await this.backupService.remove(publicId);
+    await this.audit.record({
+      actorUserId: req.user?.id,
+      actorName: req.user?.name,
+      actorRole: req.user?.role?.name,
+      action: 'BACKUP_DELETED',
+      detail: `Backup ${publicId}`,
+    });
     return { isSuccess: true, statusCode: 200, message: 'Backup deleted', data };
   }
 }

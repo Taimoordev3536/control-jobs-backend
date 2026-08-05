@@ -20,6 +20,7 @@ import { UsersModule } from '../users/users.module';
 import { BillingModule } from '../billing/billing.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { PaymentMethodsModule } from '../payment-methods/payment-methods.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { PaymentMethodsModule } from '../payment-methods/payment-methods.module'
     forwardRef(() => BillingModule),
     CloudinaryModule,
     PaymentMethodsModule,
+    AuditModule,
   ],
   controllers: [EmployersController],
   providers: [EmployersService, PendingEmployersService],

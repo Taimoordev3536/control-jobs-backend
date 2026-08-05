@@ -25,6 +25,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { BaseResponse } from '../../common/interfaces/base-response.interface';
 import { Employer } from './entities/employer.entity';
 import { AuthService } from '../auth/auth.service';
+import { AuditService } from '../audit/audit.service';
 
 @Controller('employers')
 export class EmployersController {
@@ -32,6 +33,7 @@ export class EmployersController {
     private readonly employersService: EmployersService,
     private readonly pendingEmployersService: PendingEmployersService,
     private readonly authService: AuthService,
+    private readonly audit: AuditService,
   ) { }
 
   // Admin/Partner: Create employer
@@ -145,7 +147,15 @@ export class EmployersController {
   async deactivate(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
     const numericId = await this.employersService.resolvePublicId(id);
     await this.employersService.assertCanManageEmployer(req.user, numericId);
-    return this.employersService.setActive(numericId, false);
+    const res = await this.employersService.setActive(numericId, false);
+    await this.audit.record({
+      actorUserId: req.user?.id,
+      actorName: req.user?.name,
+      actorRole: req.user?.role?.name,
+      action: 'EMPLOYER_DEACTIVATED',
+      detail: `Employer ${id}`,
+    });
+    return res;
   }
 
   @Patch(':id/activate')
@@ -154,7 +164,15 @@ export class EmployersController {
   async activate(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
     const numericId = await this.employersService.resolvePublicId(id);
     await this.employersService.assertCanManageEmployer(req.user, numericId);
-    return this.employersService.setActive(numericId, true);
+    const res = await this.employersService.setActive(numericId, true);
+    await this.audit.record({
+      actorUserId: req.user?.id,
+      actorName: req.user?.name,
+      actorRole: req.user?.role?.name,
+      action: 'EMPLOYER_ACTIVATED',
+      detail: `Employer ${id}`,
+    });
+    return res;
   }
 
   // Employer self-service: upload/remove own company logo. The avatar

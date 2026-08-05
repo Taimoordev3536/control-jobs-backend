@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, Req, Res, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Req, Res, UseGuards, ForbiddenException, Query } from '@nestjs/common';
 import type { Response } from 'express';
 import { AutofacturaService } from '../services/autofactura.service';
 import { AutofacturaPdfService } from '../services/autofactura-pdf.service';
@@ -22,9 +22,9 @@ export class AutofacturasController {
   }
 
   @Get()
-  async list(@Req() req: any) {
+  async list(@Req() req: any, @Query('partnerId') partnerId?: string) {
     const scope = await this.access.resolveScope(req.user);
-    const data = await this.service.list(scope);
+    const data = await this.service.list(scope, partnerId);
     return { message: 'Success', data, isSuccess: true, statusCode: 200 };
   }
 

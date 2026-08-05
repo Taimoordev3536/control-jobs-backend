@@ -16,6 +16,7 @@ import { PartnersModule } from '../partners/partners.module';
 import { EmployersModule } from '../employers/employers.module';
 import { ImportController } from './import.controller';
 import { ImportService } from './import.service';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { ImportService } from './import.service';
     WorkersModule,
     PartnersModule,
     EmployersModule,
+    AuditModule,
   ],
   controllers: [ImportController],
   providers: [ImportService],

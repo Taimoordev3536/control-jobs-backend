@@ -43,6 +43,7 @@ import { AutofacturasController } from './controllers/autofacturas.controller';
 import { EmployersModule } from '../employers/employers.module';
 import { CommonModule } from '../../common/common.module';
 import { AlertsModule } from '../realtime/alerts.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { AlertsModule } from '../realtime/alerts.module';
     forwardRef(() => EmployersModule),
     CommonModule,
     AlertsModule,
+    AuditModule,
   ],
   controllers: [RatePlansController, BillingController, InvoicesController, AutofacturasController, BankOperationsController],
   providers: [
