@@ -6,6 +6,9 @@ import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { EmployerWorker } from '../employers/entities/employer-worker.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { AlertsService } from '../realtime/alerts.service';
+import { AttendancePolicyService } from '../attendance-policy/attendance-policy.service';
+import { countAbsenceDays, VacationCountMode } from './vacation-days';
+import { DataSource } from 'typeorm';
 
 @Injectable()
 export class AbsencesService {
@@ -15,7 +18,82 @@ export class AbsencesService {
     @InjectRepository(EmployerWorker) private employerWorkerRepo: Repository<EmployerWorker>,
     @InjectRepository(WorkerUser) private workerUserRepo: Repository<WorkerUser>,
     private readonly alerts: AlertsService,
+    private readonly policies: AttendancePolicyService,
+    private readonly dataSource: DataSource,
   ) {}
+
+  /** The company's public holidays for a year, as YYYY-MM-DD. */
+  private async holidaysFor(employerId: number, year: number): Promise<Set<string>> {
+    const rows = await this.dataSource.query(
+      `SELECT to_char(date, 'YYYY-MM-DD') AS d FROM cjobs_employer_holidays
+        WHERE employer_id = $1 AND EXTRACT(YEAR FROM date) IN ($2::int, $2::int + 1)`,
+      [employerId, year],
+    );
+    return new Set(rows.map((r: any) => r.d));
+  }
+
+  private async vacationRules(employerId: number, workerId: number) {
+    const policy = await this.policies.resolveForEmployer(employerId);
+    return {
+      daysPerYear: policy.vacationDaysPerYear,
+      mode: (policy.vacationCountMode || 'WORKING') as VacationCountMode,
+    };
+  }
+
+  /** Days an absence uses, against the company's own calendar and mode. */
+  async daysForAbsence(a: { employerId: number; workerId: number; startDate: string; endDate: string }) {
+    const { mode } = await this.vacationRules(a.employerId, a.workerId);
+    const year = Number(String(a.startDate).slice(0, 4));
+    const holidays = mode === 'WORKING' ? await this.holidaysFor(a.employerId, year) : new Set<string>();
+    return countAbsenceDays(a.startDate, a.endDate, mode, holidays);
+  }
+
+  /**
+   * A worker's holiday for a calendar year: what they are entitled to, what
+   * approved requests have used, and what is left.
+   */
+  async balance(workerId: number, employerId: number, year: number) {
+    const { daysPerYear, mode } = await this.vacationRules(employerId, workerId);
+    const [row] = await this.dataSource.query(
+      `SELECT COALESCE(SUM(days_count), 0) AS used
+         FROM cjobs_absence_requests
+        WHERE worker_id = $1 AND status = 'approved' AND type = 'vacation'
+          AND start_date >= make_date($2, 1, 1) AND start_date < make_date($2 + 1, 1, 1)`,
+      [workerId, year],
+    );
+    const used = Math.round(Number(row?.used || 0) * 10) / 10;
+    return {
+      year,
+      mode,
+      entitledDays: daysPerYear,
+      usedDays: used,
+      remainingDays: Math.round((daysPerYear - used) * 10) / 10,
+    };
+  }
+
+  /** One worker's balance, scoped to the employer asking. */
+  async balanceForWorker(userId: number, workerPublicId: string, year?: number) {
+    const employerId = await this.employerIdForUser(userId);
+    const [w] = await this.dataSource.query(
+      `SELECT w.id FROM workers w
+        JOIN "employerWorkers" ew ON ew."workerId" = w.id
+       WHERE w.public_id = $1 AND ew."employerId" = $2`,
+      [workerPublicId, employerId],
+    );
+    if (!w) throw new NotFoundException('Worker not found');
+    return this.balance(w.id, employerId, year || new Date().getFullYear());
+  }
+
+  /** The caller's own balance. */
+  async myBalance(userId: number, year?: number) {
+    const workerId = await this.workerIdForUser(userId);
+    const link = await this.employerWorkerRepo.findOne({
+      where: { worker: { id: workerId } },
+      relations: ['employer'],
+    });
+    if (!link?.employer?.id) throw new BadRequestException('This worker is not linked to an employer');
+    return this.balance(workerId, link.employer.id, year || new Date().getFullYear());
+  }
 
   private typeEs(type: string): string {
     return ({ vacation: 'Vacaciones', permit: 'Permiso', sick: 'Baja', other: 'Otro' } as Record<string, string>)[type] || type;
@@ -46,6 +124,8 @@ export class AbsencesService {
       startDate: a.startDate,
       endDate: a.endDate,
       reason: a.reason,
+      days: a.daysCount != null ? Number(a.daysCount) : null,
+      workerPublicId: a.worker?.publicId ?? null,
       status: a.status,
       reviewerNotes: a.reviewerNotes,
       createdAt: a.createdAt,
@@ -122,6 +202,11 @@ export class AbsencesService {
       status: 'pending',
       requestedByUserId: userId,
     });
+    // Counted now and kept: the public holiday calendar can be edited later,
+    // and last year's holiday must not move with it.
+    rec.daysCount = String(
+      await this.daysForAbsence({ employerId, workerId, startDate: body.startDate, endDate: body.endDate }),
+    );
     const saved = await this.absenceRepo.save(rec);
 
     // Notify the employer about the new absence request.

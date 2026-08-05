@@ -33,6 +33,8 @@ export const POLICY_FIELDS = [
   'overtimeAnnualCapHours',
   'overtimeRateMultiplier',
   'overtimeDefaultCompensation',
+  'vacationDaysPerYear',
+  'vacationCountMode',
 ] as const;
 
 export type EffectivePolicy = {
@@ -51,6 +53,8 @@ export type EffectivePolicy = {
   overtimeAnnualCapHours: number;
   overtimeRateMultiplier: number;
   overtimeDefaultCompensation: 'PAID' | 'TIME_OFF';
+  vacationDaysPerYear: number;
+  vacationCountMode: 'NATURAL' | 'WORKING';
 };
 
 /** What a company gets before anyone configures anything. */
@@ -72,6 +76,10 @@ export const POLICY_DEFAULTS = (): EffectivePolicy => ({
   overtimeRateMultiplier: 1,
   // Art. 35.1 ET: absent an agreement, overtime is compensated with rest.
   overtimeDefaultCompensation: 'TIME_OFF',
+  // Art. 38 ET's floor is 30 natural days; most convenios express the same
+  // entitlement as ~22 working days, which is what people actually count.
+  vacationDaysPerYear: 22,
+  vacationCountMode: 'WORKING',
 });
 
 @Injectable()

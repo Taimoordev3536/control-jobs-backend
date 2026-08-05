@@ -49,4 +49,10 @@ export class UpdateAttendancePolicyDto {
   @IsOptional() @IsIn(['PAID', 'TIME_OFF'])
   overtimeDefaultCompensation?: 'PAID' | 'TIME_OFF' | null;
 
+  @IsOptional() @IsInt() @Min(0) @Max(365)
+  vacationDaysPerYear?: number | null;
+
+  @IsOptional() @IsIn(['NATURAL', 'WORKING'])
+  vacationCountMode?: 'NATURAL' | 'WORKING' | null;
+
 }

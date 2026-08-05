@@ -60,4 +60,8 @@ export class AbsenceRequest {
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
+  // Frozen at request time; the holiday calendar can change later.
+  @Column({ name: 'days_count', type: 'numeric', precision: 5, scale: 1, nullable: true })
+  daysCount: string | null;
+
 }

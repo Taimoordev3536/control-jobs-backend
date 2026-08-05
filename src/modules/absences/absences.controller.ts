@@ -22,6 +22,23 @@ export class AbsencesController {
     return this.absences.listMine(req.user.id);
   }
 
+  /** The caller's own holiday for a year: entitled, used, left. */
+  @Get('mine/balance')
+  @UseGuards(JwtAuthGuard)
+  async myBalance(@Req() req, @Query('year') year?: string) {
+    const data = await this.absences.myBalance(req.user.id, year ? Number(year) : undefined);
+    return { message: 'Success', data, isSuccess: true };
+  }
+
+  /** One worker's holiday, for the employer deciding on a request. */
+  @Get('worker/:workerPublicId/balance')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Employer)
+  async workerBalance(@Req() req, @Param('workerPublicId') workerPublicId: string, @Query('year') year?: string) {
+    const data = await this.absences.balanceForWorker(req.user.id, workerPublicId, year ? Number(year) : undefined);
+    return { message: 'Success', data, isSuccess: true };
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   async create(@Req() req, @Body() body: { type?: string; startDate?: string; endDate?: string; reason?: string }) {

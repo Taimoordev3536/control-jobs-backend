@@ -99,4 +99,10 @@ export class AttendancePolicy {
   @Column({ name: 'overtime_default_compensation', type: 'varchar', length: 20, nullable: true })
   overtimeDefaultCompensation?: string | null;
 
+  @Column({ name: 'vacation_days_per_year', type: 'int', nullable: true })
+  vacationDaysPerYear?: number | null;
+
+  @Column({ name: 'vacation_count_mode', type: 'varchar', length: 20, nullable: true })
+  vacationCountMode?: string | null;
+
 }

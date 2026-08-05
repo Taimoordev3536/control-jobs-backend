@@ -7,9 +7,10 @@ import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { EmployerWorker } from '../employers/entities/employer-worker.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
 import { AlertsModule } from '../realtime/alerts.module';
+import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AbsenceRequest, EmployerUser, EmployerWorker, WorkerUser]), AlertsModule],
+  imports: [TypeOrmModule.forFeature([AbsenceRequest, EmployerUser, EmployerWorker, WorkerUser]), AlertsModule, AttendancePolicyModule],
   controllers: [AbsencesController],
   providers: [AbsencesService],
 })
