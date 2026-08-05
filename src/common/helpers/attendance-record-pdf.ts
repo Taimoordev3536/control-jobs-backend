@@ -11,7 +11,8 @@ export interface RecordDay {
   checkOut: string;
   minutes: number;
   overtimeMinutes?: number | null;
-  corrected?: boolean;
+  /** How the record came to be: a plain scan leaves this empty. */
+  note?: string | null;
 }
 
 export interface AttendanceRecordParams {
@@ -66,7 +67,10 @@ export function renderAttendanceRecordPdf(params: AttendanceRecordParams): Promi
         company: params.company.taxId ?? params.company.name,
         periodStart: params.periodStart,
         periodEnd: params.periodEnd,
-        days: params.days.map((d) => [d.date, d.workerName, d.checkIn, d.checkOut, d.minutes]),
+        days: params.days.map((d) => [
+          d.date, d.workerName, d.workerNif ?? '', d.checkIn, d.checkOut,
+          d.minutes, d.overtimeMinutes ?? 0, d.note ?? '',
+        ]),
       }),
     )
     .digest('hex');
@@ -148,7 +152,7 @@ export function renderAttendanceRecordPdf(params: AttendanceRecordParams): Promi
       d.checkOut,
       hhmm(d.minutes),
       d.overtimeMinutes ? hhmm(d.overtimeMinutes) : '—',
-      d.corrected ? 'Corregido' : '',
+      d.note || '',
     ];
     doc.fillColor(TEXT);
     cells.forEach((c, i) => {

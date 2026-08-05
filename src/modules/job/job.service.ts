@@ -5703,6 +5703,13 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
     const res = await this.getEmployerWorkSessionRecords(
       employerUserId, jobId, opts.startDate, opts.endDate,
     );
+    // That method swallows its own errors and returns an empty list, so
+    // without this a failed query produced a valid, sealed document reading
+    // "0 registros" — an employer could hand an inspector an empty record and
+    // never know the query had failed.
+    if (res?.isSuccess === false) {
+      throw new BadRequestException(res?.message || 'The attendance record could not be produced');
+    }
     let rows: any[] = Array.isArray(res?.data) ? res.data : [];
 
     let workerName: string | null = null;
@@ -5717,7 +5724,7 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
 
     const employerUserLink: any = await this.dataSource.getRepository('EmployerUser').findOne({
       where: { user: { id: employerUserId } },
-      relations: ['employer'],
+      relations: ['employer', 'user'],
     });
     const employer = employerUserLink?.employer;
 
@@ -5748,6 +5755,14 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         checkOut: r.salida || '—',
         minutes: Number(r.totalWorkMinutes ?? 0),
         overtimeMinutes: Number(r.overtimeMinutes ?? 0) || null,
+        note:
+          r.reviewStatus && r.reviewStatus !== 'CONFIRMED'
+            ? 'Sin confirmar'
+            : r.source === 'AUTO'
+              ? 'Cierre automático'
+              : r.source === 'MANUAL'
+                ? 'Corregido'
+                : null,
       })),
     });
 
@@ -5867,6 +5882,11 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           job: session.job.jobName || 'N/A',
           trabajador: _nameBy.get(session.worker?.id) || session.worker.user?.name || session.worker.code || 'N/A',
           workerId: session.worker.id,
+          // The reader has to be able to tell a plain scan from one the system
+          // closed itself or a person corrected — and an unsettled session's
+          // hours are not in pay or invoices.
+          reviewStatus: session.reviewStatus ?? null,
+          source: session.source ?? null,
           workerCode: session.worker.code,
           workerPublicId: session.worker.publicId,
           workerNif: (session.worker as any).nif ?? null,
