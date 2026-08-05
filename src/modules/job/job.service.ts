@@ -3594,12 +3594,32 @@ async getAllJobsByWorkerFromToken(userId: number) {
           validatedWorkCenterId = matchingWc.id;
         }
 
-        // WorkCenter membership check
-        if (validatedWorkCenterId && job.workCenters?.length) {
-          const jobWcIds = job.workCenters.map(wc => wc.id);
+        // WorkCenter membership. The `job.workCenters?.length` guard used to
+        // sit here too, so a job with no centres accepted any centre at all —
+        // including another company's — and stored it on the record.
+        if (validatedWorkCenterId) {
+          const jobWcIds = (job.workCenters || []).map(wc => wc.id);
           if (!jobWcIds.includes(validatedWorkCenterId)) {
             throw new BadRequestException('Selected work center does not belong to this job.');
           }
+        }
+
+        // The method has to be named, and has to be one the job actually
+        // offers. Omitting it made every gate below evaluate undefined and
+        // skip; naming a different one let a GPS-only job be judged by the
+        // web switch instead.
+        if (!recordScanDto.signingMethod) {
+          throw new BadRequestException('A check-in method is required');
+        }
+        const jobMethods = new Set(
+          (job.signingMethods || []).flatMap((sm: any) =>
+            (sm.methodDetails || []).map((d: any) => String(d).toLowerCase()),
+          ),
+        );
+        if (jobMethods.size && !jobMethods.has(String(recordScanDto.signingMethod).toLowerCase())) {
+          throw new BadRequestException(
+            `${recordScanDto.signingMethod} is not one of the methods configured for this job`,
+          );
         }
 
         // ── Web activation ─────────────────────────────────────────
@@ -3613,7 +3633,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
             if (webWc && !webWc.isWebActive) {
               throw new BadRequestException('Web check-in is not activated for this work center');
             }
-          } else if (job.workCenters?.length && !job.workCenters.some(wc => wc.isWebActive)) {
+          } else if (!(job.workCenters || []).some(wc => wc.isWebActive)) {
+            // Covers the empty case too: a job with no centres has nothing
+            // switching web on, so it used to sail straight through.
             throw new BadRequestException('Web check-in is not activated for this job');
           }
         }
@@ -3652,9 +3674,24 @@ async getAllJobsByWorkerFromToken(userId: number) {
               resolvedWc.allowedIp &&
               !this.ipMatches(resolvedWc.allowedIp, recordScanDto.ipAddress)
             ) {
-              throw new BadRequestException(`Your IP address does not match the allowed IP for "${resolvedWc.name}"`);
+              throw new BadRequestException(
+                recordScanDto.scanType === 'check-out'
+                  ? `Your IP address does not match "${resolvedWc.name}". If you have already left, ask your employer to close the day from Solicitudes.`
+                  : `Your IP address does not match the allowed IP for "${resolvedWc.name}"`,
+              );
             }
           }
+        }
+
+        // GPS means GPS. Sending a work centre alongside it skipped the
+        // auto-select branch, which is where the "coordinates are required"
+        // check lived — so a GPS scan could be recorded with no location at
+        // all, and the proximity check below then had nothing to compare.
+        if (
+          recordScanDto.signingMethod === 'gps' &&
+          (recordScanDto.latitude == null || recordScanDto.longitude == null)
+        ) {
+          throw new BadRequestException('GPS coordinates are required for GPS check-in');
         }
 
         // ── GPS activation ─────────────────────────────────────────
@@ -3693,8 +3730,12 @@ async getAllJobsByWorkerFromToken(userId: number) {
             const allowedRadius = resolvedWc.gpsRadius ?? 100;
             if (distanceMeters > allowedRadius) {
               throw new BadRequestException(
-                `You are ${Math.round(distanceMeters)}m away from "${resolvedWc.name}". ` +
-                `Check-in is only allowed within ${allowedRadius}m of the work center.`
+                recordScanDto.scanType === 'check-out'
+                  ? `You are ${Math.round(distanceMeters)}m away from "${resolvedWc.name}". ` +
+                    `Check-out is only allowed within ${allowedRadius}m. If you have already left, ` +
+                    `ask your employer to close the day from Solicitudes.`
+                  : `You are ${Math.round(distanceMeters)}m away from "${resolvedWc.name}". ` +
+                    `Check-in is only allowed within ${allowedRadius}m of the work center.`,
               );
             }
           }
