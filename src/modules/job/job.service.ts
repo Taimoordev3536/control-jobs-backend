@@ -3580,6 +3580,22 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
         }
 
+        // ── Web activation ─────────────────────────────────────────
+        // Web carries no location or address of its own, so the switch is the
+        // only thing standing between it and an unconditional check-in from
+        // anywhere. When no work center was resolved — web often does not need
+        // one — the job counts as web-enabled if any of its centers allows it.
+        if (recordScanDto.signingMethod === 'web') {
+          if (validatedWorkCenterId) {
+            const webWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
+            if (webWc && !webWc.isWebActive) {
+              throw new BadRequestException('Web check-in is not activated for this work center');
+            }
+          } else if (job.workCenters?.length && !job.workCenters.some(wc => wc.isWebActive)) {
+            throw new BadRequestException('Web check-in is not activated for this job');
+          }
+        }
+
         // ── QR activation ──────────────────────────────────────────
         // The work center switch is the authority for every method. Token
         // validity alone is not enough: deactivating QR in the Methods tab
@@ -3601,9 +3617,9 @@ async getAllJobsByWorkerFromToken(userId: number) {
         }
 
         // ── IP validation ──────────────────────────────────────────
-        // Activation is checked on the way out as well; matching the address
-        // stays check-in only, since where somebody finishes is a separate
-        // product question from whether the method is switched on.
+        // Both the switch and the address are checked in each direction: an
+        // IP-based record is a claim about where the person was, and that is
+        // as true of the end of the day as of its start.
         if (recordScanDto.signingMethod === 'ip' && validatedWorkCenterId) {
           const resolvedWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
           if (resolvedWc) {
@@ -3611,7 +3627,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
               throw new BadRequestException('IP check-in is not activated for this work center');
             }
             if (
-              recordScanDto.scanType === 'check-in' &&
               resolvedWc.allowedIp &&
               !this.ipMatches(resolvedWc.allowedIp, recordScanDto.ipAddress)
             ) {
@@ -3631,12 +3646,15 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
         }
 
-        // ── GPS proximity enforcement (check-in only) ──────────────────────────
+        // ── GPS proximity enforcement ──────────────────────────────────────────
         // If the resolved work center has GPS coordinates AND the worker sent their
         // coordinates, enforce that the worker is within the allowed radius.
+        // Applies on the way out as well: a day closed from somewhere else is
+        // not a record of having been there. A worker who genuinely cannot
+        // close on site is covered by the watchdog, which closes the session
+        // at the scheduled end and sends it to the review queue.
         // Note: For standalone GPS flow, proximity was already validated during auto-selection above.
         if (
-          recordScanDto.scanType === 'check-in' &&
           validatedWorkCenterId &&
           recordScanDto.latitude != null &&
           recordScanDto.longitude != null
