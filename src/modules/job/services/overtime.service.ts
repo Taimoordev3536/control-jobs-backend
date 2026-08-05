@@ -84,7 +84,28 @@ export class OvertimeService {
       .andWhere(employerId === null ? '1=1' : 'employer.id = :employerId', { employerId })
       .orderBy('ws.check_in_time', 'DESC')
       .getMany();
-    return rows;
+
+    // Worker names live on the workers_users junction, not worker.user_id, so
+    // the queue showed bare codes without this.
+    const names = await this.resolveWorkerNames(rows.map((r) => r.workerId));
+    return rows.map((r) => ({
+      ...r,
+      worker: { ...(r.worker as any), name: names.get(r.workerId) ?? (r.worker as any)?.code ?? null },
+    }));
+  }
+
+  private async resolveWorkerNames(workerIds: (number | null | undefined)[]): Promise<Map<number, string>> {
+    const names = new Map<number, string>();
+    const ids = Array.from(new Set(workerIds.filter((id): id is number => id != null)));
+    if (!ids.length) return names;
+    const links = await this.workerUserRepo.find({
+      where: ids.map((id) => ({ workerId: id })),
+      relations: ['user'],
+    });
+    for (const l of links as any[]) {
+      if (l.workerId && l.user?.name) names.set(l.workerId, l.user.name);
+    }
+    return names;
   }
 
   async countPending(userId: number): Promise<number> {

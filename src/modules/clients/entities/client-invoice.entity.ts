@@ -1,4 +1,5 @@
 import {
+  OneToMany,
   Entity,
   PrimaryGeneratedColumn,
   Column,
@@ -9,6 +10,7 @@ import {
 } from 'typeorm';
 import { Client } from './client.entity';
 import { PaymentMethod } from '../../../shared/entities/payment-method.entity';
+import { ClientInvoiceLine } from './client-invoice-line.entity';
 
 @Entity('cjobs_client_invoices')
 export class ClientInvoice {
@@ -99,5 +101,8 @@ export class ClientInvoice {
   @ManyToOne(() => PaymentMethod, { nullable: true })
   @JoinColumn({ name: 'payment_method_id' })
   paymentMethod?: PaymentMethod | null;
+
+  @OneToMany(() => ClientInvoiceLine, (l) => l.invoice)
+  lines?: ClientInvoiceLine[];
 
 }

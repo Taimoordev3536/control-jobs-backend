@@ -1,4 +1,5 @@
 import {
+  OneToMany,
   Entity,
   PrimaryGeneratedColumn,
   Column,
@@ -9,6 +10,7 @@ import {
 } from 'typeorm';
 import { Worker } from './worker.entity';
 import { PaymentMethod } from '../../../shared/entities/payment-method.entity';
+import { SalaryReceiptLine } from './salary-receipt-line.entity';
 
 @Entity('cjobs_salary_receipts')
 export class SalaryReceipt {
@@ -90,4 +92,7 @@ export class SalaryReceipt {
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
+  @OneToMany(() => SalaryReceiptLine, (l) => l.receipt)
+  lines?: SalaryReceiptLine[];
+
 }

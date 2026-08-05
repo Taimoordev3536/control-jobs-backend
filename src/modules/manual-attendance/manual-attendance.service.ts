@@ -1085,15 +1085,24 @@ export class ManualAttendanceService {
         },
       });
 
-      // Also emit to worker if they should be notified
+      // The worker's copy goes through the same persisting helper as every
+      // other alert. It used to reach into the private gateway and push over
+      // the socket only, so the decision vanished on refresh, never counted
+      // as unread, and had no publicId to dismiss.
       if (workerUserId && (type === 'MANUAL_ATTENDANCE_APPROVED' || type === 'MANUAL_ATTENDANCE_REJECTED')) {
-        this.alertsService['gateway']?.emitAlertToWorker?.(workerUserId, {
+        await this.alertsService.createAndEmitForUser({
+          userId: workerUserId,
+          role: 'WORKER',
           type,
-          jobId: request.jobId,
-          jobPublicId: job.publicId,
-          workerId: request.workerId,
           message,
-          createdAt: new Date().toISOString(),
+          meta: {
+            jobId: request.jobId,
+            jobPublicId: job.publicId,
+            workerId: request.workerId,
+            requestPublicId: request.publicId,
+            requestType: request.requestType,
+            requestStatus: request.status,
+          },
         });
       }
     } catch (err) {

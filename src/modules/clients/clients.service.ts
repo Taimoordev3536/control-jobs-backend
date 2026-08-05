@@ -249,7 +249,7 @@ export class ClientsService {
 
   /** Sessions in the period that no invoice has billed yet. */
   private billableSessionSql = `
-    SELECT ws.id, ws.total_work_minutes
+    SELECT ws.id, ws.total_work_minutes, ws.overtime_status
       FROM work_sessions ws
       JOIN job j ON j.id = ws.job_id
      WHERE j."clientId" = $1
@@ -264,10 +264,17 @@ export class ClientsService {
     clientId: number,
     periodStart: string,
     periodEnd: string,
-  ): Promise<{ ids: number[]; hours: number }> {
+  ): Promise<{ ids: number[]; hours: number; pendingCount: number }> {
     const rows = await manager.query(this.billableSessionSql, [clientId, periodStart, periodEnd]);
     const minutes = rows.reduce((sum: number, r: any) => sum + Number(r.total_work_minutes || 0), 0);
-    return { ids: rows.map((r: any) => Number(r.id)), hours: Math.round((minutes / 60) * 100) / 100 };
+    // The client is billed for hours worked, whatever the employer decides
+    // about paying them as overtime — but not while that is still open.
+    const pendingCount = rows.filter((r: any) => r.overtime_status === 'PENDING').length;
+    return {
+      ids: rows.map((r: any) => Number(r.id)),
+      hours: Math.round((minutes / 60) * 100) / 100,
+      pendingCount,
+    };
   }
 
   private async workedHoursForClient(clientId: number, periodStart: string, periodEnd: string): Promise<number> {
@@ -294,6 +301,13 @@ export class ClientsService {
       total: this.num(i.total),
       status: i.status,
       notes: i.notes,
+      computedHoursQty: i.computedHoursQty != null ? this.num(i.computedHoursQty) : null,
+      lines: (i as any).lines?.map((l: any) => ({
+        description: l.description,
+        quantity: this.num(l.quantity),
+        unitPrice: this.num(l.unitPrice),
+        lineTotal: this.num(l.lineTotal),
+      })) ?? [],
       createdAt: i.createdAt,
     };
   }
@@ -331,20 +345,12 @@ export class ClientsService {
   async listClientInvoices(clientId: number) {
     const invoices = await this.clientInvoiceRepo.find({
       where: { clientId },
+      relations: ['lines'],
       order: { issueDate: 'DESC', createdAt: 'DESC' },
     });
     return invoices.map((i) => this.mapInvoice(i));
   }
 
-  private async nextInvoiceNumber(employerId: number, prefix: string): Promise<string> {
-    const year = Number(madridTodayKey().slice(0, 4));
-    const count = await this.clientInvoiceRepo
-      .createQueryBuilder('i')
-      .where('i.employer_id = :employerId', { employerId })
-      .andWhere(`EXTRACT(YEAR FROM i.issue_date) = :year`, { year })
-      .getCount();
-    return `${prefix}-${year}-${String(count + 1).padStart(4, '0')}`;
-  }
 
   async createClientInvoice(
     clientId: number,
@@ -399,6 +405,15 @@ export class ClientsService {
     // Recomputed here rather than trusted from the request: the previewed
     // figure can be stale, and nothing stops a caller posting any number.
     const billable = await this.billableSessions(manager, clientId, body.periodStart!, body.periodEnd!);
+    // Mirrors the payslip: billing hours whose overtime is still undecided
+    // would invoice the client for time the employer has not settled.
+    if (billable.pendingCount > 0) {
+      throw new BadRequestException(
+        `${billable.pendingCount} session${billable.pendingCount === 1 ? '' : 's'} in this period ` +
+          `${billable.pendingCount === 1 ? 'has' : 'have'} overtime waiting for a decision. ` +
+          `Settle it before issuing the invoice.`,
+      );
+    }
     const hoursQty = body.hoursQty != null ? this.num(body.hoursQty) : billable.hours;
     if (hoursQty > billable.hours) {
       throw new BadRequestException(

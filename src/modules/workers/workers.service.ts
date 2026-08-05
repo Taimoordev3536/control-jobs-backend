@@ -271,6 +271,13 @@ export class WorkersService {
       total: this.num(r.total),
       status: r.status,
       notes: r.notes,
+      computedHoursQty: r.computedHoursQty != null ? this.num(r.computedHoursQty) : null,
+      lines: (r as any).lines?.map((l: any) => ({
+        description: l.description,
+        quantity: this.num(l.quantity),
+        unitPrice: this.num(l.unitPrice),
+        lineTotal: this.num(l.lineTotal),
+      })) ?? [],
       createdAt: r.createdAt,
     };
   }
@@ -318,20 +325,12 @@ export class WorkersService {
   async listSalaryReceipts(workerId: number) {
     const receipts = await this.salaryReceiptRepo.find({
       where: { workerId },
+      relations: ['lines'],
       order: { issueDate: 'DESC', createdAt: 'DESC' },
     });
     return receipts.map((r) => this.mapSalaryReceipt(r));
   }
 
-  private async nextReceiptNumber(employerId: number): Promise<string> {
-    const year = Number(madridTodayKey().slice(0, 4));
-    const count = await this.salaryReceiptRepo
-      .createQueryBuilder('r')
-      .where('r.employer_id = :employerId', { employerId })
-      .andWhere(`EXTRACT(YEAR FROM r.issue_date) = :year`, { year })
-      .getCount();
-    return `RS-${year}-${String(count + 1).padStart(4, '0')}`;
-  }
 
   async createSalaryReceipt(
     workerId: number,
