@@ -87,6 +87,11 @@ export class WorkCenter {
     @Column({ name: 'is_ip_active', type: 'boolean', default: false })
     isIpActive: boolean;
 
+    // Defaults true, unlike the other three: web needs no setup, so an
+    // untouched site keeps working exactly as it did before the switch.
+    @Column({ name: 'is_web_active', type: 'boolean', default: true })
+    isWebActive: boolean;
+
     @Column({ name: 'allowed_ip', type: 'varchar', length: 45, nullable: true })
     allowedIp: string | null;
 

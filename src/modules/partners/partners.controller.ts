@@ -64,6 +64,15 @@ export class PartnersController {
     return this.partnersService.findAll();
   }
 
+  // Declared before the :id catch-alls so ParseUUIDPipe doesn't reject the
+  // literal 'tiers' — it was below @Get(':id') and so unreachable, which is
+  // why the frontend ended up hardcoding tier ids.
+  @Get('tiers')
+  @Roles(1)
+  async findAllTiers(): Promise<BaseResponse<PartnerTier[]>> {
+    return this.partnersService.findAllTiers();
+  }
+
   // Declared before the :id catch-alls so ParseUUIDPipe doesn't reject 'options'.
   @Get('options')
   @Roles(1, 2)
@@ -158,9 +167,4 @@ export class PartnersController {
     return this.partnersService.setActive(numericId, true);
   }
 
-  @Get('tiers')
-  @Roles(1)
-  async findAllTiers(): Promise<BaseResponse<PartnerTier[]>> {
-    return this.partnersService.findAllTiers();
-  }
 }

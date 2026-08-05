@@ -377,6 +377,7 @@ export class EmployersService {
 
   async create(
     createEmployerDto: CreateEmployerDto,
+    requester?: any,
   ): Promise<BaseResponse<Employer>> {
     // Validate all relationships exist. paymentMethodId is now optional —
     // invitation-link signups intentionally leave it null (collected later
@@ -410,9 +411,13 @@ export class EmployersService {
     const billingStatus = trialDays > 0 ? 'TRIAL' : 'ACTIVE';
 
     try {
-      const resolvedPartnerId = await this.resolvePartnerIdFromPublicId(
-        createEmployerDto.partnerId,
-      );
+      // A partner's own id comes from their token, never from the body —
+      // findAllScoped already refuses to trust a caller-supplied partner, and
+      // create must not be the way around it.
+      const resolvedPartnerId =
+        requester?.role?.value === UserRole.Partner
+          ? await this.partnerIdOfRequester(requester)
+          : await this.resolvePartnerIdFromPublicId(createEmployerDto.partnerId);
       await this.assertDiscountWithinCap(
         resolvedPartnerId,
         createEmployerDto.discount,
@@ -856,6 +861,17 @@ export class EmployersService {
   // Admin manages every employer; a partner only the ones referred by their own
   // partner account. Role alone is not enough — @Roles(1, 2) would otherwise let
   // any partner deactivate any company whose publicId they knew.
+  /** The partner a partner-role user belongs to. */
+  private async partnerIdOfRequester(requester: any): Promise<number> {
+    const link = await this.employerRepository.manager.findOne(PartnerUser, {
+      where: { userId: requester.id },
+    });
+    if (!link) {
+      throw new ForbiddenException('No partner is linked to the current user');
+    }
+    return link.partnerId;
+  }
+
   async assertCanManageEmployer(requester: any, employerId: number) {
     const roleValue = requester?.role?.value;
 

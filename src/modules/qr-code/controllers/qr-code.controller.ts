@@ -275,6 +275,33 @@ export class QrCodeController {
   }
 
   /**
+   * Turn the Web method on or off for a work center.
+   * PUT /work-centers/:id/signing-methods/web
+   *
+   * Web needs no configuration of its own — no radius, no address, no token —
+   * so this is a switch and nothing else.
+   */
+  @Put(':id/signing-methods/web')
+  async updateWorkCenterWeb(
+    @Param('id', ParseUUIDPipe) publicId: string,
+    @Body() dto: { active: boolean },
+    @Req() req?,
+  ) {
+    const workCenterId = await this.resolveOwnedWorkCenterId(publicId, req);
+    const workCenter = await this.workCenterRepo.findOne({ where: { id: workCenterId } });
+    if (!workCenter) throw new NotFoundException(`Work center ${workCenterId} not found`);
+
+    workCenter.isWebActive = !!dto?.active;
+    await this.workCenterRepo.save(workCenter);
+
+    return {
+      message: 'Web configuration saved successfully',
+      data: { workCenterId, active: workCenter.isWebActive },
+      statusCode: 200,
+    };
+  }
+
+  /**
    * GPS-based work center auto-selection for dynamic/merged QR codes
    * POST /work-centers/check-in/gps-select
    */

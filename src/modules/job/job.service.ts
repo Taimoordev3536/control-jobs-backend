@@ -51,6 +51,9 @@ import { RecordScanDto } from './dto/scan.dto';
 import { v4 as uuidv4 } from 'uuid';
 import { UpdateJobStatusDto } from './dto/update-job-status.dto';
 import { JobStatus } from './enums/job-status.enum';
+
+/** Art. 34.9 ET keeps the daily record for four years. */
+export const ATTENDANCE_RETENTION_YEARS = 4;
 import * as QRCode from 'qrcode';
 import { AlertsService } from '../realtime/alerts.service';
 import { QrValidationService } from '../qr-code/services/qr-validation.service';
@@ -1255,6 +1258,24 @@ async deleteJob(jobId: number, employerUserId: number): Promise<void> {
 
     if (!job) {
       throw new Error('Job not found or you dont have permission to delete it');
+    }
+
+    // Art. 34.9 ET: the daily record has to survive four years. Deleting the
+    // job used to take its scan logs and work sessions with it, which is the
+    // one thing that must not happen. A job nobody clocked into is still
+    // deletable; one with records inside the window is archived instead.
+    const [{ count }] = await manager.query(
+      `SELECT COUNT(*)::int AS count FROM work_sessions
+        WHERE job_id = $1
+          AND check_in_time >= (NOW() - INTERVAL '${ATTENDANCE_RETENTION_YEARS} years')`,
+      [jobId],
+    );
+    if (count > 0) {
+      throw new BadRequestException(
+        `This job has ${count} attendance record${count === 1 ? '' : 's'} from the last ` +
+          `${ATTENDANCE_RETENTION_YEARS} years, which must be kept (art. 34.9 ET). ` +
+          `Set the job to finished instead of deleting it.`,
+      );
     }
 
     // Delete dependent entities first (in reverse order of creation)
@@ -3559,14 +3580,17 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
         }
 
-        // ── QR activation (check-in only) ──────────────────────────
+        // ── QR activation ──────────────────────────────────────────
         // The work center switch is the authority for every method. Token
         // validity alone is not enough: deactivating QR in the Methods tab
         // also deactivates the qr_code rows, so this used to be blocked only
         // as a side effect. If the flag and the rows ever drift, QR would read
         // "off" in the UI while still letting workers in.
+        //
+        // Applies to check-out too: it was check-in only, so a deactivated
+        // method still closed the day — the end of a shift is as much a part
+        // of the record as its start.
         if (
-          recordScanDto.scanType === 'check-in' &&
           recordScanDto.signingMethod === 'qrcode' &&
           validatedWorkCenterId
         ) {
@@ -3576,20 +3600,34 @@ async getAllJobsByWorkerFromToken(userId: number) {
           }
         }
 
-        // ── IP validation (check-in only) ──────────────────────────
-        if (
-          recordScanDto.scanType === 'check-in' &&
-          recordScanDto.signingMethod === 'ip' &&
-          validatedWorkCenterId
-        ) {
+        // ── IP validation ──────────────────────────────────────────
+        // Activation is checked on the way out as well; matching the address
+        // stays check-in only, since where somebody finishes is a separate
+        // product question from whether the method is switched on.
+        if (recordScanDto.signingMethod === 'ip' && validatedWorkCenterId) {
           const resolvedWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
           if (resolvedWc) {
             if (!resolvedWc.isIpActive) {
               throw new BadRequestException('IP check-in is not activated for this work center');
             }
-            if (resolvedWc.allowedIp && !this.ipMatches(resolvedWc.allowedIp, recordScanDto.ipAddress)) {
+            if (
+              recordScanDto.scanType === 'check-in' &&
+              resolvedWc.allowedIp &&
+              !this.ipMatches(resolvedWc.allowedIp, recordScanDto.ipAddress)
+            ) {
               throw new BadRequestException(`Your IP address does not match the allowed IP for "${resolvedWc.name}"`);
             }
+          }
+        }
+
+        // ── GPS activation ─────────────────────────────────────────
+        // Checked before, and independently of, the coordinates: it used to
+        // sit inside the proximity block, so a check-out — or any scan with
+        // no coordinates — skipped the switch altogether.
+        if (recordScanDto.signingMethod === 'gps' && validatedWorkCenterId) {
+          const gpsWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
+          if (gpsWc && !gpsWc.isGpsActive) {
+            throw new BadRequestException('GPS check-in is not activated for this work center');
           }
         }
 
@@ -3604,13 +3642,6 @@ async getAllJobsByWorkerFromToken(userId: number) {
           recordScanDto.longitude != null
         ) {
           const resolvedWc = job.workCenters?.find(wc => wc.id === validatedWorkCenterId);
-
-          // Validate GPS activation for GPS method
-          if (recordScanDto.signingMethod === 'gps' && resolvedWc) {
-            if (!resolvedWc.isGpsActive) {
-              throw new BadRequestException('GPS check-in is not activated for this work center');
-            }
-          }
 
           if (resolvedWc && resolvedWc.latitude != null && resolvedWc.longitude != null) {
             const distanceMeters = this.calculateDistance(

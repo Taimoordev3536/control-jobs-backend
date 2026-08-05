@@ -38,8 +38,11 @@ export class EmployersController {
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(1, 2) // 1=Admin, 2=Partner
-  async create(@Body() createEmployerDto: CreateEmployerDto): Promise<BaseResponse<Employer>> {
-    return this.employersService.create(createEmployerDto);
+  async create(
+    @Request() req,
+    @Body() createEmployerDto: CreateEmployerDto,
+  ): Promise<BaseResponse<Employer>> {
+    return this.employersService.create(createEmployerDto, req.user);
   }
 
   // Admin/Partner: List all employers
@@ -114,7 +117,11 @@ export class EmployersController {
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(1, 2)
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+    // Scoped like deactivate/activate already are: without this a partner
+    // could read any other partner's employer by public id.
+    const numericId = await this.employersService.resolvePublicId(id);
+    await this.employersService.assertCanManageEmployer(req.user, numericId);
     return this.employersService.findByPublicId(id);
   }
 
@@ -123,10 +130,12 @@ export class EmployersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(1, 2)
   async update(
+    @Request() req,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateEmployerDto: UpdateEmployerDto,
   ) {
     const numericId = await this.employersService.resolvePublicId(id);
+    await this.employersService.assertCanManageEmployer(req.user, numericId);
     return this.employersService.update(numericId, updateEmployerDto);
   }
 
