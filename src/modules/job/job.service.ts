@@ -2635,8 +2635,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       }
 
       const _schedMin = job ? (this.jobScheduleService.getScheduledMinutesForDate(job, new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`)) || 0) : 0;
-      const _otMin = Math.max(0, (session.totalWorkMinutes || 0) - _schedMin);
-      const extra = _schedMin > 0 ? (_otMin > 0 ? `${Math.floor(_otMin / 60)}h ${_otMin % 60}m` : '0h') : '—';
+      const extra = this.overtimeLabel(session, _schedMin);
       const puntualidad = punctuality === 'late' ? `+${lateMinutes}m tarde` : punctuality === 'early' ? 'Adelantado' : punctuality === 'onTime' ? 'A tiempo' : '—';
       return {
         id: session.publicId || String(session.id),
@@ -2659,6 +2658,22 @@ async getAllJobsByWorkerFromToken(userId: number) {
       };
     });
     return { message: 'Success', data: records, isSuccess: true, statusCode: 200 };
+  }
+
+  /**
+   * Overtime for a list row. The stored figure wins; deriving it here from the
+   * current schedule is what let a schedule edit rewrite last month, and it
+   * reports zero on a rest day, where the whole session counts.
+   */
+  private overtimeLabel(session: any, scheduledMinutes: number): string {
+    const stored = session?.overtimeMinutes;
+    if (stored != null) {
+      const m = Number(stored);
+      return m > 0 ? `${Math.floor(m / 60)}h ${m % 60}m` : '0h';
+    }
+    if (scheduledMinutes <= 0) return '—';
+    const m = Math.max(0, (session?.totalWorkMinutes || 0) - scheduledMinutes);
+    return m > 0 ? `${Math.floor(m / 60)}h ${m % 60}m` : '0h';
   }
 
   private calcPunctuality(shiftTime: string | null, actualMinutes: number, isCheckout = false) {
@@ -5656,8 +5671,7 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         const _p = this.calcPunctuality(_shiftStart, this.madridMinutes(session.checkInTime));
         const puntualidad = _p?.status === 'late' ? `+${_p.minutes}m tarde` : _p?.status === 'early' ? 'Adelantado' : _p?.status === 'onTime' ? 'A tiempo' : '—';
         const _schedMin = session.job ? (this.jobScheduleService.getScheduledMinutesForDate(session.job, _dayDate) || 0) : 0;
-        const _otMin = Math.max(0, (session.totalWorkMinutes || 0) - _schedMin);
-        const extra = _schedMin > 0 ? (_otMin > 0 ? `${Math.floor(_otMin / 60)}h ${_otMin % 60}m` : '0h') : '—';
+        const extra = this.overtimeLabel(session, _schedMin);
         const centro = (session as any).workCenter?.name || '—';
         const metodo = session.checkInMethod || '—';
 
@@ -5813,8 +5827,7 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         }
 
         const _schedMin = session.job ? (this.jobScheduleService.getScheduledMinutesForDate(session.job, new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`)) || 0) : 0;
-        const _otMin = Math.max(0, (session.totalWorkMinutes || 0) - _schedMin);
-        const extra = _schedMin > 0 ? (_otMin > 0 ? `${Math.floor(_otMin / 60)}h ${_otMin % 60}m` : '0h') : '—';
+        const extra = this.overtimeLabel(session, _schedMin);
         const puntualidad = punctuality === 'late' ? `+${lateMinutes}m tarde` : punctuality === 'early' ? 'Adelantado' : punctuality === 'onTime' ? 'A tiempo' : '—';
         const centro = (session as any).workCenter?.name || '—';
         const metodo = session.checkInMethod || '—';

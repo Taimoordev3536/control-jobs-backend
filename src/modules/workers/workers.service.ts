@@ -281,11 +281,19 @@ export class WorkersService {
     const link = await this.employerWorkerRepo.findOne({ where: { worker: { id: workerId } }, relations: ['employer'] });
     const def: any = link?.employer || {};
     const dn = (v: any) => (v != null ? Number(v) : null);
-    const hoursQty = await this.workedHoursForWorker(workerId, periodStart, periodEnd);
+    // The preview must offer the same split the receipt will apply, or the
+    // form posts a figure the issue path then refuses.
+    const billable = await this.billableSessions(this.dataSource, workerId, periodStart, periodEnd);
+    const employerId = await this.employerIdForWorker(workerId);
+    const policy = await this.attendancePolicies.resolveForEmployer(employerId);
+
+    const hoursQty = billable.ordinaryHours;
     const hourRate = cfg.hourRate ?? dn(def.defSalaryHourRate) ?? 0;
     const hoursAmount = Math.round(hoursQty * hourRate * 100) / 100;
+    const overtimeRate = Math.round(hourRate * Number(policy.overtimeRateMultiplier || 1) * 100) / 100;
+    const overtimeAmount = Math.round(billable.paidOvertimeHours * overtimeRate * 100) / 100;
     const fixedAmount = cfg.fixedAmount ?? dn(def.defSalaryFixedAmount);
-    const total = Math.round(((fixedAmount ?? 0) + hoursAmount) * 100) / 100;
+    const total = Math.round(((fixedAmount ?? 0) + hoursAmount + overtimeAmount) * 100) / 100;
     return {
       periodStart,
       periodEnd,
@@ -295,6 +303,14 @@ export class WorkersService {
       hoursQty,
       hourRate,
       hoursAmount,
+      // Shown so the previewed total matches what is issued, and so the
+      // employer sees why rest-compensated hours are not being paid.
+      overtimeHours: billable.paidOvertimeHours,
+      overtimeRate,
+      overtimeAmount,
+      overtimeMultiplier: Number(policy.overtimeRateMultiplier || 1),
+      restOvertimeHours: billable.restOvertimeHours,
+      pendingOvertimeCount: billable.pendingCount,
       total,
     };
   }
