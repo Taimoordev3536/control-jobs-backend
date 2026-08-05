@@ -185,7 +185,8 @@ export class WorkersService {
 
   /** Sessions in the period that no receipt has paid for yet. */
   private billableSessionSql = `
-    SELECT id, total_work_minutes, overtime_minutes, overtime_status, overtime_compensation
+    SELECT id, total_work_minutes, overtime_minutes, overtime_status, overtime_compensation,
+           overtime_basis_minutes, check_out_time
       FROM work_sessions
      WHERE worker_id = $1
        AND check_in_time >= $2
@@ -214,6 +215,7 @@ export class WorkersService {
     paidOvertimeHours: number;
     restOvertimeHours: number;
     pendingCount: number;
+    uncomputedCount: number;
   }> {
     const rows = await manager.query(this.billableSessionSql, [workerId, periodStart, periodEnd]);
     const h = (mins: number) => Math.round((mins / 60) * 100) / 100;
@@ -222,8 +224,23 @@ export class WorkersService {
     let paidOt = 0;
     let restOt = 0;
     let pendingCount = 0;
+    let uncomputedCount = 0;
     for (const r of rows) {
       worked += Number(r.total_work_minutes || 0);
+
+      // The sweep runs on a cron, so a session closed since the last run has
+      // no figure yet. Billing it now would pay its overtime as ordinary time
+      // and then stamp it PENDING afterwards — money already gone, and a
+      // queue entry nobody can act on.
+      const settled =
+        r.check_out_time == null ||
+        (r.overtime_basis_minutes != null &&
+          Number(r.overtime_basis_minutes) === Number(r.total_work_minutes));
+      if (!settled) {
+        uncomputedCount++;
+        continue;
+      }
+
       const ot = Number(r.overtime_minutes || 0);
       if (!ot) continue;
       if (r.overtime_status === 'PENDING') pendingCount++;
@@ -240,6 +257,7 @@ export class WorkersService {
       paidOvertimeHours: h(paidOt),
       restOvertimeHours: h(restOt),
       pendingCount,
+      uncomputedCount,
     };
   }
 
@@ -375,6 +393,14 @@ export class WorkersService {
     const extraTotal = extraLines.reduce((sum, l) => sum + Number(l.lineTotal), 0);
 
     return this.salaryReceiptRepo.manager.transaction(async (manager) => {
+    // One issue at a time per worker. Without it two concurrent calls both
+    // read the same unclaimed sessions and the second overwrites the first's
+    // claim: the same hours paid on two receipts, and only one of them
+    // linked to the sessions.
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `salary_receipt:worker:${workerId}`,
+    ]);
+
     // Recomputed here rather than trusted from the request: the figure the
     // form previewed can be stale, and nothing stops a caller posting any
     // number at all.
@@ -382,6 +408,13 @@ export class WorkersService {
 
     // Payroll must not run past an undecided question. The employer has the
     // overtime queue to settle these, and the answer changes what is owed.
+    if (billable.uncomputedCount > 0) {
+      throw new BadRequestException(
+        `${billable.uncomputedCount} session${billable.uncomputedCount === 1 ? '' : 's'} in this period ` +
+          `${billable.uncomputedCount === 1 ? 'has' : 'have'} not had its overtime worked out yet. ` +
+          `This happens within a couple of hours of a session closing — try again shortly.`,
+      );
+    }
     if (billable.pendingCount > 0) {
       throw new BadRequestException(
         `${billable.pendingCount} session${billable.pendingCount === 1 ? '' : 's'} in this period ` +

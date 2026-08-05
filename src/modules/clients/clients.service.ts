@@ -249,7 +249,8 @@ export class ClientsService {
 
   /** Sessions in the period that no invoice has billed yet. */
   private billableSessionSql = `
-    SELECT ws.id, ws.total_work_minutes, ws.overtime_status
+    SELECT ws.id, ws.total_work_minutes, ws.overtime_status,
+           ws.overtime_basis_minutes, ws.check_out_time
       FROM work_sessions ws
       JOIN job j ON j.id = ws.job_id
      WHERE j."clientId" = $1
@@ -264,16 +265,25 @@ export class ClientsService {
     clientId: number,
     periodStart: string,
     periodEnd: string,
-  ): Promise<{ ids: number[]; hours: number; pendingCount: number }> {
+  ): Promise<{ ids: number[]; hours: number; pendingCount: number; uncomputedCount: number }> {
     const rows = await manager.query(this.billableSessionSql, [clientId, periodStart, periodEnd]);
     const minutes = rows.reduce((sum: number, r: any) => sum + Number(r.total_work_minutes || 0), 0);
     // The client is billed for hours worked, whatever the employer decides
     // about paying them as overtime — but not while that is still open.
     const pendingCount = rows.filter((r: any) => r.overtime_status === 'PENDING').length;
+    // Mirrors the payslip: a session the sweep has not reached yet is not
+    // settled, so it is not billable either.
+    const uncomputedCount = rows.filter(
+      (r: any) =>
+        r.check_out_time != null &&
+        (r.overtime_basis_minutes == null ||
+          Number(r.overtime_basis_minutes) !== Number(r.total_work_minutes)),
+    ).length;
     return {
       ids: rows.map((r: any) => Number(r.id)),
       hours: Math.round((minutes / 60) * 100) / 100,
       pendingCount,
+      uncomputedCount,
     };
   }
 
@@ -402,11 +412,22 @@ export class ClientsService {
     const vatPct = this.num(body.vatPct);
 
     return this.clientInvoiceRepo.manager.transaction(async (manager) => {
+    // One issue at a time per client, for the same reason as the payslip.
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `client_invoice:client:${clientId}`,
+    ]);
     // Recomputed here rather than trusted from the request: the previewed
     // figure can be stale, and nothing stops a caller posting any number.
     const billable = await this.billableSessions(manager, clientId, body.periodStart!, body.periodEnd!);
     // Mirrors the payslip: billing hours whose overtime is still undecided
     // would invoice the client for time the employer has not settled.
+    if (billable.uncomputedCount > 0) {
+      throw new BadRequestException(
+        `${billable.uncomputedCount} session${billable.uncomputedCount === 1 ? '' : 's'} in this period ` +
+          `${billable.uncomputedCount === 1 ? 'has' : 'have'} not had its overtime worked out yet. ` +
+          `This happens within a couple of hours of a session closing — try again shortly.`,
+      );
+    }
     if (billable.pendingCount > 0) {
       throw new BadRequestException(
         `${billable.pendingCount} session${billable.pendingCount === 1 ? '' : 's'} in this period ` +

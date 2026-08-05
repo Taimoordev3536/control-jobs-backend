@@ -264,11 +264,23 @@ export class InvoiceService {
       ? original.lines
           .filter((l) => !opts.lineIds?.length || opts.lineIds.includes(l.id))
           .map((l) => ({ description: l.description, quantity: Number(l.quantity), unitPrice: -Number(l.unitPrice) }))
-      : [
+      : // Quantity 1 against the amount actually billed, not count x rate: on a
+        // prorated month the stored rates are the full-month ones while the
+        // amounts carry the proration, so count x rate credited back more than
+        // was ever charged.
+        [
           { description: 'Cuota fija', quantity: 1, unitPrice: -Number(original.fixedAmount || 0) },
-          { description: 'Centros de trabajo', quantity: Number(original.workcenterCount || 0), unitPrice: -Number(original.perWorkCenterRate || 0) },
-          { description: 'Trabajadores', quantity: Number(original.workerCount || 0), unitPrice: -Number(original.perWorkerRate || 0) },
-        ].filter((l) => l.quantity > 0 && l.unitPrice !== 0);
+          {
+            description: `Centros de trabajo (${Number(original.workcenterCount || 0)})`,
+            quantity: 1,
+            unitPrice: -Number(original.workcenterAmount || 0),
+          },
+          {
+            description: `Trabajadores (${Number(original.workerCount || 0)})`,
+            quantity: 1,
+            unitPrice: -Number(original.workerAmount || 0),
+          },
+        ].filter((l) => l.unitPrice !== 0);
 
     if (!source.length) {
       throw new BadRequestException('There is nothing to rectify on this invoice');
