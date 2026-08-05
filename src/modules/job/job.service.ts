@@ -22,7 +22,8 @@ import { madridNow, madridTodayKey, madridCivilToday } from '../../common/helper
 const MOCK_WORK_CENTER = { id: 1, name: 'WorkCenter 1' };
 import { Repository, DataSource, IsNull, In, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { Job } from './entities/job.entity';
-import { Shift, Weekday, ScheduleType } from './entities/shift.entity';
+import { Shift } from './entities/shift.entity';
+import { Weekday, ScheduleType } from './entities/schedule-type.enum';
 import { SigningMethod, SigningMethodType, SigningMethodDetail } from './entities/signing-method.entity';
 import { Alert, AlertType } from './entities/alert.entity';
 import { Task } from './entities/task.entity';

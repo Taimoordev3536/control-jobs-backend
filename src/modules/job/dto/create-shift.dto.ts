@@ -1,5 +1,6 @@
 import { IsString, IsEnum, IsInt, IsOptional } from 'class-validator';
-import { ShiftType, ScheduleType, Season } from '../entities/shift.entity';
+import { ShiftType, Season } from '../entities/shift.entity';
+import { ScheduleType } from '../entities/schedule-type.enum';
 
 export class CreateShiftDto {
   @IsString()

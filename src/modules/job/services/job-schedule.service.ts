@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { Job } from '../entities/job.entity';
 import { SeasonalSchedule } from '../entities/seasonal-schedule.entity';
-import { Weekday, ScheduleType, Shift } from '../entities/shift.entity';
+import { Shift } from '../entities/shift.entity';
+import { Weekday, ScheduleType } from '../entities/schedule-type.enum';
 
 const WEEKDAY_ORDER: Weekday[] = [
   Weekday.MONDAY,

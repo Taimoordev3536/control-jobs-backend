@@ -1,7 +1,7 @@
 import { IsString, IsDateString, IsArray, IsOptional, ValidateNested, IsEnum } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { CreateShiftDto } from './create-shift.dto';
-import { ScheduleType } from '../entities/shift.entity';
+import { ScheduleType } from '../entities/schedule-type.enum';
 import { CreateSeasonPeriodDto } from './create-season-period.dto';
 import { CreateSeasonalScheduleDto } from './create-seasonal-schedule.dto';
 import { CreateSigningMethodDto } from './create-signing-method.dto';

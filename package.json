@@ -26,7 +26,9 @@
     "server": "35.159.185.48",
     "format:write": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "migration:run": "ts-node src/migrations/run-migrations.ts",
-    "verify:boot": "ts-node --transpile-only src/scripts/verify-boot.ts"
+    "verify:boot": "ts-node --transpile-only src/scripts/verify-boot.ts",
+    "backfill:billed-sessions": "ts-node -T src/scripts/backfill-billed-sessions.ts",
+    "backfill:absence-days": "ts-node -T src/scripts/backfill-absence-days.ts"
   },
   "engines": {
     "node": "22"

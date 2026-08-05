@@ -122,4 +122,13 @@ export class WorkSession {
   @Column({ name: 'overtime_compensation', type: 'varchar', length: 20, nullable: true })
   overtimeCompensation?: string | null;
 
+  // The documents that have paid for / billed this session. Every read was
+  // raw SQL, so the link was invisible to the query builder and to anything
+  // that saves a hydrated session.
+  @Column({ name: 'salary_receipt_id', type: 'int', nullable: true })
+  salaryReceiptId?: number | null;
+
+  @Column({ name: 'client_invoice_id', type: 'int', nullable: true })
+  clientInvoiceId?: number | null;
+
 }

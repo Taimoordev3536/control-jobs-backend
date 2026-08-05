@@ -13,7 +13,7 @@
 // ScheduleType is still undefined when job.entity's @Column decorator runs.
 import '../entities/job.entity';
 import { JobScheduleService } from './job-schedule.service';
-import { ScheduleType, Weekday } from '../entities/shift.entity';
+import { ScheduleType, Weekday } from '../entities/schedule-type.enum';
 
 type ShiftSeed = {
   startWeekday: Weekday | string;
