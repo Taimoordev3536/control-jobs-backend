@@ -115,6 +115,55 @@ describe('manual attendance authorization', () => {
   });
 
   // ── Reading one request ─────────────────────────────────────────────
+  describe('POST requests — creating attendance', () => {
+    // This was the widest hole of the lot: creation checked the caller's role
+    // and that the worker was on the job, but never that the job was theirs.
+    // Through direct entry, which self-approves, company B could write and
+    // approve attendance for company A's worker.
+    it("refuses another company's job", async () => {
+      const { svc } = build();
+      await expect(
+        svc.createRequest(
+          { jobId: JOB_A_UUID, workerId: 'w', requestType: 'CREATE_NEW' } as any,
+          20,
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("refuses another company's job on direct entry too", async () => {
+      const { svc } = build();
+      await expect(
+        svc.directCreateAttendance(
+          { jobId: JOB_A_UUID, workerId: 'w', requestType: 'CREATE_NEW' } as any,
+          20,
+          owner(20),
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses an unrelated client', async () => {
+      const { svc } = build();
+      await expect(
+        svc.createRequest(
+          { jobId: JOB_A_UUID, workerId: 'w', requestType: 'CREATE_NEW' } as any,
+          40,
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('gets past the ownership check for the owning employer', async () => {
+      const { svc } = build();
+      // It fails later, on the worker lookup this harness does not stub —
+      // what matters is that it is no longer Forbidden.
+      await expect(
+        svc.createRequest(
+          { jobId: JOB_A_UUID, workerId: 'w', requestType: 'CREATE_NEW' } as any,
+          10,
+        ),
+      ).rejects.not.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
   describe('GET requests/:publicId', () => {
     it('lets the owning employer read it', async () => {
       const { svc } = build();

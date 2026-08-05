@@ -349,6 +349,13 @@ export class ManualAttendanceService {
     // Resolve public IDs
     const jobId = await this.resolveJobPublicId(dto.jobId);
 
+    // Before anything else: the caller has to belong to this job's company.
+    // Without it, an employer could post another company's job publicId and
+    // one of its worker ids and write attendance for a worker who is not
+    // theirs — and through direct entry, self-approve it. Every read and
+    // review path already came through here; creation did not.
+    await this.assertUserIsPartyToJob(userId, jobId);
+
     // If worker role and no workerId provided, auto-resolve from JWT user
     let workerId: number;
     if (dto.workerId) {
@@ -547,6 +554,8 @@ export class ManualAttendanceService {
       relations: ['job', 'job.employer', 'job.client', 'worker'],
     });
     if (!request) throw new NotFoundException('Request not found');
+    // Self-approval still has to be the caller's own company.
+    await this.assertUserIsPartyToJob(userId, request.jobId);
 
     if (request.status !== ManualAttendanceRequestStatus.PENDING) {
       throw new BadRequestException('This request has already been reviewed');

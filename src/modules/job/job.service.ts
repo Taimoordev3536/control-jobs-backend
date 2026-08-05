@@ -3460,6 +3460,27 @@ async getAllJobsByWorkerFromToken(userId: number) {
           Intl.DateTimeFormat().resolvedOptions().timeZone ||
           'UTC';
 
+        // A check-out closes a specific session, so it inherits that session's
+        // work centre and method rather than believing the request. The worker
+        // app sends neither, which left every method gate evaluating undefined
+        // and skipping — and a caller who did send them could close at a
+        // different centre from the one they opened at.
+        if (recordScanDto.scanType === 'check-out') {
+          const open = await txManager.findOne(WorkSession, {
+            where: { workerId, jobId: job.id, checkOutTime: IsNull() },
+            order: { checkInTime: 'DESC' },
+          });
+          if (open) {
+            // resolvedWorkCenterId was decided before the transaction, so it is
+            // the one that has to change — rewriting the DTO here would be read
+            // by nothing.
+            if (open.workCenterId) resolvedWorkCenterId = open.workCenterId;
+            if (!recordScanDto.signingMethod && open.checkInMethod) {
+              recordScanDto.signingMethod = open.checkInMethod as any;
+            }
+          }
+        }
+
         if (recordScanDto.scanType === 'check-in') {
           // Build a Date whose local fields represent the Madrid wall-clock, so
           // the existing schedule readers evaluate the check against the business
