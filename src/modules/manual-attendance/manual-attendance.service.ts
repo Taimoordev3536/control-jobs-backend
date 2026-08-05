@@ -15,7 +15,7 @@ import { QueryManualAttendanceRequestsDto } from './dto/query-manual-attendance-
 import { Job } from '../job/entities/job.entity';
 import { Worker } from '../workers/entities/worker.entity';
 import { WorkCenter } from '../work-centers/entities/work-center.entity';
-import { WorkSession } from '../job/entities/work-session.entity';
+import { WorkSession, SessionReviewStatus } from '../job/entities/work-session.entity';
 import { ScanLog } from '../job/entities/scan-log.entity';
 import { EmployerUser } from '../employers/entities/employer-user.entity';
 import { WorkerUser } from '../workers/entities/worker-user.entity';
@@ -619,6 +619,13 @@ export class ManualAttendanceService {
         if (request.requestedCheckIn) workSession.checkInTime = request.requestedCheckIn;
         if (request.requestedCheckOut) workSession.checkOutTime = request.requestedCheckOut;
         workSession.source = 'MANUAL';
+        // A human has just given the real times, which is exactly what the
+        // review queue was waiting for. Leaving the flag set kept the session
+        // in the queue forever and kept its hours out of pay and invoices,
+        // which filter on it.
+        workSession.reviewStatus = SessionReviewStatus.CONFIRMED;
+        workSession.reviewedByUserId = reviewerUserId;
+        workSession.reviewedAt = new Date();
 
         // Recalculate total work minutes
         if (workSession.checkInTime && workSession.checkOutTime) {
@@ -650,6 +657,13 @@ export class ManualAttendanceService {
         workSession.checkOutTime = request.requestedCheckOut;
         workSession.checkOutMethod = 'manual';
         workSession.source = 'MANUAL';
+        // A human has just given the real times, which is exactly what the
+        // review queue was waiting for. Leaving the flag set kept the session
+        // in the queue forever and kept its hours out of pay and invoices,
+        // which filter on it.
+        workSession.reviewStatus = SessionReviewStatus.CONFIRMED;
+        workSession.reviewedByUserId = reviewerUserId;
+        workSession.reviewedAt = new Date();
         // Always clear: ux_worker_active_session keys on is_active, so leaving
         // it true blocks the worker's next check-in.
         workSession.isActive = false;

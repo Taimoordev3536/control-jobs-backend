@@ -89,7 +89,29 @@ export class SessionReviewService {
       const wu = await this.workerUserRepo.findOne({ where: { userId } });
       qb.andWhere('ws.worker_id = :id', { id: wu?.workerId ?? -1 });
     }
-    return qb.getMany();
+    const rows = await qb.getMany();
+    // Worker names live on the workers_users junction, not worker.user_id, so
+    // without this the queue shows bare codes — the same fix the overtime
+    // queue needed.
+    const names = await this.resolveWorkerNames(rows.map((r) => r.workerId));
+    return rows.map((r) => ({
+      ...r,
+      worker: { ...(r.worker as any), name: names.get(r.workerId) ?? (r.worker as any)?.code ?? null },
+    })) as any;
+  }
+
+  private async resolveWorkerNames(workerIds: (number | null | undefined)[]): Promise<Map<number, string>> {
+    const names = new Map<number, string>();
+    const ids = Array.from(new Set(workerIds.filter((id): id is number => id != null)));
+    if (!ids.length) return names;
+    const links = await this.workerUserRepo.find({
+      where: ids.map((id) => ({ workerId: id })),
+      relations: ['user'],
+    });
+    for (const l of links as any[]) {
+      if (l.workerId && l.user?.name) names.set(l.workerId, l.user.name);
+    }
+    return names;
   }
 
   async get(publicId: string, userId: number) {
@@ -127,6 +149,18 @@ export class SessionReviewService {
     if (!session) throw new NotFoundException('Session not found');
     const { canSettle } = await this.access(userId, session);
     if (!canSettle) throw new ForbiddenException('Only the employer or the worker can settle this');
+    // Only a session the system flagged may be settled here. Without this a
+    // worker could rewrite any of their own past records — including ones
+    // already confirmed, paid and invoiced — bypassing the manual-attendance
+    // request and approval flow entirely.
+    if (!UNSETTLED_REVIEW_STATUSES.includes(session.reviewStatus as SessionReviewStatus)) {
+      throw new BadRequestException(
+        'This session is not awaiting review. Use a manual attendance request to correct it.',
+      );
+    }
+    if (Number.isNaN(checkOutTime.getTime())) {
+      throw new BadRequestException('A valid end time is required');
+    }
     if (checkOutTime.getTime() <= session.checkInTime.getTime()) {
       throw new BadRequestException('The end time must be after the check-in');
     }
