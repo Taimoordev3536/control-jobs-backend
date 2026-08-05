@@ -12,7 +12,7 @@ import { OvertimeService } from './overtime.service';
 describe('OvertimeService.decide', () => {
   // decide() is pure; nothing it touches is injected.
   const svc = new OvertimeService(
-    ...(Array(8).fill(null) as [any, any, any, any, any, any, any, any]),
+    ...(Array(9).fill(null) as [any, any, any, any, any, any, any, any, any]),
   );
 
   describe('a job with a roster, on a scheduled day', () => {

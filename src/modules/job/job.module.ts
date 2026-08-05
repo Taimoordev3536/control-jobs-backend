@@ -34,6 +34,7 @@ import { SessionReviewService } from './services/session-review.service';
 import { User } from '../users/entities/user.entity';
 import { SessionReviewController } from './session-review.controller';
 import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { AttendancePolicyModule } from '../attendance-policy/attendance-policy.m
     QrCodeModule,
     CloudinaryModule,
     WebauthnModule,
+    AuditModule,
   ],
   providers: [JobService, JobScheduleService, SessionWatchdogService, SessionReviewService, OvertimeService],
   controllers: [JobController, SessionReviewController, OvertimeController],

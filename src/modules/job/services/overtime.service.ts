@@ -18,6 +18,7 @@ import { WorkerUser } from '../../workers/entities/worker-user.entity';
 import { User } from '../../users/entities/user.entity';
 import { UserRole } from '../../auth/enums/user-role.enum';
 import { AttendancePolicyService } from '../../attendance-policy/attendance-policy.service';
+import { AuditService } from '../../audit/audit.service';
 
 export type OvertimeStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
@@ -51,6 +52,7 @@ export class OvertimeService {
     @InjectRepository(User) private readonly userRepo: Repository<User>,
     private readonly schedule: JobScheduleService,
     private readonly policies: AttendancePolicyService,
+    private readonly audit: AuditService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -142,6 +144,7 @@ export class OvertimeService {
     publicId: string,
     userId: number,
     compensation?: 'PAID' | 'TIME_OFF',
+    acknowledgeCap = false,
   ): Promise<WorkSession> {
     const session = await this.loadOwned(publicId, userId);
     const policy = await this.policies.resolve(session.jobId, session.workerId);
@@ -149,17 +152,34 @@ export class OvertimeService {
     const year = new Date(session.checkInTime).getFullYear();
     const sofar = await this.annualTotal(session.workerId, year, policy.overtimeAnnualCapHours);
     const adding = Math.round(((session.overtimeMinutes || 0) / 60) * 100) / 100;
-    if (policy.overtimeAnnualCapHours > 0 && sofar.hours + adding > policy.overtimeAnnualCapHours) {
+    const wouldExceed =
+      policy.overtimeAnnualCapHours > 0 &&
+      sofar.hours + adding > policy.overtimeAnnualCapHours;
+    if (wouldExceed && !acknowledgeCap) {
       throw new BadRequestException(
         `Approving ${adding} h would take ${year} to ${Math.round((sofar.hours + adding) * 100) / 100} h, ` +
           `over the ${policy.overtimeAnnualCapHours} h limit. ` +
-          (sofar.remainingHours > 0 ? `${sofar.remainingHours} h remain.` : 'The limit is already reached.'),
+          (sofar.remainingHours > 0 ? `${sofar.remainingHours} h remain. ` : 'The limit is already reached. ') +
+          `The hours were worked either way — confirm to record them over the limit, ` +
+          `or reject them if they were not overtime.`,
       );
     }
 
     session.overtimeStatus = 'APPROVED';
     session.overtimeCompensation = compensation || policy.overtimeDefaultCompensation;
-    return this.sessionRepo.save(session);
+    const saved = await this.sessionRepo.save(session);
+
+    // Recorded rather than hidden: refusing to approve left the only way out
+    // as rejecting the hours, which erases overtime that was actually worked.
+    if (wouldExceed) {
+      await this.audit.record({
+        actorUserId: userId,
+        action: 'OVERTIME_APPROVED_OVER_CAP',
+        detail: `Worker ${session.workerId}, ${year}: ${adding} h approved taking the year to `
+          + `${Math.round((sofar.hours + adding) * 100) / 100} h against a ${policy.overtimeAnnualCapHours} h limit`,
+      });
+    }
+    return saved;
   }
 
   /** A worker's approved overtime for a year, resolved by their public id. */

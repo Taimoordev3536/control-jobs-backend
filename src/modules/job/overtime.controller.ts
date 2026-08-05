@@ -45,10 +45,12 @@ export class OvertimeController {
   @Post(':publicId/approve')
   async approve(
     @Param('publicId') publicId: string,
-    @Body() body: { compensation?: 'PAID' | 'TIME_OFF' },
+    @Body() body: { compensation?: 'PAID' | 'TIME_OFF'; acknowledgeCap?: boolean },
     @Req() req,
   ) {
-    const data = await this.service.approve(publicId, req.user.id, body?.compensation);
+    const data = await this.service.approve(
+      publicId, req.user.id, body?.compensation, !!body?.acknowledgeCap,
+    );
     return { message: 'Approved', data, isSuccess: true };
   }
 

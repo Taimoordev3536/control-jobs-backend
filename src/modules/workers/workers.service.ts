@@ -250,10 +250,16 @@ export class WorkersService {
       }
     }
 
+    // Rest-compensated overtime stays in ordinary hours. The worker did work
+    // them and this system pays by the hour, so removing them paid nothing at
+    // all for a day worked — a rest day, which is 100% overtime, came out at
+    // zero. "Compensated with rest" means they forgo the premium and take the
+    // time back later, not that the hours are unpaid.
+    const ordinary = Math.max(0, worked - paidOt);
     return {
       ids: rows.map((r: any) => Number(r.id)),
       hours: h(worked),
-      ordinaryHours: h(worked - paidOt - restOt),
+      ordinaryHours: h(ordinary),
       paidOvertimeHours: h(paidOt),
       restOvertimeHours: h(restOt),
       pendingCount,

@@ -86,7 +86,17 @@ export class AutofacturaService {
     issueDate: string,
   ): Promise<string> {
     const year = Number((issueDate || '').slice(0, 4)) || madridCivilToday().getFullYear();
-    const prefix = `${this.prefix(partner.name)}-${year}-`;
+    // The prefix comes from the partner's name, so renaming them mid-year
+    // would start a second series. Once the year has one, that prefix stands.
+    const [existing] = await manager.query(
+      `SELECT autofactura_number FROM cjobs_autofacturas
+        WHERE partner_id = $1 AND autofactura_number LIKE $2
+        ORDER BY autofactura_number DESC LIMIT 1`,
+      [partner.id, `%-${year}-%`],
+    );
+    const prefix = existing
+      ? String(existing.autofactura_number).slice(0, String(existing.autofactura_number).indexOf(`-${year}-`) + `-${year}-`.length)
+      : `${this.prefix(partner.name)}-${year}-`;
     return this.documentNumbers.next(manager, 'autofactura', prefix, partner.id, year);
   }
 
@@ -232,6 +242,18 @@ export class AutofacturaService {
     if (!partner) throw new NotFoundException('Partner not found');
     if (!periodStart || !periodEnd) throw new BadRequestException('A period is required');
 
+    // The monthly sweep checks this before generating; the endpoint did not,
+    // so running it twice for the same month paid the partner's commission
+    // twice, both PENDING and both picked up by the bank batch.
+    const already = await this.repo.findOne({
+      where: { partnerId: partner.id, periodStart, isManual: false },
+    });
+    if (already) {
+      throw new BadRequestException(
+        `${already.autofacturaNumber} already covers this period for this partner`,
+      );
+    }
+
     const employers = await this.employerRepo.find({ where: { partnerId: partner.id }, relations: ['subType'] });
     const empById = new Map(employers.map((e) => [e.id, e]));
     const employerIds = employers.map((e) => e.id);
@@ -328,9 +350,14 @@ export class AutofacturaService {
     return created;
   }
 
+  // The same status rules every other document in the system enforces. Without
+  // them a cancelled commission could be flipped to paid, and a paid one —
+  // where the transfer has already left the account — back to cancelled.
   async markPaid(publicId: string) {
     const a = await this.repo.findOne({ where: { publicId } });
     if (!a) throw new NotFoundException('Autofactura not found');
+    if (a.status === 'PAID') throw new BadRequestException('This autofactura is already marked as paid');
+    if (a.status === 'CANCELLED') throw new BadRequestException('A cancelled autofactura cannot be marked as paid');
     a.status = 'PAID';
     a.paidAt = new Date();
     await this.repo.save(a);
@@ -340,6 +367,10 @@ export class AutofacturaService {
   async cancel(publicId: string) {
     const a = await this.repo.findOne({ where: { publicId } });
     if (!a) throw new NotFoundException('Autofactura not found');
+    if (a.status === 'CANCELLED') throw new BadRequestException('This autofactura is already cancelled');
+    if (a.status === 'PAID') {
+      throw new BadRequestException('A paid autofactura cannot be cancelled — the payment already happened');
+    }
     a.status = 'CANCELLED';
     await this.repo.save(a);
     return this.findByPublicId(publicId);
@@ -349,6 +380,16 @@ export class AutofacturaService {
     const a = await this.repo.findOne({ where: { publicId } });
     if (!a) throw new NotFoundException('Autofactura not found');
     if (a.status !== 'PENDING') throw new BadRequestException('Only pending autofacturas can be deleted');
+    // Only the last one, like every other numbered document: deleting from the
+    // middle leaves a permanent hole in the partner's series.
+    const isLast = await this.documentNumbers.isLast(
+      this.repo.manager, 'autofactura', a.autofacturaNumber, a.partnerId,
+    );
+    if (!isLast) {
+      throw new BadRequestException(
+        `Only the last autofactura of the series can be deleted. ${a.autofacturaNumber} is not the last one.`,
+      );
+    }
     await this.repo.delete(a.id);
     return { isSuccess: true };
   }

@@ -97,7 +97,14 @@ export class InvoiceService {
       ? await this.ratePlanRepo.findOne({ where: { id: employer.ratePlanId } })
       : null;
     const rates = ratePlan
-      ? this.ratePlanService.getEffectiveRates(ratePlan, options.issueDate ?? new Date())
+      // Priced by the period it covers, not the day it is issued. The cron
+      // runs on the 1st, so pricing at "today" charged January at February's
+      // tariff — and the preview, which already used periodStart, disagreed
+      // with what was actually issued.
+      ? this.ratePlanService.getEffectiveRates(
+          ratePlan,
+          options.periodStart ? new Date(options.periodStart) : (options.issueDate ?? new Date()),
+        )
       : { monthlyFixed: 0, perWorkCenter: 0, perWorker: 0 };
 
     const isProrated =
@@ -434,13 +441,20 @@ export class InvoiceService {
     // The new format has exactly one '-' between the year and the counter
     // (no month segment). Match `SERIES-YYYY-NNNNNN` strictly and exclude
     // the legacy `SERIES-YYYY-MM-NNNNNN` rows that share the same prefix.
+    // FOR UPDATE locks the rows it finds — and on an empty bucket it finds
+    // none, so two callers on 1 January both read zero and both produce
+    // ...000001. The lock goes on the bucket itself, before the read, which
+    // is the whole reason DocumentNumberService exists.
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `cjobs_invoices:series:${prefix}`,
+    ]);
+
     const result = await manager.query(
       `SELECT invoice_number FROM cjobs_invoices
         WHERE invoice_number LIKE $1
           AND invoice_number !~ $2
         ORDER BY invoice_number DESC
-        LIMIT 1
-        FOR UPDATE`,
+        LIMIT 1`,
       [`${prefix}%`, `^${series}-${yyyy}-\\d{2}-`],
     );
 
@@ -1032,8 +1046,12 @@ export class InvoiceService {
     const ratePlan = employer?.ratePlanId
       ? await this.ratePlanRepo.findOne({ where: { id: employer.ratePlanId } })
       : null;
+    // The invoice keeps the tariff and the proration it was issued under.
+    // Recomputing at today's rates turned a half-month January invoice edited
+    // in July into a full month at July's prices, while the PDF still claimed
+    // it was prorated.
     const rates = ratePlan
-      ? this.ratePlanService.getEffectiveRates(ratePlan)
+      ? this.ratePlanService.getEffectiveRates(ratePlan, new Date(invoice.periodStart))
       : { monthlyFixed: 0, perWorkCenter: 0, perWorker: 0 };
     const vatPct = Number(invoice.vatPct) || 0;
 
@@ -1047,6 +1065,10 @@ export class InvoiceService {
       workers: workerCount,
       discountPct: opts.discountPct,
       vatPct,
+      // Kept, so editing a prorated invoice does not quietly become a full
+      // month while the document still says it was prorated.
+      proratedDays: invoice.isProrated ? Number(invoice.proratedDays) : undefined,
+      daysInMonth: invoice.isProrated ? Number(invoice.daysInMonth) : undefined,
     });
 
     // Name maps: prefer current active names, fall back to existing snapshot names.
