@@ -12,6 +12,7 @@ import { WorkSession } from '../entities/work-session.entity';
 import { Job } from '../entities/job.entity';
 import { JobScheduleService } from './job-schedule.service';
 import { ScheduleType } from '../entities/schedule-type.enum';
+import { madridDateKey } from '../../../common/helpers/business-time';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { WorkerUser } from '../../workers/entities/worker-user.entity';
 import { User } from '../../users/entities/user.entity';
@@ -343,7 +344,12 @@ export class OvertimeService {
       const job = jobs.get(r.job_id);
       if (!job) continue;
 
-      const scheduled = this.schedule.getScheduledMinutesForDate(job, new Date(r.check_in_time)) || 0;
+      // Anchored to the Madrid civil day, like every other caller: a raw
+      // instant is read in the server's zone, so a 00:30 Madrid check-in falls
+      // on the previous weekday and picks up the wrong roster — usually none,
+      // which then books the whole session as overtime.
+      const dayDate = new Date(`${madridDateKey(r.check_in_time)}T12:00:00`);
+      const scheduled = this.schedule.getScheduledMinutesForDate(job, dayDate) || 0;
       const d = this.decide(this.hasSchedule(job), scheduled, r.total_work_minutes);
 
       let status = d.status;
