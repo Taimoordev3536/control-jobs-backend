@@ -174,7 +174,7 @@ export class OvertimeService {
       [workerPublicId, employerId],
     );
     if (!w) throw new NotFoundException('Worker not found');
-    const policy = await this.policies.resolveForEmployer(employerId);
+    const policy = await this.policies.resolveForWorker(employerId, w.id);
     return this.annualTotal(w.id, year || new Date().getFullYear(), policy.overtimeAnnualCapHours);
   }
 
@@ -191,7 +191,7 @@ export class OvertimeService {
       `SELECT "employerId" FROM "employerWorkers" WHERE "workerId" = $1 LIMIT 1`,
       [wu.workerId],
     );
-    const policy = await this.policies.resolveForEmployer(emp?.employerId ?? null);
+    const policy = await this.policies.resolveForWorker(emp?.employerId ?? null, wu.workerId);
     const total = await this.annualTotal(wu.workerId, y, policy.overtimeAnnualCapHours);
 
     const sessions = await this.dataSource.query(
@@ -329,7 +329,7 @@ export class OvertimeService {
     if (!rows.length) return 0;
 
     const jobs = new Map<number, Job | null>();
-    const policies = new Map<number, any>();
+    const policies = new Map<string, any>();
     let done = 0;
     for (const r of rows) {
       if (!jobs.has(r.job_id)) {
@@ -359,10 +359,14 @@ export class OvertimeService {
       // straight away. It still stops at the annual limit: past that the
       // figure is exactly what somebody needs to look at.
       if (status === 'PENDING') {
-        if (!policies.has(r.job_id)) {
-          policies.set(r.job_id, await this.policies.resolve(r.job_id, r.worker_id));
+        // Keyed by job AND worker: resolve() applies the worker layer, so a
+        // job-only key handed the first worker's overrides to everyone else
+        // on that job.
+        const policyKey = `${r.job_id}:${r.worker_id}`;
+        if (!policies.has(policyKey)) {
+          policies.set(policyKey, await this.policies.resolve(r.job_id, r.worker_id));
         }
-        const policy = policies.get(r.job_id);
+        const policy = policies.get(policyKey);
         if (!policy.overtimeRequiresApproval) {
           const year = new Date(r.check_in_time).getFullYear();
           const sofar = await this.annualTotal(r.worker_id, year, policy.overtimeAnnualCapHours);

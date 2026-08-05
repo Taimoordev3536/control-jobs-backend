@@ -6,6 +6,7 @@ import { WorkSession, SessionReviewStatus } from '../entities/work-session.entit
 import { ScanLog } from '../entities/scan-log.entity';
 import { Job } from '../entities/job.entity';
 import { ScheduleType } from '../entities/schedule-type.enum';
+import { madridCivil, madridCivilToInstant } from '../../../common/helpers/business-time';
 import { JobScheduleService } from './job-schedule.service';
 import { AttendancePolicyService, EffectivePolicy } from '../../attendance-policy/attendance-policy.service';
 import { AlertsService } from '../../realtime/alerts.service';
@@ -113,13 +114,19 @@ export class SessionWatchdogService {
   /** The moment the shift covering this check-in was due to end. */
   async shiftEndFor(job: Job, checkIn: Date): Promise<Date | null> {
     if (job.scheduleType === ScheduleType.FREE) return null;
-    const occurrences = this.schedule.getShiftOccurrencesAround(job, checkIn);
+    // The schedule reader works in local fields, so the check-in has to be
+    // converted to Madrid wall clock first and the answer converted back.
+    // Feeding it a raw instant read the shift in the server's zone — UTC in
+    // production — and closed an 08:00-16:00 day at 18:00 Madrid, recording
+    // two hours nobody worked.
+    const civilCheckIn = madridCivil(checkIn);
+    const occurrences = this.schedule.getShiftOccurrencesAround(job, civilCheckIn);
     if (!occurrences.length) return null;
     // The shift the worker actually started: the latest one that had begun.
     const started = occurrences
-      .filter((o) => o.start.getTime() <= checkIn.getTime() + 60 * 60_000)
+      .filter((o) => o.start.getTime() <= civilCheckIn.getTime() + 60 * 60_000)
       .sort((a, b) => b.start.getTime() - a.start.getTime());
-    return (started[0] ?? occurrences[0]).end;
+    return madridCivilToInstant((started[0] ?? occurrences[0]).end);
   }
 
   @Cron('*/15 * * * *', { name: 'session-watchdog' })

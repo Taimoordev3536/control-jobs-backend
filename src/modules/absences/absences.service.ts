@@ -33,7 +33,7 @@ export class AbsencesService {
   }
 
   private async vacationRules(employerId: number, workerId: number) {
-    const policy = await this.policies.resolveForEmployer(employerId);
+    const policy = await this.policies.resolveForWorker(employerId, workerId);
     return {
       daysPerYear: policy.vacationDaysPerYear,
       mode: (policy.vacationCountMode || 'WORKING') as VacationCountMode,

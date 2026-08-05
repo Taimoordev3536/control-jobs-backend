@@ -142,6 +142,23 @@ export class AttendancePolicyService {
     return effective;
   }
 
+  /**
+   * Company rules with this worker's own override applied. For anything that
+   * spans jobs — a payslip, a holiday balance — where the job layer has no
+   * meaning but the worker layer does.
+   */
+  async resolveForWorker(employerId: number | null, workerId: number): Promise<EffectivePolicy> {
+    const effective = await this.resolveForEmployer(employerId);
+    const layer = await this.policyRepo.findOne({ where: { workerId } });
+    if (layer) {
+      for (const field of POLICY_FIELDS) {
+        const value = (layer as any)[field];
+        if (value !== null && value !== undefined) (effective as any)[field] = value;
+      }
+    }
+    return effective;
+  }
+
   // ─── Authorization ────────────────────────────────────────────────
 
   private async roleOf(userId: number): Promise<string> {

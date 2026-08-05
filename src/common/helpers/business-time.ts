@@ -94,3 +94,29 @@ export function previousMonthRangeMadrid(): {
     endIso: end.toFormat('yyyy-MM-dd'),
   };
 }
+
+/**
+ * The instant, expressed as a Date whose *local fields* carry the Madrid wall
+ * clock. Schedule readers work in local fields, so anything compared against a
+ * shift has to be converted first — passing a raw instant reads it in the
+ * server's zone, which is UTC in production and shifts the day.
+ */
+export function madridCivil(d: Date | string): Date {
+  const t = DateTime.fromJSDate(new Date(d)).setZone(BUSINESS_TZ);
+  return new Date(t.year, t.month - 1, t.day, t.hour, t.minute, t.second);
+}
+
+/** The reverse: a Madrid wall-clock Date back to the real instant it names. */
+export function madridCivilToInstant(civil: Date): Date {
+  return DateTime.fromObject(
+    {
+      year: civil.getFullYear(),
+      month: civil.getMonth() + 1,
+      day: civil.getDate(),
+      hour: civil.getHours(),
+      minute: civil.getMinutes(),
+      second: civil.getSeconds(),
+    },
+    { zone: BUSINESS_TZ },
+  ).toJSDate();
+}

@@ -310,7 +310,7 @@ export class WorkersService {
     // form posts a figure the issue path then refuses.
     const billable = await this.billableSessions(this.dataSource, workerId, periodStart, periodEnd);
     const employerId = await this.employerIdForWorker(workerId);
-    const policy = await this.attendancePolicies.resolveForEmployer(employerId);
+    const policy = await this.attendancePolicies.resolveForWorker(employerId, workerId);
 
     const hoursQty = billable.ordinaryHours;
     const hourRate = cfg.hourRate ?? dn(def.defSalaryHourRate) ?? 0;
@@ -425,7 +425,7 @@ export class WorkersService {
 
     // Overtime paid in money is its own concept at its own rate, as Art. 35.5
     // requires it to be distinguishable. Overtime taken as rest is not paid.
-    const policy = await this.attendancePolicies.resolveForEmployer(employerId);
+    const policy = await this.attendancePolicies.resolveForWorker(employerId, workerId);
     const otRate = Math.round(hourRate * Number(policy.overtimeRateMultiplier || 1) * 100) / 100;
     const otAmount = Math.round(billable.paidOvertimeHours * otRate * 100) / 100;
 
@@ -457,9 +457,11 @@ export class WorkersService {
     }
 
     const year = Number((body.issueDate || madridTodayKey()).slice(0, 4));
-    const receiptNumber =
-      body.receiptNumber?.trim() ||
-      (await this.documentNumbers.next(manager, 'salaryReceipt', `RS-${year}-`, employerId, year));
+    // The number always comes from the generator. A caller-supplied one
+    // bypassed every check: post RS-2026-9999 once and the next number is
+    // 10000, whose extra digit the length filter can never match again —
+    // that employer could not issue another document, ever.
+    const receiptNumber = await this.documentNumbers.next(manager, 'salaryReceipt', `RS-${year}-`, employerId, year);
 
     const rec = manager.create(SalaryReceipt, {
       workerId,

@@ -451,9 +451,11 @@ export class ClientsService {
     }
 
     const year = Number((body.issueDate || madridTodayKey()).slice(0, 4));
-    const invoiceNumber =
-      body.invoiceNumber?.trim() ||
-      (await this.documentNumbers.next(manager, 'clientInvoice', `F-${year}-`, employerId, year));
+    // The number always comes from the generator. A caller-supplied one
+    // bypassed every check: post RS-2026-9999 once and the next number is
+    // 10000, whose extra digit the length filter can never match again —
+    // that employer could not issue another document, ever.
+    const invoiceNumber = await this.documentNumbers.next(manager, 'clientInvoice', `F-${year}-`, employerId, year);
 
     const rec = manager.create(ClientInvoice, {
       clientId,
