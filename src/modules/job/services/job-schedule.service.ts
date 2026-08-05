@@ -274,6 +274,31 @@ export class JobScheduleService {
   }
 
   /** Shift occurrences running near `instant`. Looks back a week: shifts can span days. */
+  /**
+   * The shift a check-in belongs to: the latest one that had already started.
+   *
+   * Callers were using getShiftsForDate and taking the earliest start, but
+   * that returns any shift *touching* the day — deliberately including one
+   * that began yesterday. On a Sunday 18:00 to Monday 06:00 shift, a worker
+   * arriving Monday at 00:30 was compared against 18:00 and called early
+   * instead of six hours late.
+   *
+   * `instant` must carry Madrid wall-clock local fields.
+   */
+  getShiftForCheckIn(job: Job, instant: Date): { shift: Shift; start: Date; end: Date } | null {
+    const occurrences = this.getShiftOccurrencesAround(job, instant);
+    if (!occurrences.length) return null;
+    const t = instant.getTime();
+    const GRACE = 60 * 60_000;
+    // Must actually cover the moment. Taking "the latest that had begun"
+    // alone reached back through the whole week the search window spans and
+    // matched the same weekday's shift seven days earlier.
+    const covering = occurrences
+      .filter((o) => o.start.getTime() - GRACE <= t && t <= o.end.getTime())
+      .sort((a, b) => b.start.getTime() - a.start.getTime());
+    return covering[0] ?? null;
+  }
+
   getShiftOccurrencesAround(
     job: Job,
     instant: Date,

@@ -255,12 +255,16 @@ export class WorkersService {
     // all for a day worked — a rest day, which is 100% overtime, came out at
     // zero. "Compensated with rest" means they forgo the premium and take the
     // time back later, not that the hours are unpaid.
-    const ordinary = Math.max(0, worked - paidOt);
+    // Rounded once, then subtracted — not rounded independently. Four separate
+    // roundings meant 122 min worked with 1 min paid overtime billed 2,00 +
+    // 0,02 against 2,03 h worked: money invented rather than redistributed.
+    const totalHours = h(worked);
+    const paidHours = h(paidOt);
     return {
       ids: rows.map((r: any) => Number(r.id)),
-      hours: h(worked),
-      ordinaryHours: h(ordinary),
-      paidOvertimeHours: h(paidOt),
+      hours: totalHours,
+      ordinaryHours: Math.max(0, Math.round((totalHours - paidHours) * 100) / 100),
+      paidOvertimeHours: paidHours,
       restOvertimeHours: h(restOt),
       pendingCount,
       uncomputedCount,
@@ -371,6 +375,8 @@ export class WorkersService {
       notes?: string;
       paymentMethodId?: number | null;
       lines?: { description: string; quantity?: number; unitPrice: number }[];
+      /** Confirms paying fewer hours than were recorded, which forfeits them. */
+      acknowledgeUnbilledHours?: boolean;
     },
     userId: number | undefined,
   ) {
@@ -436,6 +442,17 @@ export class WorkersService {
     const otAmount = Math.round(billable.paidOvertimeHours * otRate * 100) / 100;
 
     const hoursQty = body.hoursQty != null ? this.num(body.hoursQty) : billable.ordinaryHours;
+    // Paying less than was recorded settles the whole period regardless — the
+    // sessions are claimed either way — so the difference is gone for good.
+    // That is a real decision an employer may want to make, but not one to
+    // make by accident.
+    if (hoursQty < billable.ordinaryHours && !body.acknowledgeUnbilledHours) {
+      throw new BadRequestException(
+        `${billable.ordinaryHours} ordinary hours are recorded for this period but only ${hoursQty} ` +
+          `would be paid. The remaining ${Math.round((billable.ordinaryHours - hoursQty) * 100) / 100} h ` +
+          `cannot be billed later — confirm to issue anyway, or change the period.`,
+      );
+    }
     if (hoursQty > billable.ordinaryHours) {
       throw new BadRequestException(
         `Only ${billable.ordinaryHours} unbilled ordinary hours are recorded for this period` +

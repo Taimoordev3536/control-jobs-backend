@@ -2646,8 +2646,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       const job = jobById.get(session.job?.id);
       if (job) {
         const dayDate = new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`);
-        const starts = this.jobScheduleService.getShiftsForDate(job, dayDate).map((s) => s.baseStartTime).filter(Boolean).sort();
-        const shiftStart = starts[0] ? starts[0].slice(0, 5) : null;
+        const shiftStart = this.shiftBoundsFor(job, session.checkInTime).start;
         if (shiftStart) {
           const [sh, sm] = shiftStart.split(':').map(Number);
           const diff = this.madridMinutes(session.checkInTime) - (sh * 60 + sm);
@@ -2697,6 +2696,31 @@ async getAllJobsByWorkerFromToken(userId: number) {
     if (scheduledMinutes <= 0) return '—';
     const m = Math.max(0, (session?.totalWorkMinutes || 0) - scheduledMinutes);
     return m > 0 ? `${Math.floor(m / 60)}h ${m % 60}m` : '0h';
+  }
+
+  /**
+   * The start and end of the shift a session belongs to, as HH:MM.
+   *
+   * Sites used to take the earliest start of any shift touching the day,
+   * which on an overnight shift compared a 00:30 arrival against the
+   * *previous evening's* 18:00 and called it early.
+   */
+  private shiftBoundsFor(job: any, checkInTime: Date | string): { start: string | null; end: string | null } {
+    if (!job) return { start: null, end: null };
+    const civil = new Date(`${this.madridDateKey(checkInTime)}T${this.madridTime(checkInTime)}:00`);
+    const occ = this.jobScheduleService.getShiftForCheckIn(job, civil);
+    if (occ) {
+      const hh = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      return { start: hh(occ.start), end: hh(occ.end) };
+    }
+    const day = new Date(`${this.madridDateKey(checkInTime)}T12:00:00`);
+    const shifts = this.jobScheduleService.getShiftsForDate(job, day);
+    const starts = shifts.map((x: any) => x.baseStartTime).filter(Boolean).sort();
+    const ends = shifts.map((x: any) => x.baseEndTime).filter(Boolean).sort();
+    return {
+      start: starts[0] ? starts[0].slice(0, 5) : null,
+      end: ends.length ? ends[ends.length - 1].slice(0, 5) : null,
+    };
   }
 
   private calcPunctuality(shiftTime: string | null, actualMinutes: number, isCheckout = false) {
@@ -2814,11 +2838,7 @@ async getAllJobsByWorkerFromToken(userId: number) {
       };
     });
 
-    const shifts = this.jobScheduleService.getShiftsForDate(job, dayDate);
-    const starts = shifts.map((s: any) => s.baseStartTime).filter(Boolean).sort();
-    const ends = shifts.map((s: any) => s.baseEndTime).filter(Boolean).sort();
-    const shiftStart = starts[0] ? starts[0].slice(0, 5) : null;
-    const shiftEnd = ends.length ? ends[ends.length - 1].slice(0, 5) : null;
+    const { start: shiftStart, end: shiftEnd } = this.shiftBoundsFor(job, session.checkInTime);
 
     const scheduledMinutes = this.jobScheduleService.getScheduledMinutesForDate(job, dayDate) || 0;
     const workedMinutes = session.totalWorkMinutes || 0;
@@ -5862,10 +5882,8 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
         }
 
         const _dayDate = new Date(`${this.madridDateKey(session.checkInTime)}T12:00:00`);
-        const _shifts = session.job ? this.jobScheduleService.getShiftsForDate(session.job, _dayDate) : [];
-        const _starts = _shifts.map((s: any) => s.baseStartTime).filter(Boolean).sort();
-        const _shiftStart = _starts[0] ? _starts[0].slice(0, 5) : null;
-        const _p = this.calcPunctuality(_shiftStart, this.madridMinutes(session.checkInTime));
+        const _bounds = this.shiftBoundsFor(session.job, session.checkInTime);
+        const _p = this.calcPunctuality(_bounds.start, this.madridMinutes(session.checkInTime));
         const puntualidad = _p?.status === 'late' ? `+${_p.minutes}m tarde` : _p?.status === 'early' ? 'Adelantado' : _p?.status === 'onTime' ? 'A tiempo' : '—';
         const _schedMin = session.job ? (this.jobScheduleService.getScheduledMinutesForDate(session.job, _dayDate) || 0) : 0;
         const extra = this.overtimeLabel(session, _schedMin);

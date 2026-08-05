@@ -14,11 +14,6 @@ export class OvertimeController {
     return { message: 'Success', data, isSuccess: true };
   }
 
-  @Get('count')
-  async count(@Req() req) {
-    const count = await this.service.countPending(req.user.id);
-    return { message: 'Success', data: { count }, isSuccess: true };
-  }
 
   /** The caller's own overtime for a year. Workers only. */
   @Get('mine')

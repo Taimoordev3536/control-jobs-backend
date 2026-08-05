@@ -216,7 +216,4 @@ export class SessionReviewService {
     return this.sessionRepo.save(session);
   }
 
-  async countPending(userId: number): Promise<number> {
-    return (await this.list(userId)).length;
-  }
 }

@@ -14,11 +14,6 @@ export class SessionReviewController {
     return { message: 'Success', data, isSuccess: true };
   }
 
-  @Get('count')
-  async count(@Req() req) {
-    const count = await this.service.countPending(req.user.id);
-    return { message: 'Success', data: { count }, isSuccess: true };
-  }
 
   @Get(':publicId')
   async get(@Param('publicId') publicId: string, @Req() req) {

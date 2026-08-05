@@ -401,4 +401,56 @@ describe('JobScheduleService', () => {
       expect(svc.getShiftsForDate(j, MON)).toHaveLength(1);
     });
   });
+
+  describe('getShiftForCheckIn — the shift a session belongs to', () => {
+    // Sunday 18:00 -> Monday 06:00. Callers used to take the earliest start of
+    // any shift touching the day, so a Monday 00:30 arrival was measured
+    // against that same 18:00 and reported as early instead of 6h30 late.
+    const overnight = () =>
+      job({
+        seasons: [{
+          season: 'normal',
+          shifts: [shift({ startWeekday: Weekday.SUNDAY, endWeekday: Weekday.MONDAY, baseStartTime: '18:00', baseEndTime: '06:00' })],
+        }],
+      });
+
+    it('picks the shift that had already started, not the earliest of the day', () => {
+      const arrival = new Date(2026, 7, 3, 0, 30); // Monday 00:30
+      const occ = svc.getShiftForCheckIn(overnight(), arrival);
+      expect(occ).not.toBeNull();
+      expect(occ!.start.getDay()).toBe(0);
+      expect(occ!.start.getHours()).toBe(18);
+    });
+
+    it('makes that arrival late, not early', () => {
+      const arrival = new Date(2026, 7, 3, 0, 30);
+      const occ = svc.getShiftForCheckIn(overnight(), arrival)!;
+      const minutesLate = Math.round((arrival.getTime() - occ.start.getTime()) / 60000);
+      expect(minutesLate).toBe(390); // 6h30
+    });
+
+    it('picks the right one on an ordinary day shift', () => {
+      const j = job({
+        seasons: [{ season: 'normal', shifts: [shift({ startWeekday: Weekday.MONDAY, endWeekday: Weekday.MONDAY, baseStartTime: '08:00', baseEndTime: '16:00' })] }],
+      });
+      const occ = svc.getShiftForCheckIn(j, new Date(2026, 6, 27, 8, 5));
+      expect(occ!.start.getHours()).toBe(8);
+      expect(occ!.end.getHours()).toBe(16);
+    });
+
+    it('returns null when nothing had started yet', () => {
+      const j = job({
+        seasons: [{ season: 'normal', shifts: [shift({ startWeekday: Weekday.MONDAY, endWeekday: Weekday.MONDAY, baseStartTime: '14:00', baseEndTime: '22:00' })] }],
+      });
+      // 06:00 is more than an hour before the 14:00 start
+      expect(svc.getShiftForCheckIn(j, new Date(2026, 6, 27, 6, 0))).toBeNull();
+    });
+
+    it('allows arriving up to an hour early', () => {
+      const j = job({
+        seasons: [{ season: 'normal', shifts: [shift({ startWeekday: Weekday.MONDAY, endWeekday: Weekday.MONDAY, baseStartTime: '14:00', baseEndTime: '22:00' })] }],
+      });
+      expect(svc.getShiftForCheckIn(j, new Date(2026, 6, 27, 13, 30))).not.toBeNull();
+    });
+  });
 });

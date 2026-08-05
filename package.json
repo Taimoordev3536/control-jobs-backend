@@ -28,7 +28,11 @@
     "migration:run": "ts-node src/migrations/run-migrations.ts",
     "verify:boot": "ts-node --transpile-only src/scripts/verify-boot.ts",
     "backfill:billed-sessions": "ts-node -T src/scripts/backfill-billed-sessions.ts",
-    "backfill:absence-days": "ts-node -T src/scripts/backfill-absence-days.ts"
+    "backfill:absence-days": "ts-node -T src/scripts/backfill-absence-days.ts",
+    "migrate:manual-attendance-defaults": "ts-node -T src/migrations/run-manual-attendance-defaults.ts",
+    "migrate:attendance-policy": "ts-node -T src/migrations/run-attendance-policy.ts",
+    "migrate:session-review": "ts-node -T src/migrations/run-session-review.ts",
+    "migrate:document-integrity": "ts-node -T src/migrations/run-document-integrity.ts"
   },
   "engines": {
     "node": "22"

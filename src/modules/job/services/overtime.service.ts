@@ -12,7 +12,7 @@ import { WorkSession } from '../entities/work-session.entity';
 import { Job } from '../entities/job.entity';
 import { JobScheduleService } from './job-schedule.service';
 import { ScheduleType } from '../entities/schedule-type.enum';
-import { madridDateKey } from '../../../common/helpers/business-time';
+import { madridDateKey, madridTodayKey } from '../../../common/helpers/business-time';
 import { EmployerUser } from '../../employers/entities/employer-user.entity';
 import { WorkerUser } from '../../workers/entities/worker-user.entity';
 import { User } from '../../users/entities/user.entity';
@@ -111,9 +111,6 @@ export class OvertimeService {
     return names;
   }
 
-  async countPending(userId: number): Promise<number> {
-    return (await this.listPending(userId)).length;
-  }
 
   private async loadOwned(publicId: string, userId: number): Promise<WorkSession> {
     const employerId = await this.employerScope(userId);
@@ -149,7 +146,9 @@ export class OvertimeService {
     const session = await this.loadOwned(publicId, userId);
     const policy = await this.policies.resolve(session.jobId, session.workerId);
 
-    const year = new Date(session.checkInTime).getFullYear();
+    // The Madrid year, not the server's: a check-in at 00:30 on 1 January
+    // Madrid is still 31 December in UTC and counted against the wrong year.
+    const year = Number(madridDateKey(session.checkInTime).slice(0, 4));
     const sofar = await this.annualTotal(session.workerId, year, policy.overtimeAnnualCapHours);
     const adding = Math.round(((session.overtimeMinutes || 0) / 60) * 100) / 100;
     const wouldExceed =
@@ -205,7 +204,7 @@ export class OvertimeService {
   async mine(userId: number, year?: number) {
     const wu = await this.workerUserRepo.findOne({ where: { userId } });
     if (!wu?.workerId) throw new ForbiddenException('Not a worker');
-    const y = year || new Date().getFullYear();
+    const y = year || Number(madridTodayKey().slice(0, 4));
 
     const [emp] = await this.dataSource.query(
       `SELECT "employerId" FROM "employerWorkers" WHERE "workerId" = $1 LIMIT 1`,
@@ -296,8 +295,8 @@ export class OvertimeService {
          FROM work_sessions
         WHERE worker_id = $1
           AND overtime_status = 'APPROVED'
-          AND check_in_time >= make_date($2, 1, 1)
-          AND check_in_time < make_date($2 + 1, 1, 1)`,
+          AND (check_in_time AT TIME ZONE 'Europe/Madrid') >= make_date($2, 1, 1)
+          AND (check_in_time AT TIME ZONE 'Europe/Madrid') < make_date($2 + 1, 1, 1)`,
       [workerId, year],
     );
     const hours = Math.round((Number(row?.mins || 0) / 60) * 100) / 100;
