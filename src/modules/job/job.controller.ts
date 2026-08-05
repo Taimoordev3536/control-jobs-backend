@@ -1,5 +1,6 @@
 
-import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Put, Query,Delete,Request,HttpException, HttpStatus, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseGuards, Get, Param, Patch, Put, Query,Delete,Request,HttpException, HttpStatus, ParseUUIDPipe, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { JobService } from './job.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
@@ -516,6 +517,28 @@ async getClientCalendar(
       numericJobId = await this.jobService.resolvePublicId(jobId);
     }
     return await this.jobService.getEmployerWorkSessionRecords(userId, numericJobId, startDate, endDate);
+  }
+
+  /** The daily record for a period, as an inspection would ask for it. */
+  @UseGuards(JwtAuthGuard)
+  @Get('employer/work-session-records/pdf')
+  async getEmployerRecordsPdf(
+    @Req() req,
+    @Res() res: Response,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('workerId') workerId?: string,
+    @Query('jobId') jobId?: string,
+  ) {
+    const { buffer, fileName } = await this.jobService.renderAttendanceRecordPdf(req.user?.id, {
+      startDate,
+      endDate,
+      workerPublicId: workerId,
+      jobPublicId: jobId,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.send(buffer);
   }
 
   @UseGuards(JwtAuthGuard)

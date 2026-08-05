@@ -11,6 +11,7 @@ import {
 import { isUUID } from 'class-validator';
 import { DateTime } from 'luxon';
 import { createHash } from 'crypto';
+import { renderAttendanceRecordPdf } from '../../common/helpers/attendance-record-pdf';
 import { ManualAttendanceRequest } from '../manual-attendance/entities/manual-attendance-request.entity';
 import { ManualAttendanceRequestType } from '../manual-attendance/enums/request-type.enum';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -5623,6 +5624,75 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
   /**
    * Get all work session records for employer's jobs
    */
+  /**
+   * The daily record for a period, as art. 34.9 ET requires it to be produced.
+   *
+   * Built on the same query the records screen uses, so the document and the
+   * screen can never disagree; only the presentation differs.
+   */
+  async renderAttendanceRecordPdf(
+    employerUserId: number,
+    opts: { startDate: string; endDate: string; workerPublicId?: string; jobPublicId?: string },
+  ): Promise<{ buffer: Buffer; fileName: string }> {
+    if (!opts.startDate || !opts.endDate) {
+      throw new BadRequestException('A period is required');
+    }
+    const jobId = opts.jobPublicId ? await this.resolvePublicId(opts.jobPublicId) : undefined;
+    const res = await this.getEmployerWorkSessionRecords(
+      employerUserId, jobId, opts.startDate, opts.endDate,
+    );
+    let rows: any[] = Array.isArray(res?.data) ? res.data : [];
+
+    let workerName: string | null = null;
+    if (opts.workerPublicId) {
+      const [w] = await this.dataSource.query(
+        `SELECT id, nif FROM workers WHERE public_id = $1`, [opts.workerPublicId]);
+      if (!w) throw new NotFoundException('Worker not found');
+      const names = await this.resolveWorkerNames([w.id]);
+      workerName = names.get(w.id) ?? null;
+      rows = rows.filter((r) => String(r.workerPublicId) === String(opts.workerPublicId));
+    }
+
+    const employerUserLink: any = await this.dataSource.getRepository('EmployerUser').findOne({
+      where: { user: { id: employerUserId } },
+      relations: ['employer'],
+    });
+    const employer = employerUserLink?.employer;
+
+    const nifs = new Map<number, string | null>();
+    for (const r of await this.dataSource.query(
+      `SELECT id, nif FROM workers WHERE id = ANY($1)`,
+      [Array.from(new Set(rows.map((r) => Number(r.workerId)).filter(Boolean)))],
+    )) nifs.set(Number(r.id), r.nif);
+
+    const buffer = await renderAttendanceRecordPdf({
+      company: {
+        name: employer?.name || 'Empresa',
+        taxId: employer?.taxId || employer?.nif || null,
+        address: [employer?.address, employer?.city, employer?.province].filter(Boolean).join(', ') || null,
+      },
+      workerName,
+      periodStart: opts.startDate,
+      periodEnd: opts.endDate,
+      generatedBy: employerUserLink?.user?.name ?? null,
+      generatedAt: madridTodayKey(),
+      days: rows.map((r) => ({
+        date: this.madridDateKey(r.checkInTime),
+        workerName: r.trabajador || '—',
+        workerNif: r.workerNif ?? nifs.get(Number(r.workerId)) ?? null,
+        jobName: r.job || null,
+        workCenter: r.centro !== '—' ? r.centro : null,
+        checkIn: r.entrada || '—',
+        checkOut: r.salida || '—',
+        minutes: Number(r.totalWorkMinutes ?? 0),
+        overtimeMinutes: Number(r.overtimeMinutes ?? 0) || null,
+      })),
+    });
+
+    const who = workerName ? `-${workerName.replace(/[^\w]+/g, '_')}` : '';
+    return { buffer, fileName: `registro-jornada${who}-${opts.startDate}_${opts.endDate}.pdf` };
+  }
+
   async getEmployerWorkSessionRecords(
     employerUserId: number,
     jobId?: number,
@@ -5734,8 +5804,11 @@ async getTaskHistoryForJobWorkerDate(jobId: number, workerId: number, date?: str
           titular: employerName || 'N/A',
           job: session.job.jobName || 'N/A',
           trabajador: _nameBy.get(session.worker?.id) || session.worker.user?.name || session.worker.code || 'N/A',
+          workerId: session.worker.id,
           workerCode: session.worker.code,
           workerPublicId: session.worker.publicId,
+          workerNif: (session.worker as any).nif ?? null,
+          overtimeMinutes: session.overtimeMinutes ?? null,
           centro,
           entrada,
           salida,
