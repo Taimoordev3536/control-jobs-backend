@@ -260,11 +260,11 @@ export class BackupService {
         for (const table of tables) {
           const rows = data[table] ?? [];
           if (rows.length === 0 || !Object.keys(rows[0]).includes('id')) continue;
-          const seq = await manager.query(`SELECT pg_get_serial_sequence($1, 'id') AS s`, [`"${table}"`]);
-          if (seq?.[0]?.s) {
+          const seq = await this.idSequence(manager, table);
+          if (seq) {
             await manager.query(
               `SELECT setval($1, COALESCE((SELECT MAX(id) FROM "${table}"), 1))`,
-              [seq[0].s],
+              [seq],
             );
           }
         }
@@ -278,6 +278,22 @@ export class BackupService {
     });
 
     return { tablesRestored: tables.length, rowsRestored };
+  }
+
+  // pg_get_serial_sequence returns null for a table whose sequence was left behind
+  // by a rename, so fall back to the nextval() written in the column default.
+  // The literal is kept verbatim, quotes included: stripping them would make
+  // Postgres fold a mixed-case name like "employerUsers_id_seq" to lowercase.
+  private async idSequence(manager: any, table: string): Promise<string | null> {
+    const owned = await manager.query(`SELECT pg_get_serial_sequence($1, 'id') AS s`, [`"${table}"`]);
+    if (owned?.[0]?.s) return owned[0].s;
+    const def = await manager.query(
+      `SELECT column_default AS d FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=$1 AND column_name='id'`,
+      [table],
+    );
+    const m = /nextval\('([^']+)'::regclass\)/.exec(def?.[0]?.d ?? '');
+    return m ? m[1] : null;
   }
 
   private async columnTypes(manager: any, table: string): Promise<Record<string, string>> {

@@ -32,7 +32,8 @@
     "migrate:manual-attendance-defaults": "ts-node -T src/migrations/run-manual-attendance-defaults.ts",
     "migrate:attendance-policy": "ts-node -T src/migrations/run-attendance-policy.ts",
     "migrate:session-review": "ts-node -T src/migrations/run-session-review.ts",
-    "migrate:document-integrity": "ts-node -T src/migrations/run-document-integrity.ts"
+    "migrate:document-integrity": "ts-node -T src/migrations/run-document-integrity.ts",
+    "restore:from-file": "ts-node -T src/scripts/restore-from-file.ts"
   },
   "engines": {
     "node": "22"
