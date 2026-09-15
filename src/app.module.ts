@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { HealthController } from './health.controller';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule } from './common/common.module';
@@ -107,5 +108,6 @@ config();
     ImportModule,
     BackupModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule { }

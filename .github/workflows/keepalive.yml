@@ -1,0 +1,33 @@
+name: keepalive
+
+# Supabase pauses a free project after 7 idle days and Render sleeps a free
+# instance after 15 idle minutes. In August 2026 nothing touched the stack for
+# three weeks and production went dark. This runs from GitHub's side, so it
+# does not depend on either service being awake to start.
+#
+# A failed run means the backend could not answer with a healthy database.
+# GitHub emails the repository owner on failure.
+
+on:
+  schedule:
+    - cron: '17 */12 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: GET /health (waits out a Render cold start)
+        run: |
+          url="https://control-jobs-backend-t2ed.onrender.com/health"
+          for attempt in 1 2 3 4; do
+            body=$(curl -sS --max-time 120 -w '\n%{http_code}' "$url" || true)
+            code=$(printf '%s' "$body" | tail -n1)
+            json=$(printf '%s' "$body" | sed '$d')
+            echo "attempt $attempt -> HTTP $code $json"
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 30
+          done
+          echo "::error::backend did not report a healthy database"
+          exit 1
